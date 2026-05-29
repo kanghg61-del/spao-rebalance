@@ -307,7 +307,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
         # 단품명 14자 cap
         name = d['name']
         if len(name) > 14: name = name[:13] + '…'
-        row = [r['code'], d.get('rank_online', '-'), name, f"{int(d['ship_rate']*100)}%", r['mode']]
+        row = [d.get('rank_online', '-'), r['code'], name, f"{int(d['ship_rate']*100)}%", r['mode']]
         # 현 재고보유주수: 정수 + "주"
         for c in CHANNELS:
             o = d['orders'].get(c, 0)
@@ -329,7 +329,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
 
     if rows:
         columns = pd.MultiIndex.from_tuples(
-            [('', '단품코드'), ('', '온라인순위'), ('', '단품명'), ('', '출고율'), ('', '모드')] +
+            [('', '온라인순위'), ('', '단품코드'), ('', '단품명'), ('', '출고율'), ('', '모드')] +
             [('현 재고보유주수', CH_SHORT[c]) for c in CHANNELS] +
             [('이동수량 (장)', BW_SHORT)] + [('이동수량 (장)', CH_SHORT[c]) for c in CHANNELS] +
             [('이동 후 재고보유주수', CH_SHORT[c]) for c in CHANNELS] +
