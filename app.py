@@ -367,7 +367,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
             else:
                 df[('', '선택')] = False
 
-        # data_editor 사용 — 체크박스만 수정 가능, 나머지는 disabled
+        # data_editor — column_config는 MultiIndex 튜플 키 미지원, disabled만 사용
         disabled_cols = [c for c in df.columns if c != ('', '선택')]
         edited = container.data_editor(
             df,
@@ -375,11 +375,6 @@ def render_scenario(scenario_key, container, allow_slider=False):
             height=620,
             hide_index=True,
             disabled=disabled_cols,
-            column_config={
-                ('', '선택'): st.column_config.CheckboxColumn('☑', default=True, width='small'),
-                ('', '단품코드'): st.column_config.TextColumn('단품코드', width='small'),
-                ('', '단품명'): st.column_config.TextColumn('단품명', width='medium'),
-            },
             key=f'editor_{scenario_key}',
         )
         # 선택된 단품 수
