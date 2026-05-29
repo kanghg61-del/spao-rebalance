@@ -89,6 +89,26 @@ st.markdown("""
     .stTabs [aria-selected="true"] {
         background: #4AE3B5 !important; color: #0A141F !important;
     }
+    /* 사이드바 텍스트 흰색 처리 */
+    [data-testid="stSidebar"] * {
+        color: #FFFFFF !important;
+    }
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] .stMarkdown,
+    [data-testid="stSidebar"] .stMarkdown p,
+    [data-testid="stSidebar"] h1,
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3,
+    [data-testid="stSidebar"] h4,
+    [data-testid="stSidebar"] [data-testid="stWidgetLabel"],
+    [data-testid="stSidebar"] .stCaption,
+    [data-testid="stSidebar"] small {
+        color: #FFFFFF !important;
+    }
+    /* 슬라이더 숫자 값도 흰색 */
+    [data-testid="stSidebar"] [data-baseweb="slider"] div {
+        color: #FFFFFF !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
