@@ -2,7 +2,7 @@
 """
 AI 온라인 재고 자동 재배치 — PoC 대시보드 v1.4
 
-v1.5 변경:
+v1.6 변경:
   - 실 데이터 8,308 단품 (보수운영.xlsx 추출)
   - 상단 탭: 🛡️ 방어형 / ⚡ 공격형 / 🎛️ 사용자 정의
   - 헤더: '현 재고보유주수' / '이동 후 재고보유주수'
@@ -148,7 +148,7 @@ with col_b:
     if st.button('🔄 새로고침', use_container_width=True):
         st.rerun()
 with col_c:
-    st.caption('PoC v1.5')
+    st.caption('PoC v1.6')
 
 # ========== 탭 ==========
 tab_d, tab_a, tab_c, tab_x, tab_ch = st.tabs(
@@ -177,8 +177,8 @@ def calc_results(_skus_id, params_key):
         after = calc_after_woc(d, moves, CHANNELS)
         rev = calc_expected_revenue(d, moves, CHANNELS, d['price'])
         ship = d['ship_rate']
-        mode = 'A' if ship >= params['ship_rate_threshold'] else (
-            'B' if d['online_ratio'] >= params['online_ratio_threshold'] else '-')
+        mode = '자동회전' if ship >= params['ship_rate_threshold'] else (
+            '자동분배' if d['online_ratio'] >= params['online_ratio_threshold'] else '제외')
         results.append({'code': code, 'data': d, 'moves': moves,
                         'after': after, 'revenue': rev, 'mode': mode})
     return results
@@ -188,12 +188,19 @@ def render_scenario(scenario_key, container, allow_slider=False):
     preset = SCENARIOS[scenario_key]
 
     if allow_slider:
-        st.sidebar.markdown('### 🎛️ 사용자 정의 파라미터')
-        shortage_th = st.sidebar.slider('부족 임계 (주)', 0.5, 4.0, preset['shortage_th'], 0.5)
-        target_woc = st.sidebar.slider('목표 재고주수 (주)', 1.0, 6.0, preset['target_woc'], 0.5)
-        ship_th = st.sidebar.slider('출고율 분기 (%)', 50, 100, int(preset['ship_th']*100), 5) / 100
-        online_th = st.sidebar.slider('온라인 비중 임계 (%)', 0, 50, int(preset['online_th']*100), 5) / 100
-        min_move = st.sidebar.slider('이동 ≥ N장만 (비부가 제거)', 0, 50, preset['min_move'], 1)
+        # 탭 본문 상단에 5열 슬라이더 인라인 배치 — 사이드바 접혀 있어도 항상 보임
+        container.markdown('### 🎛️ 사용자 정의 파라미터')
+        sl_c1, sl_c2, sl_c3, sl_c4, sl_c5 = container.columns(5)
+        with sl_c1:
+            shortage_th = st.slider('부족 임계 (주)', 0.5, 4.0, preset['shortage_th'], 0.5, key=f'sh_{scenario_key}')
+        with sl_c2:
+            target_woc = st.slider('목표 재고주수 (주)', 1.0, 6.0, preset['target_woc'], 0.5, key=f'tg_{scenario_key}')
+        with sl_c3:
+            ship_th = st.slider('출고율 분기 (%)', 50, 100, int(preset['ship_th']*100), 5, key=f'sp_{scenario_key}') / 100
+        with sl_c4:
+            online_th = st.slider('온라인 비중 임계 (%)', 0, 50, int(preset['online_th']*100), 5, key=f'on_{scenario_key}') / 100
+        with sl_c5:
+            min_move = st.slider('이동 ≥ N장만', 0, 50, preset['min_move'], 1, key=f'mn_{scenario_key}')
     else:
         shortage_th = preset['shortage_th']
         target_woc = preset['target_woc']
@@ -204,7 +211,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
     container.markdown(f'<div class="scenario-box">{preset["desc"]}</div>', unsafe_allow_html=True)
 
     with st.spinner('계산 중...'):
-        params_key = (shortage_th, target_woc, ship_th, online_th, min_move, 'v1.5_ext')
+        params_key = (shortage_th, target_woc, ship_th, online_th, min_move, 'v1.6_search_cache_bust')
         results = calc_results(id(None), params_key)
 
     # KPI
@@ -225,11 +232,17 @@ def render_scenario(scenario_key, container, allow_slider=False):
     kpi_card(k5, '연 환산', f'{total_rev*52/100000000:.0f}억', '× 52주')
 
     # 필터
-    col_f1, col_f2, col_f3, col_f4 = container.columns([2, 2, 2, 2])
+    col_f1, col_f2, col_f_search, col_f3, col_f4 = container.columns([1.5, 1.8, 3, 2, 1.7])
     with col_f1:
         show_only_moved = st.checkbox(f'이동 발생만', value=True, key=f'moved_{scenario_key}')
     with col_f2:
-        mode_filter = st.multiselect('모드', ['A', 'B', '-'], default=['A', 'B'], key=f'mode_{scenario_key}')
+        mode_filter = st.multiselect('모드', ['자동회전', '자동분배', '제외'], default=['자동회전', '자동분배'], key=f'mode_{scenario_key}')
+    with col_f_search:
+        search_code = st.text_input(
+            '단품코드 검색',
+            placeholder='앞 10자리만 입력해도 OK (예: SPPPG25U05)',
+            key=f'search_{scenario_key}',
+        ).strip().upper()
     with col_f3:
         sort_by = st.selectbox('정렬', ['온라인 매출 순위 ↑', '기대효과 ↓', '이동수량 ↓', '단품코드'], key=f'sort_{scenario_key}')
     with col_f4:
@@ -240,7 +253,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
     for r in results:
         code = r.get('code', '')
         if any(ex.strip() and ex.strip() in code for ex in excluded_codes):
-            r['mode'] = '-'  # 제외
+            r['mode'] = '제외'  # 제외 스타일
             r['moves'] = {k: 0 for k in r['moves']}
             r['revenue'] = 0
 
@@ -249,6 +262,9 @@ def render_scenario(scenario_key, container, allow_slider=False):
         filtered = [r for r in filtered if any(v != 0 for v in r['moves'].values())]
     if hide_locked:
         filtered = [r for r in filtered if not r['data'].get('locked')]
+    # 단품코드 검색 (앞부분 일치 — 10자리 입력해도 매칭)
+    if search_code:
+        filtered = [r for r in filtered if r['code'].upper().startswith(search_code)]
 
     if sort_by == '온라인 매출 순위 ↑':
         filtered.sort(key=lambda r: r['data'].get('rank_online', 9999))
@@ -466,7 +482,7 @@ with tab_ch:
     # 데이터 로드 (방어형 파라미터로 계산)
     preset = SCENARIOS['🛡️ 방어형 (추천)']
     params_key = (preset['shortage_th'], preset['target_woc'],
-                  preset['ship_th'], preset['online_th'], preset['min_move'], 'v1.5_ext')
+                  preset['ship_th'], preset['online_th'], preset['min_move'], 'v1.6_search_cache_bust')
     results_ch = calc_results(id(None), params_key)
 
     # 채널별 통계
@@ -543,4 +559,4 @@ with tab_ch:
 
     st.caption('🎨 결품여부: 🔴 1주 미만 (긴급)  🟡 1~2주  🟢 2주 이상')
 
-st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  PoC v1.5')
+st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  PoC v1.6')
