@@ -79,7 +79,7 @@ st.markdown("""
         color: #B0B7C3; font-size: 12px; margin-bottom: 8px;
     }
     .stDataFrame { background-color: #15202C; font-size: 11px; }
-    .block-container { padding-top: 1rem !important; padding-bottom: 0.5rem !important; max-width: 100%; }
+    .block-container { padding-top: 3rem !important; padding-bottom: 0.5rem !important; max-width: 100%; }
     /* 탭 디자인 */
     .stTabs [data-baseweb="tab-list"] { gap: 8px; background: transparent; }
     .stTabs [data-baseweb="tab"] {
