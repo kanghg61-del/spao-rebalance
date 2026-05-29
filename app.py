@@ -2,7 +2,7 @@
 """
 AI 온라인 재고 자동 재배치 — PoC 대시보드 v1.4
 
-v1.4 변경:
+v1.5 변경:
   - 실 데이터 8,308 단품 (보수운영.xlsx 추출)
   - 상단 탭: 🛡️ 방어형 / ⚡ 공격형 / 🎛️ 사용자 정의
   - 헤더: '현 재고보유주수' / '이동 후 재고보유주수'
@@ -21,8 +21,8 @@ from mock_data import (
 )
 
 CH_SHORT = {
-    '공홈': '공홈', '이랜드몰': '이몰', '무신사': '무신',
-    '지그재그': '지재', '네이버': '네이', '카카오선물하기': '카카오',
+    '공홈': '공홈', '이랜드몰': '이랜몰', '무신사': '무신사',
+    '지그재그': '지그재', '네이버': '네이버', '카카오선물하기': '카카오',
 }
 BW_SHORT = '반응'
 
@@ -78,7 +78,10 @@ st.markdown("""
         padding: 8px 12px; border-radius: 4px;
         color: #B0B7C3; font-size: 12px; margin-bottom: 8px;
     }
-    .stDataFrame { background-color: #15202C; font-size: 11px; color: #FFFFFF; }
+    .stDataFrame { background-color: #15202C; font-size: 10px; color: #FFFFFF; }
+    /* 셀 간격 축소 — 한 화면 표시 */
+    .stDataFrame td, .stDataFrame th { padding: 2px 4px !important; }
+    .stDataFrame thead th { font-size: 11px !important; padding: 4px 4px !important; }
     .stCaption, .stCaption p, [data-testid="stCaptionContainer"] { color: #FFFFFF !important; }
     .stMarkdown, .stMarkdown p, .stMarkdown li { color: #FFFFFF !important; }
     .stTabs [data-baseweb="tab"] { color: #FFFFFF !important; }
@@ -145,10 +148,12 @@ with col_b:
     if st.button('🔄 새로고침', use_container_width=True):
         st.rerun()
 with col_c:
-    st.caption('PoC v1.4')
+    st.caption('PoC v1.5')
 
 # ========== 탭 ==========
-tab_d, tab_a, tab_c = st.tabs(list(SCENARIOS.keys()))
+tab_d, tab_a, tab_c, tab_x, tab_ch = st.tabs(
+    list(SCENARIOS.keys()) + ['🚫 제외 스타일', '📊 채널 별 세부']
+)
 
 
 @st.cache_data(show_spinner=False)
@@ -156,6 +161,7 @@ def load_data():
     return get_combined_data()
 
 
+# v1.5 — 외부창고 제외 로직 반영 (캐시 강제 무효화)
 @st.cache_data(show_spinner=False)
 def calc_results(_skus_id, params_key):
     """모든 단품에 대해 재배치 계산. cache key는 params_key 튜플"""
@@ -198,7 +204,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
     container.markdown(f'<div class="scenario-box">{preset["desc"]}</div>', unsafe_allow_html=True)
 
     with st.spinner('계산 중...'):
-        params_key = (shortage_th, target_woc, ship_th, online_th, min_move)
+        params_key = (shortage_th, target_woc, ship_th, online_th, min_move, 'v1.5_ext')
         results = calc_results(id(None), params_key)
 
     # KPI
@@ -228,6 +234,15 @@ def render_scenario(scenario_key, container, allow_slider=False):
         sort_by = st.selectbox('정렬', ['온라인 매출 순위 ↑', '기대효과 ↓', '이동수량 ↓', '단품코드'], key=f'sort_{scenario_key}')
     with col_f4:
         hide_locked = st.checkbox('잠금 SKU 숨김', value=False, key=f'lock_{scenario_key}')
+
+    # 제외 스타일 적용 (session_state) — 해당 단품은 mode='-'로 강제 → 이동 제외
+    excluded_codes = st.session_state.get('excluded_codes', set())
+    for r in results:
+        code = r.get('code', '')
+        if any(ex.strip() and ex.strip() in code for ex in excluded_codes):
+            r['mode'] = '-'  # 제외
+            r['moves'] = {k: 0 for k in r['moves']}
+            r['revenue'] = 0
 
     filtered = [r for r in results if r['mode'] in mode_filter]
     if show_only_moved:
@@ -273,10 +288,10 @@ def render_scenario(scenario_key, container, allow_slider=False):
     rows = []
     for r in filtered:
         d = r['data']; mv = r['moves']; af = r['after']; inv = d['inv']
-        # 단품명 18자 cap
+        # 단품명 14자 cap
         name = d['name']
-        if len(name) > 18: name = name[:17] + '…'
-        row = [d.get('rank_online', '-'), name, f"{int(d['ship_rate']*100)}%", r['mode']]
+        if len(name) > 14: name = name[:13] + '…'
+        row = [r['code'], d.get('rank_online', '-'), name, f"{int(d['ship_rate']*100)}%", r['mode']]
         # 현 재고보유주수: 정수 + "주"
         for c in CHANNELS:
             o = d['orders'].get(c, 0)
@@ -298,7 +313,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
 
     if rows:
         columns = pd.MultiIndex.from_tuples(
-            [('', '온라인순위'), ('', '단품명'), ('', '출고율'), ('', '모드')] +
+            [('', '단품코드'), ('', '온라인순위'), ('', '단품명'), ('', '출고율'), ('', '모드')] +
             [('현 재고보유주수', CH_SHORT[c]) for c in CHANNELS] +
             [('이동수량 (장)', BW_SHORT)] + [('이동수량 (장)', CH_SHORT[c]) for c in CHANNELS] +
             [('이동 후 재고보유주수', CH_SHORT[c]) for c in CHANNELS] +
@@ -337,9 +352,42 @@ def render_scenario(scenario_key, container, allow_slider=False):
             ]},
         ], overwrite=False)
 
-        container.dataframe(styled, use_container_width=True, height=700, hide_index=True)
+        # 선택 컬럼(체크박스) — DataFrame 0번째 위치에 삽입
+        df.insert(0, ('', '선택'), True)
+
+        # 기본값(전체 선택 토글) — 세션 상태로 관리
+        sel_key = f'select_all_{scenario_key}'
+        if sel_key not in st.session_state:
+            st.session_state[sel_key] = True
+
+        ck_col1, ck_col2 = container.columns([1, 6])
+        with ck_col1:
+            if st.checkbox('전체 선택/해제', value=st.session_state[sel_key], key=f'ck_{scenario_key}'):
+                df[('', '선택')] = True
+            else:
+                df[('', '선택')] = False
+
+        # data_editor 사용 — 체크박스만 수정 가능, 나머지는 disabled
+        disabled_cols = [c for c in df.columns if c != ('', '선택')]
+        edited = container.data_editor(
+            df,
+            use_container_width=True,
+            height=620,
+            hide_index=True,
+            disabled=disabled_cols,
+            column_config={
+                ('', '선택'): st.column_config.CheckboxColumn('☑', default=True, width='small'),
+                ('', '단품코드'): st.column_config.TextColumn('단품코드', width='small'),
+                ('', '단품명'): st.column_config.TextColumn('단품명', width='medium'),
+            },
+            key=f'editor_{scenario_key}',
+        )
+        # 선택된 단품 수
+        sel_count = int(edited[('', '선택')].sum())
+        container.caption(f'✅ 선택: **{sel_count:,}건** / 전체 {len(edited):,}건')
     else:
         container.info('필터 조건에 맞는 단품이 없습니다.')
+        sel_count = 0
 
     container.caption(
         '🎨 **재고보유주수**: 🔴 < 2주   🟡 2~4주   🟢 ≥ 4주    |    '
@@ -349,8 +397,8 @@ def render_scenario(scenario_key, container, allow_slider=False):
 
     col_b1, col_b2, col_b3 = container.columns([2, 2, 4])
     with col_b1:
-        if st.button('✅ 전체 1-클릭 승인', use_container_width=True, type='primary', key=f'approve_{scenario_key}'):
-            st.success(f'✓ {moved_count}개 단품 / {total_in:,}장 → SAP BAPI 전송 완료 (mock)')
+        if st.button(f'✅ 선택 {sel_count}건 승인', use_container_width=True, type='primary', key=f'approve_{scenario_key}'):
+            st.success(f'✓ 선택 {sel_count}건 → SAP BAPI 전송 완료 (mock)')
             st.balloons()
     with col_b2:
         if st.button('✋ Override 화면', use_container_width=True, key=f'override_{scenario_key}'):
@@ -368,4 +416,145 @@ with tab_a:
 with tab_c:
     render_scenario('🎛️ 사용자 정의', st, allow_slider=True)
 
-st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  PoC v1.4')
+# === 🚫 제외 스타일 탭 ===
+with tab_x:
+    st.markdown('### 🚫 자동 재배치 제외 스타일')
+    st.caption('예약판매·기획전·단독 스타일 등 자동 이동에서 제외할 단품코드를 입력하세요. '
+               '코드의 일부만 입력해도 매칭됩니다 (예: SPACG24 → SPACG24로 시작하는 모든 단품 제외).')
+
+    col_in, col_stat = st.columns([3, 1])
+    with col_in:
+        excluded_text = st.text_area(
+            '제외 단품코드 (줄바꿈 또는 쉼표로 구분)',
+            value=st.session_state.get('excluded_text', ''),
+            height=200,
+            placeholder='예시:\nSPJJG25G0119095\nSPACG24A5\n(부분 일치도 가능)',
+            key='excluded_text_input',
+        )
+        # 파싱 + 저장
+        codes_set = set()
+        for line in excluded_text.replace(',', '\n').split('\n'):
+            code = line.strip()
+            if code:
+                codes_set.add(code)
+        st.session_state['excluded_codes'] = codes_set
+        st.session_state['excluded_text'] = excluded_text
+
+    with col_stat:
+        st.metric('제외 패턴 수', f'{len(codes_set):,}')
+        # 실제 매칭되는 단품 수 계산
+        try:
+            skus, _ = load_data()
+            matched = 0
+            for code in skus:
+                if any(ex in code for ex in codes_set):
+                    matched += 1
+            st.metric('매칭 단품 수', f'{matched:,}')
+        except Exception:
+            st.metric('매칭 단품 수', '-')
+
+        if st.button('🗑️ 전체 초기화', use_container_width=True):
+            st.session_state['excluded_text'] = ''
+            st.session_state['excluded_codes'] = set()
+            st.rerun()
+
+    st.markdown('---')
+    st.caption('💡 **사용 예시**')
+    st.markdown('''
+    - **예약판매**: 예약 단품 코드 그대로 붙여넣기
+    - **기획전**: `SPACG24A5` 처럼 시작 코드만 입력하면 해당 시즌 전체 제외
+    - **단독 스타일**: 무신사 단독·지그재그 단독 등 채널별 단독 단품
+    ''')
+
+# === 📊 채널 별 세부 탭 ===
+with tab_ch:
+    st.markdown('### 📊 채널 담당자용 상세 데이터')
+
+    channel_pick = st.radio(
+        '채널 선택',
+        CHANNELS,
+        horizontal=True,
+        key='ch_pick',
+    )
+
+    # 데이터 로드 (방어형 파라미터로 계산)
+    preset = SCENARIOS['🛡️ 방어형 (추천)']
+    params_key = (preset['shortage_th'], preset['target_woc'],
+                  preset['ship_th'], preset['online_th'], preset['min_move'], 'v1.5_ext')
+    results_ch = calc_results(id(None), params_key)
+
+    # 채널별 통계
+    ch_total_inv = sum(r['data']['inv'].get(channel_pick, 0) for r in results_ch)
+    ch_total_ord = sum(r['data']['orders'].get(channel_pick, 0) for r in results_ch)
+    ch_skus_w_ord = sum(1 for r in results_ch if r['data']['orders'].get(channel_pick, 0) > 0)
+    ch_in = sum(max(0, r['moves'].get(channel_pick, 0)) for r in results_ch)
+    ch_out = sum(min(0, r['moves'].get(channel_pick, 0)) for r in results_ch)
+    ch_shortage = sum(1 for r in results_ch
+                      if r['data']['orders'].get(channel_pick, 0) > 0
+                      and r['data']['inv'].get(channel_pick, 0) / max(1, r['data']['orders'].get(channel_pick, 1)) < 1)
+
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.metric('총 재고', f'{ch_total_inv:,}장')
+    k2.metric('주간 주문', f'{ch_total_ord:,}장')
+    k3.metric('운영 SKU', f'{ch_skus_w_ord:,}건')
+    k4.metric('결품 SKU', f'{ch_shortage:,}건', f'{ch_shortage/max(1,ch_skus_w_ord)*100:.1f}%')
+    k5.metric('금주 IN', f'{ch_in:,}장')
+    k6.metric('금주 OUT', f'{abs(ch_out):,}장')
+
+    st.markdown(f'#### {channel_pick} 단품 상세')
+
+    # 정렬·필터
+    cf1, cf2, cf3 = st.columns([2, 2, 2])
+    with cf1:
+        only_ord = st.checkbox('주문 발생 단품만', value=True, key='ch_only_ord')
+    with cf2:
+        only_moved = st.checkbox('이동 발생 단품만', value=False, key='ch_only_moved')
+    with cf3:
+        ch_sort = st.selectbox('정렬', ['주문 ↓', '재고주수 ↑ (결품순)', '이동량 ↓', '온라인 순위 ↑'], key='ch_sort')
+
+    ch_rows = []
+    for r in results_ch:
+        o = r['data']['orders'].get(channel_pick, 0)
+        i = r['data']['inv'].get(channel_pick, 0)
+        mv = r['moves'].get(channel_pick, 0)
+        if only_ord and o == 0:
+            continue
+        if only_moved and mv == 0:
+            continue
+        woc = i / o if o > 0 else None
+        ch_rows.append({
+            '단품코드': r['code'],
+            '단품명': (r['data']['name'][:18] + '…') if len(r['data']['name']) > 18 else r['data']['name'],
+            '온라인순위': r['data'].get('rank_online', 9999),
+            '정상가': r['data'].get('price', 0),
+            '재고(장)': i,
+            '주문(장/주)': o,
+            '재고주수': round(woc, 1) if woc is not None else None,
+            '결품여부': '🔴' if (woc is not None and woc < 1) else '🟡' if (woc is not None and woc < 2) else '🟢' if woc is not None else '',
+            '추천이동(장)': mv,
+            '이동후재고': i + mv,
+        })
+
+    if ch_sort == '주문 ↓':
+        ch_rows.sort(key=lambda x: -x['주문(장/주)'])
+    elif ch_sort == '재고주수 ↑ (결품순)':
+        ch_rows.sort(key=lambda x: x['재고주수'] if x['재고주수'] is not None else 999)
+    elif ch_sort == '이동량 ↓':
+        ch_rows.sort(key=lambda x: -abs(x['추천이동(장)']))
+    else:
+        ch_rows.sort(key=lambda x: x['온라인순위'])
+
+    # Top 500만 표시
+    if len(ch_rows) > 500:
+        st.caption(f'⚠️ {len(ch_rows):,}건 中 상위 500건 표시')
+        ch_rows = ch_rows[:500]
+
+    if ch_rows:
+        df_ch = pd.DataFrame(ch_rows)
+        st.dataframe(df_ch, use_container_width=True, height=500, hide_index=True)
+    else:
+        st.info('표시할 단품이 없습니다.')
+
+    st.caption('🎨 결품여부: 🔴 1주 미만 (긴급)  🟡 1~2주  🟢 2주 이상')
+
+st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  PoC v1.5')
