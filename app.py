@@ -352,34 +352,25 @@ def render_scenario(scenario_key, container, allow_slider=False):
             ]},
         ], overwrite=False)
 
-        # 선택 컬럼(체크박스) — DataFrame 0번째 위치에 삽입
-        df.insert(0, ('', '선택'), True)
+        # st.dataframe 행 선택 — MultiIndex + Styler 색상 유지 + 체크박스(좌측)
+        # selection_mode="multi-row"는 자동으로 좌측에 선택 컬럼 추가
+        container.caption('💡 좌측 ☑ 박스 클릭으로 단품 선택 · 헤더 클릭으로 전체 선택')
 
-        # 기본값(전체 선택 토글) — 세션 상태로 관리
-        sel_key = f'select_all_{scenario_key}'
-        if sel_key not in st.session_state:
-            st.session_state[sel_key] = True
-
-        ck_col1, ck_col2 = container.columns([1, 6])
-        with ck_col1:
-            if st.checkbox('전체 선택/해제', value=st.session_state[sel_key], key=f'ck_{scenario_key}'):
-                df[('', '선택')] = True
-            else:
-                df[('', '선택')] = False
-
-        # data_editor — column_config는 MultiIndex 튜플 키 미지원, disabled만 사용
-        disabled_cols = [c for c in df.columns if c != ('', '선택')]
-        edited = container.data_editor(
-            df,
+        event = container.dataframe(
+            styled,
             use_container_width=True,
             height=620,
             hide_index=True,
-            disabled=disabled_cols,
-            key=f'editor_{scenario_key}',
+            on_select='rerun',
+            selection_mode='multi-row',
+            key=f'mat_{scenario_key}',
         )
-        # 선택된 단품 수
-        sel_count = int(edited[('', '선택')].sum())
-        container.caption(f'✅ 선택: **{sel_count:,}건** / 전체 {len(edited):,}건')
+        selected_rows = event.selection.rows if (event and event.selection) else []
+        sel_count = len(selected_rows) if selected_rows else len(df)
+        if not selected_rows:
+            container.caption(f'✅ 미선택 시 전체 {len(df):,}건 실행 대상')
+        else:
+            container.caption(f'✅ 선택: **{sel_count:,}건** / 전체 {len(df):,}건')
     else:
         container.info('필터 조건에 맞는 단품이 없습니다.')
         sel_count = 0
