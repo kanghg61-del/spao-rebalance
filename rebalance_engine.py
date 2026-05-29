@@ -42,26 +42,33 @@ def calc_rebalance(sku_data, params, channels, bw_name='반응과'):
 
     inv_bw = sku_data['inv'].get(bw_name, 0)
     inv = {c: sku_data['inv'].get(c, 0) for c in channels}
+    # 외부창고 재고 (이동 불가, WOC 계산엔 포함)
+    inv_ext_map = sku_data.get('inv_ext', {}) or {}
+    inv_internal = {c: max(0, inv[c] - inv_ext_map.get(c, 0)) for c in channels}
     ord_ = {c: sku_data['orders'].get(c, 0) for c in channels}
 
-    # 부족·잉여 채널 식별
+    # 부족·잉여 채널 식별 — WOC는 총재고 기준, 가용량은 내부재고로 한정
     shortage, surplus = {}, {}
     for c in channels:
-        i = max(0, inv[c])
+        i_total = max(0, inv[c])           # 표시·WOC용 = 내부+외부
+        i_int = inv_internal[c]            # 이동 가능량 = 내부만
         o = ord_[c]
-        if o <= 0 and i <= 0:
+        if o <= 0 and i_total <= 0:
             continue
         if o <= 0:
-            if i > 0:
-                surplus[c] = int(i)
+            # 주문 없는 채널 잉여 — 외부창고 제외, 내부재고만 공급원
+            if i_int > 0:
+                surplus[c] = int(i_int)
             continue
-        woc = i / o
+        woc = i_total / o
         if woc <= params['shortage_threshold']:
             need = max(0, int(math.ceil((params['target_woc'] - woc) * o)))
             if need > 0:
                 shortage[c] = need
         elif woc > params['target_woc']:
+            # 잉여량 산정: 총재고 기준이지만 내부재고로 cap
             avail = int((woc - params['target_woc']) * o)
+            avail = min(avail, i_int)
             if avail > 0:
                 surplus[c] = avail
 

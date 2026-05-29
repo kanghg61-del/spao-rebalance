@@ -29,6 +29,12 @@ def _load_master():
             inv = {BW_NAME: int(num(row['inv_반응과']))}
             for ch in CHANNELS:
                 inv[ch] = int(num(row.get(f'inv_{ch}', 0)))
+            # 외부창고 재고 (이동 불가) — 무신사/지그재그/네이버만 해당
+            inv_ext = {
+                '무신사': int(num(row.get('inv_무신사_ext', 0))),
+                '지그재그': int(num(row.get('inv_지그재그_ext', 0))),
+                '네이버': int(num(row.get('inv_네이버_ext', 0))),
+            }
             orders = {ch: int(num(row.get(f'ord_{ch}', 0))) for ch in CHANNELS}
             skus[code] = {
                 'rank_total': int(num(row.get('매출랭킹', 9999), 9999)),
@@ -40,6 +46,7 @@ def _load_master():
                 'locked': False,
                 'critical': False,
                 'inv': inv,
+                'inv_ext': inv_ext,
                 'orders': orders,
             }
     _cache['data'] = skus
