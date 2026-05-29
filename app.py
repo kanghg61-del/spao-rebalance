@@ -66,7 +66,7 @@ st.markdown("""
         background: #15202C; border: 1px solid #4AE3B5;
         border-radius: 8px; padding: 10px 12px; text-align: center;
     }
-    .kpi-label { color: #B0B7C3; font-size: 11px; }
+    .kpi-label { color: #FFFFFF; font-size: 11px; }
     .kpi-value { color: #4AE3B5; font-size: 26px; font-weight: bold; }
     .kpi-sub   { color: #6F7A8B; font-size: 10px; }
     .title-bar {
@@ -78,7 +78,31 @@ st.markdown("""
         padding: 8px 12px; border-radius: 4px;
         color: #B0B7C3; font-size: 12px; margin-bottom: 8px;
     }
-    .stDataFrame { background-color: #15202C; font-size: 11px; }
+    .stDataFrame { background-color: #15202C; font-size: 11px; color: #FFFFFF; }
+    .stCaption, .stCaption p, [data-testid="stCaptionContainer"] { color: #FFFFFF !important; }
+    .stMarkdown, .stMarkdown p, .stMarkdown li { color: #FFFFFF !important; }
+    .stTabs [data-baseweb="tab"] { color: #FFFFFF !important; }
+    /* 일반 텍스트 */
+    .stApp p, .stApp span, .stApp label, .stApp small, .stApp .stCheckbox label { color: #FFFFFF !important; }
+    /* KPI 카드 부가 텍스트도 흰색 */
+    .kpi-sub { color: #FFFFFF !important; }
+    /* 시나리오 박스 */
+    .scenario-box { color: #FFFFFF !important; }
+    /* 매트릭스 헤더 그룹 색상 구분 — Group Level (multi-index 첫번째 행) */
+    .stDataFrame thead tr:first-child th {
+        background: #1E2D40 !important;
+        color: #FFFFFF !important;
+        font-weight: bold !important;
+        font-size: 13px !important;
+        border-right: 3px solid #0A141F !important;
+        text-align: center !important;
+    }
+    .stDataFrame thead tr:nth-child(2) th {
+        background: #15202C !important;
+        color: #FFFFFF !important;
+        font-weight: bold !important;
+    }
+    .stDataFrame tbody td { color: #FFFFFF !important; }
     .block-container { padding-top: 3rem !important; padding-bottom: 0.5rem !important; max-width: 100%; }
     /* 탭 디자인 */
     .stTabs [data-baseweb="tab-list"] { gap: 8px; background: transparent; }
@@ -288,6 +312,30 @@ def render_scenario(scenario_key, container, allow_slider=False):
 
         styled = df.style.map(woc_color, subset=woc_cols).map(mv_color, subset=mv_cols)
         styled = styled.format({('효과', '만원'): '{:,}'.format})
+
+        # 그룹 경계선 — 현재고/이동수량/이동후 경계에 굵은 좌측 보더
+        first_inv = [('현 재고보유주수', CH_SHORT[CHANNELS[0]])]
+        first_mv = [('이동수량 (장)', BW_SHORT)]
+        first_after = [('이동 후 재고보유주수', CH_SHORT[CHANNELS[0]])]
+        effect_col = [('효과', '만원')]
+        styled = styled.set_properties(
+            subset=first_inv, **{'border-left': '3px solid #4AE3B5'}
+        ).set_properties(
+            subset=first_mv, **{'border-left': '3px solid #FFC000'}
+        ).set_properties(
+            subset=first_after, **{'border-left': '3px solid #B388FF'}
+        ).set_properties(
+            subset=effect_col, **{'border-left': '3px solid #FF7B7B'}
+        )
+        # 헤더 그룹별 배경색 — set_table_styles로 colspan 헤더에 적용
+        styled = styled.set_table_styles([
+            {'selector': 'th.col_heading.level0', 'props': [
+                ('text-align', 'center'),
+                ('font-weight', 'bold'),
+                ('padding', '8px 4px'),
+                ('border-bottom', '2px solid #4AE3B5'),
+            ]},
+        ], overwrite=False)
 
         container.dataframe(styled, use_container_width=True, height=700, hide_index=True)
     else:
