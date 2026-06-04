@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-v2.3 화면 — 자동분배 제거 · 리오더코드 병합 · 외부창고 분리(엔진) + v1.6 기능 복원
+v2.4 화면 — 자동분배 제거 · 리오더코드 병합 · 외부창고 분리(엔진) + v1.6 기능 복원
 복원: 단품코드 검색(앞 10자리) · 🚫 제외 스타일 탭 · 📊 채널 별 세부 탭(외부창고 컬럼은 여기만)
       · 체크박스 단품 선택 승인 · 사용자 정의 기준 명칭
 (페이지 설정·비밀번호 게이트·공통 CSS는 app.py 담당)
@@ -138,12 +138,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
         col.markdown(f"""<div class="kpi-card"><div class="kpi-label">{label}</div>
             <div class="kpi-value">{value}</div><div class="kpi-sub">{sub}</div></div>""", unsafe_allow_html=True)
 
-    k1, k2, k3, k4, k5 = container.columns(5)
-    kpi_card(k1, '전체 단품', f'{total_skus:,}', '6채널 · 리오더 병합 후')
-    kpi_card(k2, '이동 발생', f'{moved_count:,}', f'{moved_count/max(1,total_skus)*100:.1f}%')
-    kpi_card(k3, '총 이동량', f'{total_in:,}장', '주간 IN')
-    kpi_card(k4, '회수 매출', f'{total_rev/100000000:.2f}억', '주간')
-    kpi_card(k5, '연 환산', f'{total_rev*52/100000000:.0f}억', '× 52주')
+    kpi_ph = container.container()  # 체크박스 선택 반영 위해 매트릭스 구성 후 채움
 
     col_f1, col_f2, col_fs, col_f3, col_f4 = container.columns([1.4, 1.6, 3, 1.8, 1.6])
     with col_f1:
@@ -184,6 +179,29 @@ def render_scenario(scenario_key, container, allow_slider=False):
     if len(filtered) > MAX_ROWS:
         container.caption(f'⚠️ {len(filtered):,}건 中 상위 {MAX_ROWS}개만 표시 (성능). 정렬·필터로 좁히세요.')
         filtered = filtered[:MAX_ROWS]
+
+    # ── KPI 채움: 좌측 체크박스 선택 시 선택분 기준으로 자동 갱신 ──
+    _sel_state = st.session_state.get(f'mat_{scenario_key}')
+    _pre_rows = []
+    try:
+        _pre_rows = [i for i in _sel_state.selection.rows if i < len(filtered)]
+    except Exception:
+        _pre_rows = []
+    if _pre_rows:
+        _base = [filtered[i] for i in _pre_rows]
+        _mv_cnt = sum(1 for r in _base if any(v != 0 for v in r['moves'].values()))
+        _in = sum(sum(v for v in r['moves'].values() if v > 0) for r in _base)
+        _rev = sum(r['revenue'] for r in _base)
+        _sub = f'☑ 선택 {len(_base):,}건 기준'
+    else:
+        _mv_cnt, _in, _rev, _sub = moved_count, total_in, total_rev, '전체 기준'
+    with kpi_ph:
+        k1, k2, k3, k4, k5 = st.columns(5)
+        kpi_card(k1, '전체 단품', f'{total_skus:,}', '6채널 · 리오더 병합 후')
+        kpi_card(k2, '이동 발생', f'{_mv_cnt:,}', _sub)
+        kpi_card(k3, '총 이동량', f'{_in:,}장', f'주간 IN · {_sub}')
+        kpi_card(k4, '회수 매출', f'{_rev/100000000:.2f}억', f'주간 · {_sub}')
+        kpi_card(k5, '연 환산', f'{_rev*52/100000000:.0f}억', '× 52주')
 
     rows = []
     for r in filtered:
@@ -261,8 +279,13 @@ def render_scenario(scenario_key, container, allow_slider=False):
     col_b1, col_b2, col_b3 = container.columns([2, 2, 4])
     with col_b1:
         if st.button(f'✅ 선택 {sel_count}건 승인', use_container_width=True, type='primary', key=f'approve_{scenario_key}'):
-            effect_log.log_execution(scenario_key, len(sel_items), sel_qty, sel_rev)
-            st.success(f'✓ 선택 {sel_count}건 / {sel_qty:,}장 → SAP BAPI 전송 완료 (mock) · 📈 실행 효과 탭에 이력 기록')
+            details = []
+            for it in sel_items:
+                for ch, v in it['moves'].items():
+                    if v > 0:
+                        details.append((it['code'], ch, it['data']['inv'].get(ch, 0), v, it['data']['price']))
+            effect_log.log_execution(scenario_key, len(sel_items), sel_qty, sel_rev, details=details)
+            st.success(f'✓ 선택 {sel_count}건 / {sel_qty:,}장 → SAP BAPI 전송 완료 (mock) · 📈 실행 효과 탭에 이력 기록 (전일재고 스냅샷 포함)')
             st.balloons()
     with col_b2:
         if st.button('✋ Override 화면', use_container_width=True, key=f'override_{scenario_key}'):
@@ -492,8 +515,12 @@ def render_channel_tab():
 
 def render_effect_tab():
     st.markdown('### 📈 실행 효과 누적 관리')
-    st.caption('재배치 **승인 실행 시 자동 기록** → 기대효과 대비 **실제 효과(실측)** 누적 추적. '
-               '실 배포 시 실측은 이동 후 D+7 해소결품 SKU의 실제 판매 실적(EDW)으로 자동 집계 — 현재는 수동 입력/mock.')
+    st.caption('재배치 **승인 실행 시 자동 기록** (단품×채널 전일재고 스냅샷 포함) → 기대효과 대비 **실제 효과(실측)** 누적 추적.')
+    st.markdown('<div class="scenario-box">📐 <b>실제효과 산식 (보수 집계)</b> — 이동(IN) 받은 단품×채널에서 '
+                '<b>전일(이동 전) 재고로는 판매 불가능했던 추가 판매분만</b> 인정: '
+                '추가판매 = min(이동IN, max(0, 실제판매 − 전일재고)) → 실제효과 = Σ 추가판매 × 정상가. '
+                '이동 없이도 팔 수 있었던 물량은 제외. 실 배포 시 D+7 EDW 판매 실적으로 자동 집계 — 현재 수동 입력/mock.</div>',
+                unsafe_allow_html=True)
 
     log_rows = effect_log.load_log()
 
@@ -513,7 +540,8 @@ def render_effect_tab():
     k1.metric('누적 실행', f'{n_exec:,}회', f'실측 완료 {len(measured):,}건')
     k2.metric('누적 이동량', f'{cum_qty:,}장')
     k3.metric('누적 기대효과', f'{cum_exp/10000:.2f}억')
-    k4.metric('누적 실제효과', f'{cum_act/10000:.2f}억', '실측분 합계')
+    cum_extra = sum(int(_f(r.get('추가판매_장'))) for r in log_rows)
+    k4.metric('누적 실제효과', f'{cum_act/10000:.2f}억', f'추가판매 {cum_extra:,}장 (전일재고 초과분만)')
     k5.metric('달성률 (실제/기대)', f'{rate:.1f}%' if rate is not None else '-', '실측분 기준')
 
     if not log_rows:
@@ -548,9 +576,9 @@ def render_effect_tab():
             st.success('저장 완료')
             st.rerun()
     with b2:
-        if st.button('🤖 D+7 실측 자동 산출 (mock)', use_container_width=True, key='fx_mock'):
+        if st.button('🤖 D+7 실측 자동 산출 (mock·추가판매분)', use_container_width=True, key='fx_mock'):
             n = effect_log.mock_fill_actuals()
-            st.success(f'{n}건 실측 채움 (실데이터 연동 전 데모)')
+            st.success(f'{n}건 실측 채움 — 전일재고 대비 추가판매분만 집계 (실데이터 연동 전 데모)')
             st.rerun()
     with b3:
         st.download_button('⬇️ 이력 백업 (CSV)', effect_log.export_csv_bytes(),
@@ -567,12 +595,24 @@ def render_effect_tab():
             effect_log.clear_log()
             st.rerun()
 
+    with st.expander('🔍 실행별 상세 내역 (단품×채널 — 전일재고·이동IN·실제판매·추가판매)'):
+        ids = [r['id'] for r in log_rows]
+        pick = st.selectbox('실행 ID', ids, index=len(ids)-1, key='fx_detail_pick')
+        det = effect_log.load_details(pick)
+        if det:
+            df_det = pd.DataFrame(det)
+            st.dataframe(df_det, use_container_width=True, height=300, hide_index=True)
+            st.download_button('⬇️ 상세 내역 전체 (CSV)', effect_log.export_details_bytes(),
+                               'execution_details.csv', 'text/csv', key='fx_det_dl')
+        else:
+            st.info('이 실행에는 상세 스냅샷이 없습니다 (구버전 이력 — 실측 시 기대효과 대비 보수 추정 적용).')
+
     st.caption('⚠️ 이력은 앱 **재시작·재배포 시 초기화**됩니다. 주기적으로 ⬇️ 백업 CSV를 보관하고, 필요 시 📂 복원하세요. '
                '(실 배포 시 DB 저장 + audit log로 전환)')
 
 
 def render():
-    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v2.3</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v2.4</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
@@ -590,7 +630,7 @@ def render():
         if st.button('🔄 새로고침', use_container_width=True):
             st.rerun()
     with col_c:
-        st.caption('v2.3')
+        st.caption('v2.4')
 
     tab_d, tab_a, tab_c, tab_x, tab_ch, tab_re, tab_fx = st.tabs(
         list(SCENARIOS.keys()) + ['🚫 제외 스타일', '📊 채널 별 세부', '🔁 리오더 매핑', '📈 실행 효과']
@@ -617,4 +657,4 @@ def render():
     with tab_fx:
         render_effect_tab()
 
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v2.3 — 자동분배 제거 · 리오더 병합 · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v2.4 — 자동분배 제거 · 리오더 병합 · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')
