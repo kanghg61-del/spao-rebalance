@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-v2.2 화면 — 자동분배 제거 · 리오더코드 병합 · 외부창고 분리(엔진) + v1.6 기능 복원
+v2.3 화면 — 자동분배 제거 · 리오더코드 병합 · 외부창고 분리(엔진) + v1.6 기능 복원
 복원: 단품코드 검색(앞 10자리) · 🚫 제외 스타일 탭 · 📊 채널 별 세부 탭(외부창고 컬럼은 여기만)
       · 체크박스 단품 선택 승인 · 사용자 정의 기준 명칭
 (페이지 설정·비밀번호 게이트·공통 CSS는 app.py 담당)
@@ -9,6 +9,7 @@ import streamlit as st
 import pandas as pd
 
 from rebalance_engine import calc_rebalance, calc_after_woc, calc_expected_revenue
+import effect_log
 from mock_data import (
     get_combined_data, get_last_update_time, get_reorder_info,
     get_reorder_mapping, parse_reorder_bytes, save_reorder_mapping,
@@ -206,6 +207,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
         rows.append(row)
 
     sel_count = 0
+    selected_rows = []
     if rows:
         columns = pd.MultiIndex.from_tuples(
             [('', '온라인순위'), ('', '단품코드'), ('', '단품명'), ('', '리오더'), ('', '출고율'), ('', '모드')] +
@@ -250,10 +252,17 @@ def render_scenario(scenario_key, container, allow_slider=False):
         '※ 이동수량 산정 시 외부창고(AENS·ADU3·ADQS) 보관분 제외 — 재고주수는 포함 (상세: 채널 별 세부 탭)'
     )
 
+    sel_items = []
+    if rows:
+        sel_items = [filtered[i] for i in selected_rows] if selected_rows else list(filtered)
+    sel_qty = sum(sum(v for v in it['moves'].values() if v > 0) for it in sel_items)
+    sel_rev = sum(it['revenue'] for it in sel_items)
+
     col_b1, col_b2, col_b3 = container.columns([2, 2, 4])
     with col_b1:
         if st.button(f'✅ 선택 {sel_count}건 승인', use_container_width=True, type='primary', key=f'approve_{scenario_key}'):
-            st.success(f'✓ 선택 {sel_count}건 → SAP BAPI 전송 완료 (mock)')
+            effect_log.log_execution(scenario_key, len(sel_items), sel_qty, sel_rev)
+            st.success(f'✓ 선택 {sel_count}건 / {sel_qty:,}장 → SAP BAPI 전송 완료 (mock) · 📈 실행 효과 탭에 이력 기록')
             st.balloons()
     with col_b2:
         if st.button('✋ Override 화면', use_container_width=True, key=f'override_{scenario_key}'):
@@ -480,8 +489,90 @@ def render_channel_tab():
     st.caption('🎨 결품여부: 🔴 1주 미만 (긴급)  🟡 1~2주  🟢 2주 이상')
 
 
+
+def render_effect_tab():
+    st.markdown('### 📈 실행 효과 누적 관리')
+    st.caption('재배치 **승인 실행 시 자동 기록** → 기대효과 대비 **실제 효과(실측)** 누적 추적. '
+               '실 배포 시 실측은 이동 후 D+7 해소결품 SKU의 실제 판매 실적(EDW)으로 자동 집계 — 현재는 수동 입력/mock.')
+
+    log_rows = effect_log.load_log()
+
+    def _f(v):
+        try: return float(v)
+        except Exception: return 0.0
+
+    n_exec = len(log_rows)
+    cum_qty = sum(int(_f(r.get('이동량_장'))) for r in log_rows)
+    cum_exp = sum(_f(r.get('기대효과_만원')) for r in log_rows)
+    measured = [r for r in log_rows if str(r.get('실제효과_만원') or '').strip()]
+    cum_act = sum(_f(r.get('실제효과_만원')) for r in measured)
+    cum_exp_measured = sum(_f(r.get('기대효과_만원')) for r in measured)
+    rate = cum_act / cum_exp_measured * 100 if cum_exp_measured > 0 else None
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric('누적 실행', f'{n_exec:,}회', f'실측 완료 {len(measured):,}건')
+    k2.metric('누적 이동량', f'{cum_qty:,}장')
+    k3.metric('누적 기대효과', f'{cum_exp/10000:.2f}억')
+    k4.metric('누적 실제효과', f'{cum_act/10000:.2f}억', '실측분 합계')
+    k5.metric('달성률 (실제/기대)', f'{rate:.1f}%' if rate is not None else '-', '실측분 기준')
+
+    if not log_rows:
+        st.info('아직 실행 이력이 없습니다. 시나리오 탭에서 "✅ 선택 N건 승인"을 실행하면 자동 기록됩니다.')
+        return
+
+    # 누적 추이 차트 (기대 vs 실제, 억원)
+    df_log = pd.DataFrame(log_rows)
+    df_log['기대효과_만원'] = pd.to_numeric(df_log['기대효과_만원'], errors='coerce').fillna(0)
+    df_log['실제효과_만원'] = pd.to_numeric(df_log['실제효과_만원'], errors='coerce').fillna(0)
+    df_chart = df_log[['실행일시']].copy()
+    df_chart['누적 기대효과 (억)'] = (df_log['기대효과_만원'].cumsum() / 10000).round(3)
+    df_chart['누적 실제효과 (억)'] = (df_log['실제효과_만원'].cumsum() / 10000).round(3)
+    df_chart = df_chart.set_index('실행일시')
+    st.line_chart(df_chart, height=240, color=['#8AB4F8', '#4AE3B5'])
+
+    st.markdown('#### 실행 이력 · 실측 입력')
+    st.caption('💡 **실제효과_만원**·**메모** 칸을 직접 수정 후 "실측 입력 저장" — 입력 시 상태가 자동으로 "실측 완료(수동)"로 변경')
+    edited = st.data_editor(
+        df_log,
+        use_container_width=True,
+        height=320,
+        hide_index=True,
+        disabled=['id', '실행일시', '시나리오', '단품수', '이동량_장', '기대효과_만원', '실측일', '상태'],
+        key='effect_editor',
+    )
+
+    b1, b2, b3, b4, b5 = st.columns([2, 2.4, 2, 2, 2])
+    with b1:
+        if st.button('💾 실측 입력 저장', type='primary', use_container_width=True, key='fx_save'):
+            effect_log.save_rows(edited.to_dict('records'))
+            st.success('저장 완료')
+            st.rerun()
+    with b2:
+        if st.button('🤖 D+7 실측 자동 산출 (mock)', use_container_width=True, key='fx_mock'):
+            n = effect_log.mock_fill_actuals()
+            st.success(f'{n}건 실측 채움 (실데이터 연동 전 데모)')
+            st.rerun()
+    with b3:
+        st.download_button('⬇️ 이력 백업 (CSV)', effect_log.export_csv_bytes(),
+                           'execution_log.csv', 'text/csv', use_container_width=True, key='fx_dl')
+    with b4:
+        up = st.file_uploader('복원', type=['csv'], key='fx_restore', label_visibility='collapsed')
+        if up is not None and st.button('📂 백업 복원 (교체)', use_container_width=True, key='fx_restore_btn'):
+            n = effect_log.restore_from_bytes(up.getvalue())
+            st.success(f'{n}행 복원')
+            st.rerun()
+    with b5:
+        confirm = st.checkbox('초기화 확인', key='fx_clear_ok')
+        if st.button('🗑️ 이력 초기화', use_container_width=True, key='fx_clear', disabled=not confirm):
+            effect_log.clear_log()
+            st.rerun()
+
+    st.caption('⚠️ 이력은 앱 **재시작·재배포 시 초기화**됩니다. 주기적으로 ⬇️ 백업 CSV를 보관하고, 필요 시 📂 복원하세요. '
+               '(실 배포 시 DB 저장 + audit log로 전환)')
+
+
 def render():
-    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v2.2</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v2.3</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
@@ -499,10 +590,10 @@ def render():
         if st.button('🔄 새로고침', use_container_width=True):
             st.rerun()
     with col_c:
-        st.caption('v2.2')
+        st.caption('v2.3')
 
-    tab_d, tab_a, tab_c, tab_x, tab_ch, tab_re = st.tabs(
-        list(SCENARIOS.keys()) + ['🚫 제외 스타일', '📊 채널 별 세부', '🔁 리오더 매핑']
+    tab_d, tab_a, tab_c, tab_x, tab_ch, tab_re, tab_fx = st.tabs(
+        list(SCENARIOS.keys()) + ['🚫 제외 스타일', '📊 채널 별 세부', '🔁 리오더 매핑', '📈 실행 효과']
     )
 
     with tab_d:
@@ -523,4 +614,7 @@ def render():
     with tab_re:
         render_reorder_tab()
 
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v2.2 — 자동분배 제거 · 리오더 병합 · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')
+    with tab_fx:
+        render_effect_tab()
+
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v2.3 — 자동분배 제거 · 리오더 병합 · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')
