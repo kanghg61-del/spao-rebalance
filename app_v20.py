@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-v2.5 화면 — 자동분배 제거 · 리오더코드 병합 · 외부창고 분리(엔진) + v1.6 기능 복원
+v2.6 화면 — 자동분배 제거 · 리오더코드 병합 · 외부창고 분리(엔진) + v1.6 기능 복원
 복원: 단품코드 검색(앞 10자리) · 🚫 제외 스타일 탭 · 📊 채널 별 세부 탭(외부창고 컬럼은 여기만)
       · 체크박스 단품 선택 승인 · 사용자 정의 기준 명칭
 (페이지 설정·비밀번호 게이트·공통 CSS는 app.py 담당)
@@ -559,9 +559,18 @@ def render_effect_tab():
     st.line_chart(df_chart, height=240, color=['#8AB4F8', '#4AE3B5'])
 
     st.markdown('#### 실행 이력 · 실측 입력')
-    st.caption('💡 **실제효과_만원**·**메모** 칸을 직접 수정 후 "실측 입력 저장" — 입력 시 상태가 자동으로 "실측 완료(수동)"로 변경')
+    st.caption('💡 **실제효과_만원**·**메모** 칸을 직접 수정 후 "실측 입력 저장" — 입력 시 상태가 자동으로 "실측 완료(수동)"로 변경. 1행 = Σ 합계(자동 계산, 수정 불가)')
+    cum_sku = sum(int(_f(r.get('단품수'))) for r in log_rows)
+    total_row = {
+        'id': 'Σ', '실행일시': '— 합계 —', '시나리오': f'{n_exec}회 실행',
+        '단품수': cum_sku, '이동량_장': cum_qty,
+        '기대효과_만원': round(cum_exp), '실제효과_만원': round(cum_act),
+        '추가판매_장': cum_extra, '실측일': '',
+        '상태': f'실측 {len(measured)}/{n_exec}', '메모': '',
+    }
+    df_disp = pd.concat([pd.DataFrame([total_row]), df_log], ignore_index=True)
     edited = st.data_editor(
-        df_log,
+        df_disp,
         use_container_width=True,
         height=320,
         hide_index=True,
@@ -572,7 +581,8 @@ def render_effect_tab():
     b1, b2, b3, b4, b5 = st.columns([2, 2.4, 2, 2, 2])
     with b1:
         if st.button('💾 실측 입력 저장', type='primary', use_container_width=True, key='fx_save'):
-            effect_log.save_rows(edited.to_dict('records'))
+            recs = [r for r in edited.to_dict('records') if str(r.get('id')) not in ('Σ', '합계')]
+            effect_log.save_rows(recs)
             st.success('저장 완료')
             st.rerun()
     with b2:
@@ -627,7 +637,7 @@ def render_effect_tab():
 
 
 def render():
-    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v2.5</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v2.6</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
@@ -645,7 +655,7 @@ def render():
         if st.button('🔄 새로고침', use_container_width=True):
             st.rerun()
     with col_c:
-        st.caption('v2.5')
+        st.caption('v2.6')
 
     tab_d, tab_a, tab_c, tab_x, tab_ch, tab_re, tab_fx = st.tabs(
         list(SCENARIOS.keys()) + ['🚫 제외 스타일', '📊 채널 별 세부', '🔁 리오더 매핑', '📈 실행 효과']
@@ -672,4 +682,4 @@ def render():
     with tab_fx:
         render_effect_tab()
 
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v2.5 — 자동분배 제거 · 리오더 병합 · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v2.6 — 자동분배 제거 · 리오더 병합 · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')
