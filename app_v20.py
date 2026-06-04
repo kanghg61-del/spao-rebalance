@@ -224,7 +224,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
 
 
 def render():
-    st.markdown('<div class="title-bar">AI 온라인 재고 자동 재배치 — 운영 대시보드<span class="ver-badge">v2.0</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v2.0</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
