@@ -11,7 +11,8 @@
 저장:
   execution_log.csv     — 실행 단위 요약 (1행/실행)
   execution_details.csv — 단품×채널 IN 스냅샷 (전일재고·이동IN·정상가) + 실측 채움
-  앱 재시작 시 초기화 → CSV 백업/복원 지원. 실 배포 시 DB + EDW D+7 판매 실적 자동 집계로 교체
+  실측 = 실측일 당일 매출 기준 (매일 06:00 매출 갱신 후 집계). 일일 매출 자료 업로드로 자동 반영.
+  앱 재시작 시 초기화 → CSV 백업/복원 지원. 실 배포 시 DB + EDW 일일 판매 실적 자동 집계로 교체
 """
 import csv, io, os, hashlib
 from datetime import datetime
@@ -137,6 +138,91 @@ def mock_fill_actuals():
     _save(rows)
     _save_details(drows)
     return n
+
+
+def _detect_sales_cols(cols):
+    code_col = next((c for c in cols if '단품' in c or 'code' in c.lower() or '코드' in c), cols[0])
+    ch_col = next((c for c in cols if '채널' in c or 'channel' in c.lower()), None)
+    qty_col = next((c for c in cols if '판매' in c or '수량' in c or 'qty' in c.lower() or 'sales' in c.lower()), cols[-1])
+    return code_col, ch_col, qty_col
+
+
+def apply_sales_bytes(data, filename):
+    """일일 매출 자료(csv/xlsx) → 실측 대기 실행의 실제효과 자동 산출 (당일 매출 기준)
+    컬럼 자동 인식: 단품코드 / 채널(선택) / 판매수량
+    채널 없으면 해당 단품의 이동IN 비중으로 채널 배분. 반환: (실측 완료 실행수, 매칭 단품수)"""
+    rows = []
+    if filename.lower().endswith('.csv'):
+        text = data.decode('utf-8-sig', errors='replace')
+        rows = list(csv.DictReader(io.StringIO(text)))
+    else:
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        ws = wb.active
+        it = ws.iter_rows(values_only=True)
+        header = [str(c).strip() if c is not None else '' for c in next(it)]
+        for r in it:
+            rows.append({header[i]: r[i] for i in range(min(len(header), len(r)))})
+    if not rows:
+        return 0, 0
+    code_col, ch_col, qty_col = _detect_sales_cols(list(rows[0].keys()))
+    by_code_ch, by_code = {}, {}
+    for r in rows:
+        code = str(r.get(code_col) or '').strip().upper()
+        if not code:
+            continue
+        try:
+            qty = int(float(r.get(qty_col) or 0))
+        except Exception:
+            qty = 0
+        ch = str(r.get(ch_col) or '').strip() if ch_col else ''
+        if ch:
+            by_code_ch[(code, ch)] = by_code_ch.get((code, ch), 0) + qty
+        by_code[code] = by_code.get(code, 0) + qty
+
+    log_rows = load_log()
+    drows = load_details()
+    today = datetime.now().strftime('%Y-%m-%d')
+    n_exec, matched = 0, 0
+    for lr in log_rows:
+        if str(lr.get('실제효과_만원') or '').strip():
+            continue
+        rid = str(lr['id'])
+        dets = [d for d in drows if str(d['exec_id']) == rid]
+        if not dets:
+            continue
+        in_sum_by_code = {}
+        for d in dets:
+            in_sum_by_code[d['단품코드']] = in_sum_by_code.get(d['단품코드'], 0) + int(float(d['이동IN_장'] or 0))
+        won, extra_total, hit = 0, 0, 0
+        for d in dets:
+            code, ch = d['단품코드'], d['채널']
+            prev = int(float(d['전일재고_장'] or 0))
+            inq = int(float(d['이동IN_장'] or 0))
+            price = int(float(d['정상가'] or 0))
+            sold = None
+            if (code, ch) in by_code_ch:
+                sold = by_code_ch[(code, ch)]
+            elif code in by_code and in_sum_by_code.get(code, 0) > 0:
+                sold = int(round(by_code[code] * inq / in_sum_by_code[code]))
+            if sold is None:
+                continue
+            extra = min(inq, max(0, sold - prev))
+            d['실제판매_장'] = sold
+            d['추가판매_장'] = extra
+            won += extra * price
+            extra_total += extra
+            hit += 1
+        if hit:
+            lr['실제효과_만원'] = round(won / 10000)
+            lr['추가판매_장'] = extra_total
+            lr['실측일'] = today
+            lr['상태'] = '실측 완료(매출연동)'
+            n_exec += 1
+            matched += hit
+    _save(log_rows)
+    _save_details(drows)
+    return n_exec, matched
 
 
 def restore_from_bytes(data):

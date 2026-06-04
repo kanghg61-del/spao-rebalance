@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-v2.4 화면 — 자동분배 제거 · 리오더코드 병합 · 외부창고 분리(엔진) + v1.6 기능 복원
+v2.5 화면 — 자동분배 제거 · 리오더코드 병합 · 외부창고 분리(엔진) + v1.6 기능 복원
 복원: 단품코드 검색(앞 10자리) · 🚫 제외 스타일 탭 · 📊 채널 별 세부 탭(외부창고 컬럼은 여기만)
       · 체크박스 단품 선택 승인 · 사용자 정의 기준 명칭
 (페이지 설정·비밀번호 게이트·공통 CSS는 app.py 담당)
@@ -519,7 +519,7 @@ def render_effect_tab():
     st.markdown('<div class="scenario-box">📐 <b>실제효과 산식 (보수 집계)</b> — 이동(IN) 받은 단품×채널에서 '
                 '<b>전일(이동 전) 재고로는 판매 불가능했던 추가 판매분만</b> 인정: '
                 '추가판매 = min(이동IN, max(0, 실제판매 − 전일재고)) → 실제효과 = Σ 추가판매 × 정상가. '
-                '이동 없이도 팔 수 있었던 물량은 제외. 실 배포 시 D+7 EDW 판매 실적으로 자동 집계 — 현재 수동 입력/mock.</div>',
+                '이동 없이도 팔 수 있었던 물량은 제외. 실측일 = <b>당일 매출 기준</b> (매일 06:00 매출 갱신 후 집계). 아래 일일 매출 자료 업로드 시 자동 반영.</div>',
                 unsafe_allow_html=True)
 
     log_rows = effect_log.load_log()
@@ -576,7 +576,7 @@ def render_effect_tab():
             st.success('저장 완료')
             st.rerun()
     with b2:
-        if st.button('🤖 D+7 실측 자동 산출 (mock·추가판매분)', use_container_width=True, key='fx_mock'):
+        if st.button('🤖 실측 자동 산출 (mock·추가판매분)', use_container_width=True, key='fx_mock'):
             n = effect_log.mock_fill_actuals()
             st.success(f'{n}건 실측 채움 — 전일재고 대비 추가판매분만 집계 (실데이터 연동 전 데모)')
             st.rerun()
@@ -593,6 +593,21 @@ def render_effect_tab():
         confirm = st.checkbox('초기화 확인', key='fx_clear_ok')
         if st.button('🗑️ 이력 초기화', use_container_width=True, key='fx_clear', disabled=not confirm):
             effect_log.clear_log()
+            st.rerun()
+
+    st.markdown('#### 📂 일일 매출 자료 업로드 — 당일 실측 자동 반영')
+    st.caption('매일 06:00 매출 갱신 후 업로드. 컬럼 자동 인식: 단품코드 / 채널(선택) / 판매수량 — 채널 없으면 이동IN 비중으로 배분. '
+               '실측 대기 실행에 추가판매분(min(이동IN, 판매−전일재고))만 집계.')
+    su1, su2 = st.columns([3, 1])
+    with su1:
+        sales_up = st.file_uploader('매출 자료 (csv/xlsx)', type=['csv', 'xlsx'], key='fx_sales_up', label_visibility='collapsed')
+    with su2:
+        if sales_up is not None and st.button('✅ 실측 반영', type='primary', use_container_width=True, key='fx_sales_apply'):
+            n_exec, matched = effect_log.apply_sales_bytes(sales_up.getvalue(), sales_up.name)
+            if n_exec:
+                st.success(f'{n_exec}개 실행 실측 완료 (단품×채널 {matched}건 매칭)')
+            else:
+                st.warning('매칭된 실측 대기 실행이 없습니다 (이미 실측 완료이거나 코드 불일치).')
             st.rerun()
 
     with st.expander('🔍 실행별 상세 내역 (단품×채널 — 전일재고·이동IN·실제판매·추가판매)'):
@@ -612,7 +627,7 @@ def render_effect_tab():
 
 
 def render():
-    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v2.4</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v2.5</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
@@ -630,7 +645,7 @@ def render():
         if st.button('🔄 새로고침', use_container_width=True):
             st.rerun()
     with col_c:
-        st.caption('v2.4')
+        st.caption('v2.5')
 
     tab_d, tab_a, tab_c, tab_x, tab_ch, tab_re, tab_fx = st.tabs(
         list(SCENARIOS.keys()) + ['🚫 제외 스타일', '📊 채널 별 세부', '🔁 리오더 매핑', '📈 실행 효과']
@@ -657,4 +672,4 @@ def render():
     with tab_fx:
         render_effect_tab()
 
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v2.4 — 자동분배 제거 · 리오더 병합 · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v2.5 — 자동분배 제거 · 리오더 병합 · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')
