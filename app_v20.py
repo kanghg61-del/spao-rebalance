@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-v2.1 화면 — 자동분배 제거 · 리오더코드 병합 · 외부창고 분리(엔진) + v1.6 기능 복원
+v2.2 화면 — 자동분배 제거 · 리오더코드 병합 · 외부창고 분리(엔진) + v1.6 기능 복원
 복원: 단품코드 검색(앞 10자리) · 🚫 제외 스타일 탭 · 📊 채널 별 세부 탭(외부창고 컬럼은 여기만)
       · 체크박스 단품 선택 승인 · 사용자 정의 기준 명칭
 (페이지 설정·비밀번호 게이트·공통 CSS는 app.py 담당)
@@ -11,6 +11,7 @@ import pandas as pd
 from rebalance_engine import calc_rebalance, calc_after_woc, calc_expected_revenue
 from mock_data import (
     get_combined_data, get_last_update_time, get_reorder_info,
+    get_reorder_mapping, parse_reorder_bytes, save_reorder_mapping,
     CHANNELS, EXT_WAREHOUSE,
 )
 
@@ -306,6 +307,81 @@ def render_excluded_tab():
     ''')
 
 
+
+def render_reorder_tab():
+    st.markdown('### 🔁 리오더 매핑 관리')
+    st.caption('리오더(코드변경) 발생 시 주 1회~월 1회 갱신. 스타일코드(10자리)·단품코드(15자리) 모두 지원 — '
+               '스타일코드 입력 시 사이즈까지 자동 prefix 매칭됩니다. 적용 즉시 전 탭 재계산.')
+
+    info = get_reorder_info()
+    pairs = get_reorder_mapping()
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric('매핑 행수', f"{info['mapping_rows']:,}")
+    m2.metric('병합 적용 단품', f"{info['merged']:,}건")
+    m3.metric('적용 파일', info['file'] or '없음')
+
+    st.markdown('---')
+    col_up, col_add = st.columns(2)
+
+    with col_up:
+        st.markdown('#### 📂 파일 업로드 (전체 교체)')
+        up = st.file_uploader('csv 또는 xlsx — 컬럼: 기존코드 / 리오더(추가)코드 자동 인식',
+                              type=['csv', 'xlsx'], key='reorder_upload')
+        if up is not None:
+            try:
+                new_pairs = parse_reorder_bytes(up.getvalue(), up.name)
+                st.success(f'{up.name} → 유효 매핑 {len(new_pairs):,}행 인식')
+                st.dataframe(pd.DataFrame(new_pairs, columns=['기존코드', '리오더코드']).head(10),
+                             use_container_width=True, hide_index=True, height=200)
+                if st.button(f'✅ 적용 — 기존 매핑을 {len(new_pairs):,}행으로 교체', type='primary',
+                             use_container_width=True, key='apply_upload'):
+                    save_reorder_mapping(new_pairs)
+                    st.cache_data.clear()
+                    st.success('적용 완료 — 전 탭 재계산됨')
+                    st.rerun()
+            except Exception as e:
+                st.error(f'파일 해석 실패: {e}')
+
+    with col_add:
+        st.markdown('#### ⌨️ 직접 입력 (1건 추가)')
+        with st.form('reorder_add_form', clear_on_submit=True):
+            org_in = st.text_input('원오더(기존) 코드', placeholder='예: SPJJG23KU2 또는 15자리 단품코드')
+            reo_in = st.text_input('리오더(추가) 코드', placeholder='예: SPJJG24KU1')
+            ok = st.form_submit_button('➕ 매핑 추가', use_container_width=True, type='primary')
+        if ok:
+            org_v, reo_v = org_in.strip().upper(), reo_in.strip().upper()
+            if not org_v or not reo_v or org_v == reo_v:
+                st.error('기존/리오더 코드를 서로 다르게 입력하세요.')
+            elif any(r == reo_v for _, r in pairs):
+                st.warning(f'{reo_v} 는 이미 매핑에 존재합니다.')
+            else:
+                save_reorder_mapping(pairs + [(org_v, reo_v)])
+                st.cache_data.clear()
+                st.success(f'추가 완료: {reo_v} → {org_v}')
+                st.rerun()
+
+    st.markdown('---')
+    st.markdown(f'#### 현재 매핑 ({len(pairs):,}행)')
+    if pairs:
+        df_map = pd.DataFrame(pairs, columns=['기존코드', '리오더코드'])
+        sc1, sc2 = st.columns([3, 1])
+        with sc1:
+            q = st.text_input('매핑 검색', placeholder='코드 일부 입력', key='reorder_search').strip().upper()
+        if q:
+            df_map = df_map[df_map['기존코드'].str.contains(q) | df_map['리오더코드'].str.contains(q)]
+        st.dataframe(df_map, use_container_width=True, hide_index=True, height=320)
+        with sc2:
+            csv_bytes = ('기존코드,리오더코드\n' + '\n'.join(f'{o},{r}' for o, r in pairs)).encode('utf-8-sig')
+            st.download_button('⬇️ CSV 다운로드', csv_bytes, 'reorder_mapping.csv', 'text/csv',
+                               use_container_width=True)
+    else:
+        st.info('등록된 매핑이 없습니다. 파일 업로드 또는 직접 입력으로 추가하세요.')
+
+    st.caption('⚠️ 웹에서 적용한 변경은 앱 **재시작·재배포 시 패키지 파일 기준으로 초기화**됩니다. '
+               '영구 반영하려면 ⬇️ CSV를 다운로드해 GitHub 레포의 reorder_mapping.csv 로 커밋하거나 Claude에게 전달하세요.')
+
+
 def render_channel_tab():
     st.markdown('### 📊 채널 담당자용 상세 데이터')
 
@@ -405,7 +481,7 @@ def render_channel_tab():
 
 
 def render():
-    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v2.1</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v2.2</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
@@ -423,10 +499,10 @@ def render():
         if st.button('🔄 새로고침', use_container_width=True):
             st.rerun()
     with col_c:
-        st.caption('v2.1')
+        st.caption('v2.2')
 
-    tab_d, tab_a, tab_c, tab_x, tab_ch = st.tabs(
-        list(SCENARIOS.keys()) + ['🚫 제외 스타일', '📊 채널 별 세부']
+    tab_d, tab_a, tab_c, tab_x, tab_ch, tab_re = st.tabs(
+        list(SCENARIOS.keys()) + ['🚫 제외 스타일', '📊 채널 별 세부', '🔁 리오더 매핑']
     )
 
     with tab_d:
@@ -444,4 +520,7 @@ def render():
     with tab_ch:
         render_channel_tab()
 
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v2.1 — 자동분배 제거 · 리오더 병합 · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')
+    with tab_re:
+        render_reorder_tab()
+
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v2.2 — 자동분배 제거 · 리오더 병합 · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')
