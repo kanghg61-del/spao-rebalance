@@ -1,2 +1,8 @@
 streamlit>=1.30.0
 pandas>=2.0.0
+openpyxl>=3.1.0
+pyyaml>=6.0
+# 실 배포 시 추가:
+# pyrfc>=2.7.0  # SAP 연동
+# requests>=2.31.0  # 채널 API
+# apache-airflow>=2.7.0  # 스케줄러 (별도 환경)

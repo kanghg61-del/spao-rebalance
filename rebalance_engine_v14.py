@@ -1,46 +1,48 @@
 # -*- coding: utf-8 -*-
 """
-재배치 엔진 v2.0 — 단품 1건에 대한 채널 간 이동 수량 산출
-
-v2.0 변경:
-  ① 자동분배(모드B: 반응과 → 채널 분배) 제거 — 채널 간 재배치(모드A)만 수행
-  ③ 외부창고 별도 처리 — OUT 가용량에서 외부창고 보관분 제외
-     (무신사 풀필먼트 AENS / 지그재그 천안 ADU3 / 네이버 CMS ADQS 입고분은
-      타 채널로 회수 불가로 간주)
+재배치 엔진 — 단품 1건에 대한 이동 수량 산출
+보수 시나리오 기본값: 부족 임계 1주 / 목표 2주 / 출고율 90% / 온라인 10% / 10장 필터
 """
 import math
 
 
-def calc_rebalance(sku_data, params, channels):
+def calc_rebalance(sku_data, params, channels, bw_name='반응과'):
     """
     Args:
         sku_data: dict
-            'inv': {공홈: int, ...}      — 채널 재고 (외부창고 보관분 포함)
-            'ext_wh': {무신사: int, ...} — 외부창고 보관분 (OUT 불가)
-            'orders': {공홈: int, ...}   — 주간 주문량
-            'ship_rate': float / 'locked': bool / 'critical': bool
-        params: dict (shortage_threshold, target_woc, ship_rate_threshold, min_move_qty)
+            'inv': {bw_name: int, 공홈: int, ...}
+            'orders': {공홈: int, ...} (주간 주문량)
+            'ship_rate': float (출고율, 0~1)
+            'online_ratio': float (온라인 비중, 0~1)
+            'locked' (optional): bool — 잠금 SKU
+            'critical' (optional): bool — Critical SKU (10장 필터 면제)
+        params: dict (config.yaml의 parameters)
         channels: list[str]
-
+        bw_name: str (반응과 채널명)
+    
     Returns:
-        moves: dict {공홈: int, ...} — 양수 IN / 음수 OUT / 합계 0
+        moves: dict {bw_name: int, 공홈: int, ...}
+            양수 = 들어옴, 음수 = 나감, 합계 = 0
     """
-    moves = {c: 0 for c in channels}
+    moves = {bw_name: 0}
+    for c in channels:
+        moves[c] = 0
 
+    # 잠금 SKU는 이동 안 함
     if sku_data.get('locked', False):
         return moves
 
-    # 채널 간 재배치는 출고율 임계 이상에서만 (구 모드A)
-    if sku_data.get('ship_rate', 0) < params['ship_rate_threshold']:
+    ship = sku_data.get('ship_rate', 0)
+    online = sku_data.get('online_ratio', 0)
+
+    mode_A = ship >= params['ship_rate_threshold']
+    mode_B = (not mode_A) and (online >= params['online_ratio_threshold'])
+    if not (mode_A or mode_B):
         return moves
 
+    inv_bw = sku_data['inv'].get(bw_name, 0)
     inv = {c: sku_data['inv'].get(c, 0) for c in channels}
     ord_ = {c: sku_data['orders'].get(c, 0) for c in channels}
-    ext_wh = sku_data.get('ext_wh', {})
-
-    def movable(c):
-        """OUT 가용 재고 = 채널 재고 - 외부창고 보관분"""
-        return max(0, inv[c] - ext_wh.get(c, 0))
 
     # 부족·잉여 채널 식별
     shortage, surplus = {}, {}
@@ -50,9 +52,8 @@ def calc_rebalance(sku_data, params, channels):
         if o <= 0 and i <= 0:
             continue
         if o <= 0:
-            m = movable(c)
-            if m > 0:
-                surplus[c] = int(m)
+            if i > 0:
+                surplus[c] = int(i)
             continue
         woc = i / o
         if woc <= params['shortage_threshold']:
@@ -61,35 +62,53 @@ def calc_rebalance(sku_data, params, channels):
                 shortage[c] = need
         elif woc > params['target_woc']:
             avail = int((woc - params['target_woc']) * o)
-            avail = min(avail, movable(c))  # 외부창고 보관분 제외
             if avail > 0:
                 surplus[c] = avail
 
-    if not shortage or not surplus:
+    if not shortage:
         return moves
 
     total_short = sum(shortage.values())
-    total_src = sum(surplus.values())
-    actual = min(total_short, total_src)
-    if actual <= 0:
+
+    # 공급원 결정
+    sources = {}
+    if mode_A:
+        sources = dict(surplus)
+    else:  # mode_B
+        if inv_bw > 0:
+            sources[bw_name] = int(inv_bw)
+        if sum(sources.values()) < total_short:
+            for c, v in surplus.items():
+                sources[c] = v
+
+    total_src = sum(sources.values())
+    if total_src == 0:
         return moves
+    actual = min(total_short, total_src)
 
-    # 공급원 차감 — 잉여량 비례 배분
+    # 공급원 차감 — 반응과 우선
     rem = actual
-    items = list(surplus.items())
-    acc = 0
-    for i, (c, av) in enumerate(items):
-        if i == len(items) - 1:
-            tk = rem - acc
-        else:
-            tk = min(av, int(round(av / total_src * rem)))
-        tk = max(0, min(tk, av))
-        moves[c] = -tk
-        acc += tk
-        if acc >= rem:
-            break
+    if bw_name in sources:
+        tk = min(sources[bw_name], rem)
+        moves[bw_name] = -tk
+        rem -= tk
+        del sources[bw_name]
+    if rem > 0 and sources:
+        sa = sum(sources.values())
+        items = list(sources.items())
+        acc = 0
+        for i, (c, av) in enumerate(items):
+            if i == len(items) - 1:
+                tk = rem - acc
+            else:
+                tk = min(av, int(round(av / sa * rem)))
+            tk = max(0, min(tk, av))
+            moves[c] = -tk
+            acc += tk
+            if acc >= rem:
+                break
 
-    # 부족 채널 분배 — 부족량 비례 배분
+    # 부족 채널 분배
     out_total = -sum(moves.values())
     if out_total > 0:
         items = list(shortage.items())
@@ -100,7 +119,7 @@ def calc_rebalance(sku_data, params, channels):
             else:
                 gv = int(round(nd / total_short * out_total))
                 gv = max(0, min(gv, nd))
-            moves[c] += gv
+            moves[c] = gv
             acc += gv
 
     # 합계 0 보정
@@ -136,7 +155,9 @@ def calc_expected_revenue(sku_data, moves, channels, price):
         inv = sku_data['inv'].get(c, 0)
         o = sku_data['orders'].get(c, 0)
         new_inv = inv + moves.get(c, 0)
+        # 결품량 = max(0, 주문 - 재고)
         old_short = max(0, o - inv)
         new_short = max(0, o - new_inv)
-        revenue += (old_short - new_short) * price
+        resolved = old_short - new_short
+        revenue += resolved * price
     return int(revenue)
