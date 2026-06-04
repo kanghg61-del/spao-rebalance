@@ -569,8 +569,13 @@ def render_effect_tab():
         '상태': f'실측 {len(measured)}/{n_exec}', '메모': '',
     }
     df_disp = pd.concat([pd.DataFrame([total_row]), df_log], ignore_index=True)
+
+    def _hl_total(row):
+        sty = 'background-color: #1E2D40; color: #4AE3B5; font-weight: bold' if str(row.get('id')) == 'Σ' else ''
+        return [sty] * len(row)
+
     edited = st.data_editor(
-        df_disp,
+        df_disp.style.apply(_hl_total, axis=1),
         use_container_width=True,
         height=320,
         hide_index=True,
