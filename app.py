@@ -80,7 +80,7 @@ st.markdown("""
     .ver-badge { display:inline-block; background:#1C2836; color:#8AB4F8; border:1px solid #8AB4F8; border-radius:12px; padding:1px 10px; font-size:12px; margin-left:10px; vertical-align:middle; }
     .scenario-box { background: #1C2836; border-left: 3px solid #4AE3B5; padding: 8px 12px; border-radius: 4px; color: #B0B7C3; font-size: 12px; margin-bottom: 8px; }
     .stDataFrame { background-color: #15202C; font-size: 11px; }
-    .block-container { padding-top: 1rem !important; padding-bottom: 0.5rem !important; max-width: 100%; }
+    .block-container { padding-top: 3.2rem !important; padding-bottom: 0.5rem !important; max-width: 100%; }
     .stTabs [data-baseweb="tab-list"] { gap: 8px; background: transparent; }
     .stTabs [data-baseweb="tab"] { background: #15202C; border-radius: 8px 8px 0 0; padding: 10px 24px; color: #B0B7C3; font-size: 16px; font-weight: bold; }
     .stTabs [aria-selected="true"] { background: #4AE3B5 !important; color: #0A141F !important; }
@@ -91,10 +91,9 @@ st.markdown("""
 # 버전 전환 (v2.0 최신 / v1.4 이전 참고)
 # ============================================================
 ver = st.radio(
-    '버전',
+    '대시보드 버전',
     ['🟢 v2.0 (최신)', '⏪ v1.4 (이전 참고용)'],
     horizontal=True,
-    label_visibility='collapsed',
     key='app_version',
 )
 
