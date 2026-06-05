@@ -226,7 +226,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
         k1, k2, k3, k4, k5, k6 = st.columns(6)
         kpi_card(k1, '총 단품량', f'{_units:,}장', f'6채널 재고 합계 · {_sub}')
         kpi_card(k2, '총 이동량', f'{_in:,}장', f'주간 IN · {_sub}')
-        kpi_card(k3, '총 단품금액', f'{_units_amt/100000000:.1f}억', f'재고수량 × 정상가 · {_sub}')
+        kpi_card(k3, '총 재고금액', f'{_units_amt/100000000:.1f}억', f'재고수량 × 정상가 · {_sub}')
         kpi_card(k4, '총 이동 금액', f'{_amt/100000000:.2f}억', f'이동수량 × 정상가 · {_sub}')
         kpi_card(k5, '회수 매출', f'{_rev/100000000:.2f}억', f'주간 · {_sub}')
         kpi_card(k6, '연 환산', f'{_rev*52/100000000:.0f}억', '× 52주')
