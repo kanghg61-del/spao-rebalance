@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-v2.7 화면 — 자동분배 제거 · 리오더코드 병합 · 외부창고 분리(엔진) + v1.6 기능 복원
+v2.6 화면 (이전 참고용 스냅샷 — app_v26) — 자동분배 제거 · 리오더코드 병합 · 외부창고 분리(엔진) + v1.6 기능 복원
 복원: 단품코드 검색(앞 10자리) · 🚫 제외 스타일 탭 · 📊 채널 별 세부 탭(외부창고 컬럼은 여기만)
       · 체크박스 단품 선택 승인 · 사용자 정의 기준 명칭
 (페이지 설정·비밀번호 게이트·공통 CSS는 app.py 담당)
@@ -102,28 +102,6 @@ def mv_color(v):
     return 'background-color: #5B1E1E; color: #FF5A5F; font-weight:bold; text-align:center'
 
 
-
-@st.dialog('✅ 재고 이동 전송 확인')
-def _approve_dialog(scenario_key, sel_count, sel_qty, sel_amt, sel_rev, ch_in, ch_out, exec_id):
-    st.markdown(f"""<div class="scenario-box">
-    <b>SAP BAPI 전송 완료 (mock)</b> — 실행 ID <b>#{exec_id}</b> · 📈 실행 효과 탭에 이력 기록됨<br>
-    실 배포 시: BAPI_GOODS_MVT_CREATE 호출 → 전표 생성 → audit log</div>""", unsafe_allow_html=True)
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric('승인 단품', f'{sel_count:,}건')
-    m2.metric('총 이동량', f'{sel_qty:,}장')
-    m3.metric('총 이동 금액', f'{sel_amt/100000000:.2f}억')
-    m4.metric('기대 회수 매출', f'{sel_rev/100000000:.2f}억')
-    rows = [{'채널': c, 'IN (장)': ch_in.get(c, 0), 'OUT (장)': ch_out.get(c, 0),
-             '순증감': ch_in.get(c, 0) - ch_out.get(c, 0)} for c in CHANNELS
-            if ch_in.get(c, 0) or ch_out.get(c, 0)]
-    if rows:
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True,
-                     height=min(38 + 35 * len(rows), 260))
-    st.caption('⚠️ 실제 재고 이동 여부는 익일 06:00 재고 갱신 후 "현 재고보유주수" 변화 및 📈 실행 효과 탭 실측으로 확인하세요.')
-    if st.button('확인', type='primary', use_container_width=True, key=f'dlg_ok_{scenario_key}'):
-        st.rerun()
-
-
 def render_scenario(scenario_key, container, allow_slider=False):
     preset = SCENARIOS[scenario_key]
 
@@ -153,9 +131,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
 
     total_skus = len(results)
     moved_count = sum(1 for r in results if any(v != 0 for v in r['moves'].values()))
-    total_units = sum(sum(r['data']['inv'].get(c, 0) for c in CHANNELS) for r in results)
     total_in = sum(sum(v for v in r['moves'].values() if v > 0) for r in results)
-    total_amt = sum(sum(v for v in r['moves'].values() if v > 0) * r['data']['price'] for r in results)
     total_rev = sum(r['revenue'] for r in results)
 
     def kpi_card(col, label, value, sub=''):
@@ -213,18 +189,17 @@ def render_scenario(scenario_key, container, allow_slider=False):
         _pre_rows = []
     if _pre_rows:
         _base = [filtered[i] for i in _pre_rows]
-        _units = sum(sum(r['data']['inv'].get(c, 0) for c in CHANNELS) for r in _base)
+        _mv_cnt = sum(1 for r in _base if any(v != 0 for v in r['moves'].values()))
         _in = sum(sum(v for v in r['moves'].values() if v > 0) for r in _base)
-        _amt = sum(sum(v for v in r['moves'].values() if v > 0) * r['data']['price'] for r in _base)
         _rev = sum(r['revenue'] for r in _base)
         _sub = f'☑ 선택 {len(_base):,}건 기준'
     else:
-        _units, _in, _amt, _rev, _sub = total_units, total_in, total_amt, total_rev, '전체 기준'
+        _mv_cnt, _in, _rev, _sub = moved_count, total_in, total_rev, '전체 기준'
     with kpi_ph:
         k1, k2, k3, k4, k5 = st.columns(5)
-        kpi_card(k1, '총 단품량', f'{_units:,}장', f'6채널 재고 합계 · {_sub}')
-        kpi_card(k2, '총 이동량', f'{_in:,}장', f'주간 IN · {_sub}')
-        kpi_card(k3, '총 이동 금액', f'{_amt/100000000:.2f}억', f'이동수량 × 정상가 · {_sub}')
+        kpi_card(k1, '전체 단품', f'{total_skus:,}', '6채널 · 리오더 병합 후')
+        kpi_card(k2, '이동 발생', f'{_mv_cnt:,}', _sub)
+        kpi_card(k3, '총 이동량', f'{_in:,}장', f'주간 IN · {_sub}')
         kpi_card(k4, '회수 매출', f'{_rev/100000000:.2f}억', f'주간 · {_sub}')
         kpi_card(k5, '연 환산', f'{_rev*52/100000000:.0f}억', '× 52주')
 
@@ -305,18 +280,13 @@ def render_scenario(scenario_key, container, allow_slider=False):
     with col_b1:
         if st.button(f'✅ 선택 {sel_count}건 승인', use_container_width=True, type='primary', key=f'approve_{scenario_key}'):
             details = []
-            ch_in, ch_out = {}, {}
-            sel_amt = 0
             for it in sel_items:
                 for ch, v in it['moves'].items():
                     if v > 0:
                         details.append((it['code'], ch, it['data']['inv'].get(ch, 0), v, it['data']['price']))
-                        ch_in[ch] = ch_in.get(ch, 0) + v
-                        sel_amt += v * it['data']['price']
-                    elif v < 0:
-                        ch_out[ch] = ch_out.get(ch, 0) - v
-            exec_id = effect_log.log_execution(scenario_key, len(sel_items), sel_qty, sel_rev, details=details)
-            _approve_dialog(scenario_key, sel_count, sel_qty, sel_amt, sel_rev, ch_in, ch_out, exec_id)
+            effect_log.log_execution(scenario_key, len(sel_items), sel_qty, sel_rev, details=details)
+            st.success(f'✓ 선택 {sel_count}건 / {sel_qty:,}장 → SAP BAPI 전송 완료 (mock) · 📈 실행 효과 탭에 이력 기록 (전일재고 스냅샷 포함)')
+            st.balloons()
     with col_b2:
         if st.button('✋ Override 화면', use_container_width=True, key=f'override_{scenario_key}'):
             st.info('실 배포 시 단품별 수정 다이얼로그 (현재 PoC mock)')
@@ -672,7 +642,7 @@ def render_effect_tab():
 
 
 def render():
-    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v2.7</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v2.6 · 이전 참고용</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
@@ -690,7 +660,7 @@ def render():
         if st.button('🔄 새로고침', use_container_width=True):
             st.rerun()
     with col_c:
-        st.caption('v2.7')
+        st.caption('v2.6')
 
     tab_d, tab_a, tab_c, tab_x, tab_ch, tab_re, tab_fx = st.tabs(
         list(SCENARIOS.keys()) + ['🚫 제외 스타일', '📊 채널 별 세부', '🔁 리오더 매핑', '📈 실행 효과']
@@ -717,4 +687,4 @@ def render():
     with tab_fx:
         render_effect_tab()
 
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v2.7 — 자동분배 제거 · 리오더 병합 · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v2.6 — 자동분배 제거 · 리오더 병합 · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')
