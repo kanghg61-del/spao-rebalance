@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-v2.7 화면 — 자동분배 제거 · 리오더코드 병합 · 외부창고 분리(엔진) + v1.6 기능 복원
+v2.8 화면 — 자동분배 제거 · 리오더코드 병합 · 외부창고 분리(엔진) + v1.6 기능 복원
 복원: 단품코드 검색(앞 10자리) · 🚫 제외 스타일 탭 · 📊 채널 별 세부 탭(외부창고 컬럼은 여기만)
       · 체크박스 단품 선택 승인 · 사용자 정의 기준 명칭
 (페이지 설정·비밀번호 게이트·공통 CSS는 app.py 담당)
@@ -154,6 +154,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
     total_skus = len(results)
     moved_count = sum(1 for r in results if any(v != 0 for v in r['moves'].values()))
     total_units = sum(sum(r['data']['inv'].get(c, 0) for c in CHANNELS) for r in results)
+    total_units_amt = sum(sum(r['data']['inv'].get(c, 0) for c in CHANNELS) * r['data']['price'] for r in results)
     total_in = sum(sum(v for v in r['moves'].values() if v > 0) for r in results)
     total_amt = sum(sum(v for v in r['moves'].values() if v > 0) * r['data']['price'] for r in results)
     total_rev = sum(r['revenue'] for r in results)
@@ -214,19 +215,21 @@ def render_scenario(scenario_key, container, allow_slider=False):
     if _pre_rows:
         _base = [filtered[i] for i in _pre_rows]
         _units = sum(sum(r['data']['inv'].get(c, 0) for c in CHANNELS) for r in _base)
+        _units_amt = sum(sum(r['data']['inv'].get(c, 0) for c in CHANNELS) * r['data']['price'] for r in _base)
         _in = sum(sum(v for v in r['moves'].values() if v > 0) for r in _base)
         _amt = sum(sum(v for v in r['moves'].values() if v > 0) * r['data']['price'] for r in _base)
         _rev = sum(r['revenue'] for r in _base)
         _sub = f'☑ 선택 {len(_base):,}건 기준'
     else:
-        _units, _in, _amt, _rev, _sub = total_units, total_in, total_amt, total_rev, '전체 기준'
+        _units, _units_amt, _in, _amt, _rev, _sub = total_units, total_units_amt, total_in, total_amt, total_rev, '전체 기준'
     with kpi_ph:
-        k1, k2, k3, k4, k5 = st.columns(5)
+        k1, k2, k3, k4, k5, k6 = st.columns(6)
         kpi_card(k1, '총 단품량', f'{_units:,}장', f'6채널 재고 합계 · {_sub}')
         kpi_card(k2, '총 이동량', f'{_in:,}장', f'주간 IN · {_sub}')
-        kpi_card(k3, '총 이동 금액', f'{_amt/100000000:.2f}억', f'이동수량 × 정상가 · {_sub}')
-        kpi_card(k4, '회수 매출', f'{_rev/100000000:.2f}억', f'주간 · {_sub}')
-        kpi_card(k5, '연 환산', f'{_rev*52/100000000:.0f}억', '× 52주')
+        kpi_card(k3, '총 단품금액', f'{_units_amt/100000000:.1f}억', f'재고수량 × 정상가 · {_sub}')
+        kpi_card(k4, '총 이동 금액', f'{_amt/100000000:.2f}억', f'이동수량 × 정상가 · {_sub}')
+        kpi_card(k5, '회수 매출', f'{_rev/100000000:.2f}억', f'주간 · {_sub}')
+        kpi_card(k6, '연 환산', f'{_rev*52/100000000:.0f}억', '× 52주')
 
     rows = []
     for r in filtered:
@@ -672,7 +675,7 @@ def render_effect_tab():
 
 
 def render():
-    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v2.7</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v2.8</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
@@ -690,7 +693,7 @@ def render():
         if st.button('🔄 새로고침', use_container_width=True):
             st.rerun()
     with col_c:
-        st.caption('v2.7')
+        st.caption('v2.8')
 
     tab_d, tab_a, tab_c, tab_x, tab_ch, tab_re, tab_fx = st.tabs(
         list(SCENARIOS.keys()) + ['🚫 제외 스타일', '📊 채널 별 세부', '🔁 리오더 매핑', '📈 실행 효과']
@@ -717,4 +720,4 @@ def render():
     with tab_fx:
         render_effect_tab()
 
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v2.7 — 자동분배 제거 · 리오더 병합 · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v2.8 — 자동분배 제거 · 리오더 병합 · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')
