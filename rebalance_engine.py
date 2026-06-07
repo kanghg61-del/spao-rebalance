@@ -25,6 +25,9 @@ RESOLVE_WOC = 1.0
 # 컬러(12자리) 커버리지 임계 — 이 컬러 결품 사이즈의 이 비율 이상을 해소 못 하는 채널은
 # 수신처에서 제외(아소트 깨짐 방지). 단일 결품 사이즈는 항상 통과.
 COLOR_COVERAGE_TH = 0.6
+# 소액 채널 수신 제외 — 주간 주문이 이 미만인 채널은 결품이라도 IN(보충) 대상에서 제외
+# (잉여일 때 빼주는 것은 허용). 사용자 정의 탭에서 조정.
+MIN_RECV_ORDER = 4
 
 
 def _prio(c):
@@ -199,6 +202,9 @@ def calc_rebalance_group(group, params, channels):
                 continue
             woc = i / o
             if woc <= short_th:
+                # 소액 채널은 결품이라도 수신 제외 (구색·물류비 대비 효과 미미)
+                if o < params.get('min_recv_order', MIN_RECV_ORDER):
+                    continue
                 need_full = max(0, int(math.ceil(target * o - i)))
                 need_resolve = max(0, int(math.ceil(resolve_line * o - i)))
                 if need_full > 0:

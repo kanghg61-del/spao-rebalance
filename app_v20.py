@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-v3.0 화면 — 자동분배 제거 · 리오더코드 병합 · 외부창고 분리(엔진) + v1.6 기능 복원
+v3.1 화면 — 자동분배 제거 · 리오더코드 병합 · 외부창고 분리(엔진) + v1.6 기능 복원
 복원: 단품코드 검색(앞 10자리) · 🚫 제외 스타일 탭 · 📊 채널 별 세부 탭(외부창고 컬럼은 여기만)
       · 체크박스 단품 선택 승인 · 사용자 정의 기준 명칭
 (페이지 설정·비밀번호 게이트·공통 CSS는 app.py 담당)
@@ -26,17 +26,17 @@ SCENARIOS = {
     '🛡️ 방어형 (추천)': {
         'desc': '부족 1주 / 목표 4주 — 결품 임박 시 4주까지 충분히 충전. 운영 부담 최소·효과 극대',
         'shortage_th': 1.0, 'target_woc': 4.0,
-        'ship_th': 0.90, 'min_move': 0,
+        'ship_th': 0.90, 'min_move': 0, 'min_recv': 4,
     },
     '⚡ 공격형': {
         'desc': '부족 2주 / 목표 4주 — 결품 발생 전 선제 재배치. 이동량 증가, 효과는 방어형과 유사',
         'shortage_th': 2.0, 'target_woc': 4.0,
-        'ship_th': 0.90, 'min_move': 0,
+        'ship_th': 0.90, 'min_move': 0, 'min_recv': 4,
     },
     '🎛️ 사용자 정의': {
         'desc': '상단 슬라이더로 직접 조정',
         'shortage_th': 1.0, 'target_woc': 2.0,
-        'ship_th': 0.90, 'min_move': 10,
+        'ship_th': 0.90, 'min_move': 10, 'min_recv': 4,
     },
 }
 
@@ -52,6 +52,7 @@ def calc_results_v20(params_key):
     params = {
         'shortage_threshold': params_key[0], 'target_woc': params_key[1],
         'ship_rate_threshold': params_key[2], 'min_move_qty': params_key[3],
+        'min_recv_order': params_key[4],
     }
     # 컬러(단품코드 12자리) 단위로 묶어 그룹 재배치 — 아소트 깨짐 방지
     from collections import defaultdict
@@ -137,7 +138,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
 
     if allow_slider:
         container.markdown('### 🎛️ 사용자 정의 기준')
-        sl1, sl2, sl3, sl4 = container.columns(4)
+        sl1, sl2, sl3, sl4, sl5 = container.columns(5)
         with sl1:
             shortage_th = st.slider('재배치 대상 (재고주수 0주 이하)', 0.5, 4.0, preset['shortage_th'], 0.5, key=f'sh_{scenario_key}')
         with sl2:
@@ -146,16 +147,19 @@ def render_scenario(scenario_key, container, allow_slider=False):
             ship_th = st.slider('현 출고율 (%)', 50, 100, int(preset['ship_th']*100), 5, key=f'sp_{scenario_key}') / 100
         with sl4:
             min_move = st.slider('이동 ≥ N장만 (비부가 제거)', 0, 50, preset['min_move'], 1, key=f'mn_{scenario_key}')
+        with sl5:
+            min_recv = st.slider('소액 채널 제외 (주간주문 N장 미만)', 0, 20, preset.get('min_recv', 4), 1, key=f'mr_{scenario_key}')
     else:
         shortage_th = preset['shortage_th']
         target_woc = preset['target_woc']
         ship_th = preset['ship_th']
         min_move = preset['min_move']
+        min_recv = preset.get('min_recv', 4)
 
     container.markdown(f'<div class="scenario-box">{preset["desc"]}</div>', unsafe_allow_html=True)
 
     with st.spinner('계산 중...'):
-        params_key = (shortage_th, target_woc, ship_th, min_move)
+        params_key = (shortage_th, target_woc, ship_th, min_move, min_recv)
         results = calc_results_v20(params_key)
     results = _apply_exclusion(results)
 
@@ -462,7 +466,7 @@ def render_channel_tab():
     channel_pick = st.radio('채널 선택', CHANNELS, horizontal=True, key='ch_pick')
 
     preset = SCENARIOS['🛡️ 방어형 (추천)']
-    params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'], preset['min_move'])
+    params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'], preset['min_move'], preset.get('min_recv', 4))
     results_ch = _apply_exclusion(calc_results_v20(params_key))
 
     is_ext = channel_pick in EXT_WAREHOUSE
@@ -684,7 +688,7 @@ def render_effect_tab():
 
 
 def render():
-    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v3.0</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v3.1</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
@@ -702,7 +706,7 @@ def render():
         if st.button('🔄 새로고침', use_container_width=True):
             st.rerun()
     with col_c:
-        st.caption('v3.0')
+        st.caption('v3.1')
 
     tab_d, tab_a, tab_c, tab_x, tab_ch, tab_re, tab_fx = st.tabs(
         list(SCENARIOS.keys()) + ['🚫 제외 스타일', '📊 채널 별 세부', '🔁 리오더 매핑', '📈 실행 효과']
@@ -729,4 +733,4 @@ def render():
     with tab_fx:
         render_effect_tab()
 
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v3.0 — 자동분배 제거 · 리오더 병합 · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v3.1 — 자동분배 제거 · 리오더 병합 · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')
