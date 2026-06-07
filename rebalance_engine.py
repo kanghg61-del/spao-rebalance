@@ -22,6 +22,9 @@ CHANNEL_PRIORITY = {
 }
 # 결품 해소선(주) — 이 미만이면 '여전히 결품'으로 보고 소량 이동을 만들지 않음
 RESOLVE_WOC = 1.0
+# 컬러(12자리) 커버리지 임계 — 이 컬러 결품 사이즈의 이 비율 이상을 해소 못 하는 채널은
+# 수신처에서 제외(아소트 깨짐 방지). 단일 결품 사이즈는 항상 통과.
+COLOR_COVERAGE_TH = 0.6
 
 
 def _prio(c):
@@ -156,6 +159,92 @@ def calc_after_woc(sku_data, moves, channels):
         o = sku_data['orders'].get(c, 0)
         result[c] = round(new_inv / o, 1) if o > 0 else None
     return result
+
+
+
+def calc_rebalance_group(group, params, channels):
+    """
+    컬러(단품코드 12자리) 단위 재배치 — 같은 컬러의 사이즈들을 함께 보고
+    '컬러 전체를 충분히 채울 수 있는 수신 채널'만 채택(아소트 깨짐 방지).
+
+    Args:
+        group: {단품코드: sku_data}  (같은 컬러의 사이즈들)
+        params, channels: calc_rebalance와 동일
+    Returns:
+        {단품코드: moves dict}  — 각 사이즈별 채널 이동(양수 IN/음수 OUT/합계 0)
+    """
+    out = {code: {c: 0 for c in channels} for code in group}
+
+    short_th = params['shortage_threshold']
+    target = params['target_woc']
+    resolve_line = min(RESOLVE_WOC, target)
+
+    # ── 사이즈(SKU)별 결품/잉여 산출 ──
+    shortage = {}   # code -> {ch: (need_resolve, need_full)}
+    surplus_left = {}  # code -> {ch: avail}  (사이즈 내에서만 이동 가능)
+    for code, d in group.items():
+        if d.get('locked', False) or d.get('ship_rate', 0) < params['ship_rate_threshold']:
+            shortage[code] = {}; surplus_left[code] = {}
+            continue
+        inv = d['inv']; ordd = d['orders']; ext = d.get('ext_wh', {})
+        sh, su = {}, {}
+        for c in channels:
+            i = inv.get(c, 0); o = ordd.get(c, 0)
+            if o <= 0 and i <= 0:
+                continue
+            if o <= 0:
+                m = max(0, i - ext.get(c, 0))
+                if m > 0:
+                    su[c] = int(m)
+                continue
+            woc = i / o
+            if woc <= short_th:
+                need_full = max(0, int(math.ceil(target * o - i)))
+                need_resolve = max(0, int(math.ceil(resolve_line * o - i)))
+                if need_full > 0:
+                    sh[c] = (need_resolve, need_full)
+            elif woc > target:
+                avail = min(int((woc - target) * o), max(0, i - ext.get(c, 0)))
+                if avail > 0:
+                    su[c] = avail
+        shortage[code] = sh
+        surplus_left[code] = su
+
+    # ── 수신 채널 채택: 저수수료 우선, 컬러 커버리지 게이트 ──
+    for ch in sorted(channels, key=_prio):
+        sizes_short = [code for code in group if ch in shortage[code]]
+        if not sizes_short:
+            continue
+        # 각 사이즈에서 ch를 (목표까지 우선, 최소 해소) 채울 수 있는지 — 현재 남은 잉여 기준
+        plan = {}
+        for code in sizes_short:
+            nr, nf = shortage[code][ch]
+            avail = sum(surplus_left[code].values())
+            if avail >= max(nr, 1):
+                plan[code] = min(nf, avail)
+        coverage = len(plan) / len(sizes_short)
+        if coverage < COLOR_COVERAGE_TH:
+            continue  # 이 컬러를 ch에 보내면 구색이 깨짐 → 제외(잉여 보존, 차순위 채널이 사용)
+        # 채택 — 사이즈별로 고수수료(역순) 잉여부터 회수해 ch에 충전
+        for code, give in plan.items():
+            need = give
+            for src in sorted(list(surplus_left[code].keys()), key=lambda x: -_prio(x)):
+                if need <= 0:
+                    break
+                tk = min(surplus_left[code][src], need)
+                if tk > 0:
+                    out[code][src] -= tk
+                    out[code][ch] += tk
+                    surplus_left[code][src] -= tk
+                    need -= tk
+
+    # ── 비부가 필터 (사이즈별) ──
+    for code, d in group.items():
+        pos = sum(v for v in out[code].values() if v > 0)
+        if pos < params['min_move_qty'] and not d.get('critical', False):
+            out[code] = {c: 0 for c in channels}
+
+    return out
 
 
 def calc_expected_revenue(sku_data, moves, channels, price):
