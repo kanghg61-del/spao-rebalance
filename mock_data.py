@@ -214,15 +214,22 @@ def _load_merged():
             target = None
             for L, m in by_len.items():
                 if len(code) >= L and code[:L] in m:
-                    target = m[code[:L]] + code[L:]   # suffix(사이즈 등) 유지
+                    cand = m[code[:L]] + code[L:]   # 기존스타일 + (컬러+사이즈) suffix 유지
+                    # ── 컬러코드(단품코드 11~12자리) 동일 기준(v4.3) ──
+                    # 스타일코드 매핑 후, 리오더 단품과 병합 대상의 컬러코드(11~12자리)가
+                    # 동일할 때만 병합한다. 매핑이 스타일(10자리) 단위라 컬러 suffix가
+                    # 보존되지만, 코드 길이 불일치·데이터 이상으로 컬러가 달라지면 병합하지 않는다.
+                    if code[10:12] and code[10:12] == cand[10:12]:
+                        target = cand
                     break
             if not target or target == code or code not in skus:
                 continue
             src = skus.pop(code)
             if target in skus:
+                # 컬러코드(11~12자리)가 동일한 기존 단품과 재고 합산 병합
                 _merge_into(skus[target], src, code)
             else:
-                # 기존코드 단품이 마트에 없으면 리오더 데이터를 기존코드로 승격
+                # 기존코드 단품이 마트에 없으면 리오더 데이터를 기존코드로 승격(컬러 보존)
                 src['reorder_codes'] = [code]
                 skus[target] = src
             merged += 1

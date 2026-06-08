@@ -47,8 +47,9 @@ def calc_rebalance(sku_data, params, channels):
 
     if sku_data.get('locked', False):
         return moves
-    if sku_data.get('ship_rate', 0) < params['ship_rate_threshold']:
-        return moves
+    # 출고율 게이트 제거(v4.3) — 출고율과 무관하게 결품(재고주수 부족) 발생 시 즉시 보충.
+    # (과거: ship_rate < threshold 인 단품은 이동 대상에서 제외했으나, 결품은 출고율과
+    #  무관하게 채워야 하므로 게이트를 폐지함.)
 
     inv = {c: sku_data['inv'].get(c, 0) for c in channels}
     ord_ = {c: sku_data['orders'].get(c, 0) for c in channels}
@@ -186,7 +187,9 @@ def calc_rebalance_group(group, params, channels):
     shortage = {}   # code -> {ch: (need_resolve, need_full)}
     surplus_left = {}  # code -> {ch: avail}  (사이즈 내에서만 이동 가능)
     for code, d in group.items():
-        if d.get('locked', False) or d.get('ship_rate', 0) < params['ship_rate_threshold']:
+        # 출고율 게이트 제거(v4.3) — locked(제외 스타일)만 건너뛰고, 출고율과 무관하게
+        # 결품 발생 시 보충 대상에 포함한다.
+        if d.get('locked', False):
             shortage[code] = {}; surplus_left[code] = {}
             continue
         inv = d['inv']; ordd = d['orders']; ext = d.get('ext_wh', {})
