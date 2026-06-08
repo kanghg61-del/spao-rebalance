@@ -165,6 +165,7 @@ def _load_raw():
                 'online_ratio': _num(row.get('온라인비중', 0)),
                 'cum_rate': _num(row.get('누판율', 0)),
                 'wk_rate': _num(row.get('주판율', 0)),
+                'wk_sales': _num(row.get('주간외형매출', 0)),   # 메인판 온라인(외형)매출
                 'locked': False,
                 'critical': False,
                 'inv': inv,
@@ -192,6 +193,7 @@ def _merge_into(dst, src, reo_code):
     dst['online_ratio'] = dst['online_ratio'] * (1 - w) + src['online_ratio'] * w
     dst['rank_online'] = min(dst['rank_online'], src['rank_online'])
     dst['rank_total'] = min(dst['rank_total'], src['rank_total'])
+    dst['wk_sales'] = dst.get('wk_sales', 0) + src.get('wk_sales', 0)
     dst['reorder_codes'].append(reo_code)
 
 

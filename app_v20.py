@@ -236,7 +236,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
     _max_cum = max((r['data'].get('cum_rate', 0) for r in filtered), default=0) * 100
     _max_wk = max((r['data'].get('wk_rate', 0) for r in filtered), default=0) * 100
 
-    def _bar(pct, vmax, width=4):
+    def _bar(pct, vmax, width=3):
         frac = (pct / vmax) if vmax > 0 else 0
         full = max(0, min(width, int(round(frac * width))))
         return '█' * full + '░' * (width - full)
@@ -247,9 +247,11 @@ def render_scenario(scenario_key, container, allow_slider=False):
         name = d['name']
         if len(name) > 14: name = name[:13] + '…'
         cum = d.get('cum_rate', 0) * 100; wk = d.get('wk_rate', 0) * 100
-        # 수치 먼저(항상 보이게) + 데이터바 — 컬럼이 좁아도 % 숫자는 잘리지 않음
-        row = [d.get('rank_online', '-'), r['code'], name,
-               f"{cum:>3.0f}%  {_bar(cum, _max_cum)}", f"{wk:>3.0f}%  {_bar(wk, _max_wk)}", f"{int(d['ship_rate']*100)}%"]
+        sv = d.get('wk_sales', 0)
+        sales_str = f"{round(sv/10000):,}만" if sv else '-'
+        # 수치 먼저(항상 보이게) + 최소 데이터바
+        row = [d.get('rank_online', '-'), r['code'], name, sales_str,
+               f"{cum:.0f}% {_bar(cum, _max_cum)}", f"{wk:.0f}% {_bar(wk, _max_wk)}", f"{int(d['ship_rate']*100)}%"]
         for c in CHANNELS:
             o = d['orders'].get(c, 0)
             w = inv.get(c, 0) / o if o > 0 else None
@@ -267,7 +269,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
     selected_rows = []
     if rows:
         columns = pd.MultiIndex.from_tuples(
-            [('', '온라인순위'), ('', '단품코드'), ('', '단품명'), ('', '누판율'), ('', '주판율'), ('', '출고율')] +
+            [('', '온라인순위'), ('', '단품코드'), ('', '단품명'), ('', '주간외형매출'), ('', '누판율'), ('', '주판율'), ('', '출고율')] +
             [('현 재고보유주수', CH_SHORT[c]) for c in CHANNELS] +
             [('이동수량 (장)', CH_SHORT[c]) for c in CHANNELS] +
             [('이동 후 재고보유주수', CH_SHORT[c]) for c in CHANNELS] +
@@ -686,7 +688,7 @@ def render_effect_tab():
 
 
 def render():
-    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v4.4</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v4.5</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
@@ -728,4 +730,4 @@ def render():
     with tab_fx:
         render_effect_tab()
 
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v4.4 — 누판율·주판율 데이터바 · 출고율 기준 완전 제거(슬라이더 삭제) · 재고/주문 RAW(재고내역·판매내역) 정합 · 리오더 병합(컬러 동일) · 외부창고 분리')
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v4.5 — 누판율·주판율 데이터바(최소) · 주간외형매출 컬럼 · 출고율 기준 제거 · 재고/주문 RAW 정합 · 리오더 병합(컬러 동일) · 외부창고 분리')
