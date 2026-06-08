@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-v4.0 화면 — 자동분배 제거 · 리오더코드 병합 · 외부창고 분리(엔진) + v1.6 기능 복원
+v4.1 화면 — 자동분배 제거 · 리오더코드 병합 · 외부창고 분리(엔진) + v1.6 기능 복원
 복원: 단품코드 검색(앞 10자리) · 🚫 제외 스타일 탭 · 📊 채널 별 세부 탭(외부창고 컬럼은 여기만)
       · 체크박스 단품 선택 승인 · 사용자 정의 기준 명칭
 (페이지 설정·비밀번호 게이트·공통 CSS는 app.py 담당)
@@ -26,11 +26,6 @@ SCENARIOS = {
     '🛡️ 방어형 (추천)': {
         'desc': '부족 1주 / 목표 4주 — 결품 임박 시 4주까지 충분히 충전. 운영 부담 최소·효과 극대',
         'shortage_th': 1.0, 'target_woc': 4.0,
-        'ship_th': 0.90, 'min_move': 0, 'min_recv': 4,
-    },
-    '⚡ 공격형': {
-        'desc': '부족 2주 / 목표 4주 — 결품 발생 전 선제 재배치. 이동량 증가, 효과는 방어형과 유사',
-        'shortage_th': 2.0, 'target_woc': 4.0,
         'ship_th': 0.90, 'min_move': 0, 'min_recv': 4,
     },
     '🎛️ 사용자 정의': {
@@ -248,9 +243,8 @@ def render_scenario(scenario_key, container, allow_slider=False):
         d = r['data']; mv = r['moves']; af = r['after']; inv = d['inv']
         name = d['name']
         if len(name) > 14: name = name[:13] + '…'
-        n_reo = len(d.get('reorder_codes', []))
         row = [d.get('rank_online', '-'), r['code'], name,
-               f'+{n_reo}' if n_reo else '', f"{int(d['ship_rate']*100)}%", r['mode']]
+               f"{d.get('cum_rate', 0)*100:.0f}%", f"{d.get('wk_rate', 0)*100:.0f}%", f"{int(d['ship_rate']*100)}%"]
         for c in CHANNELS:
             o = d['orders'].get(c, 0)
             w = inv.get(c, 0) / o if o > 0 else None
@@ -268,7 +262,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
     selected_rows = []
     if rows:
         columns = pd.MultiIndex.from_tuples(
-            [('', '온라인순위'), ('', '단품코드'), ('', '단품명'), ('', '리오더'), ('', '출고율'), ('', '모드')] +
+            [('', '온라인순위'), ('', '단품코드'), ('', '단품명'), ('', '누판율'), ('', '주판율'), ('', '출고율')] +
             [('현 재고보유주수', CH_SHORT[c]) for c in CHANNELS] +
             [('이동수량 (장)', CH_SHORT[c]) for c in CHANNELS] +
             [('이동 후 재고보유주수', CH_SHORT[c]) for c in CHANNELS] +
@@ -305,7 +299,6 @@ def render_scenario(scenario_key, container, allow_slider=False):
     container.caption(
         '🎨 **재고보유주수**: 🔴 < 2주   🟡 2~4주   🟢 ≥ 4주    |    '
         '**이동수량**: 🟢 +IN  🔴 -OUT  ⚪ 0    |    '
-        '**리오더**: +N = 리오더코드 N건 병합 (기존코드 기준 노출)    |    '
         '단위: 재고/이동후 = "주" · 이동 = "장(±)" · 효과 = "만원"    |    '
         '※ 이동수량 산정 시 외부창고(AENS·ADU3·ADQS) 보관분 제외 — 재고주수는 포함 (상세: 채널 별 세부 탭)    |    '
         '🎯 분배: 결품 실해소 가능 채널에 우선 배분(소량 무의미 이동 제외) · 동률 시 저수수료 순(공홈>네이버>이몰>무신>카카오>지재)'
@@ -688,7 +681,7 @@ def render_effect_tab():
 
 
 def render():
-    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v4.0</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v4.1</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
@@ -706,17 +699,14 @@ def render():
         if st.button('🔄 새로고침', use_container_width=True):
             st.rerun()
     with col_c:
-        st.caption('v4.0')
+        st.caption('v4.1')
 
-    tab_d, tab_a, tab_c, tab_x, tab_ch, tab_re, tab_fx = st.tabs(
+    tab_d, tab_c, tab_x, tab_ch, tab_re, tab_fx = st.tabs(
         list(SCENARIOS.keys()) + ['🚫 제외 스타일', '📊 채널 별 세부', '🔁 리오더 매핑', '📈 실행 효과']
     )
 
     with tab_d:
         render_scenario('🛡️ 방어형 (추천)', st, allow_slider=False)
-
-    with tab_a:
-        render_scenario('⚡ 공격형', st, allow_slider=False)
 
     with tab_c:
         render_scenario('🎛️ 사용자 정의', st, allow_slider=True)
@@ -733,4 +723,4 @@ def render():
     with tab_fx:
         render_effect_tab()
 
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v4.0 — 자동분배 제거 · 리오더 병합 · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v4.1 — 자동분배 제거 · 리오더 병합 · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')

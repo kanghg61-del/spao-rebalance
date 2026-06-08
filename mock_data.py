@@ -163,6 +163,8 @@ def _load_raw():
                 'price': int(_num(row.get('정상가', 0))),
                 'ship_rate': _num(row.get('출고율', 0)),
                 'online_ratio': _num(row.get('온라인비중', 0)),
+                'cum_rate': _num(row.get('누판율', 0)),
+                'wk_rate': _num(row.get('주판율', 0)),
                 'locked': False,
                 'critical': False,
                 'inv': inv,
