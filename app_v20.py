@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-v4.1 화면 — 자동분배 제거 · 리오더코드 병합 · 외부창고 분리(엔진) + v1.6 기능 복원
+v4.2 화면 — 자동분배 제거 · 리오더코드 병합 · 외부창고 분리(엔진) + v1.6 기능 복원
 복원: 단품코드 검색(앞 10자리) · 🚫 제외 스타일 탭 · 📊 채널 별 세부 탭(외부창고 컬럼은 여기만)
       · 체크박스 단품 선택 승인 · 사용자 정의 기준 명칭
 (페이지 설정·비밀번호 게이트·공통 CSS는 app.py 담당)
@@ -172,11 +172,9 @@ def render_scenario(scenario_key, container, allow_slider=False):
 
     kpi_ph = container.container()  # 체크박스 선택 반영 위해 매트릭스 구성 후 채움
 
-    col_f1, col_f2, col_fs, col_f3, col_f4 = container.columns([1.4, 1.6, 3, 1.8, 1.6])
+    col_f1, col_fs, col_f3 = container.columns([1.6, 4, 2])
     with col_f1:
         show_only_moved = st.checkbox('이동 발생만', value=True, key=f'moved_{scenario_key}')
-    with col_f2:
-        mode_filter = st.multiselect('모드', ['자동회전', '제외'], default=['자동회전'], key=f'mode_{scenario_key}')
     with col_fs:
         search_code = st.text_input(
             '단품코드 검색',
@@ -185,14 +183,10 @@ def render_scenario(scenario_key, container, allow_slider=False):
         ).strip().upper()
     with col_f3:
         sort_by = st.selectbox('정렬', ['온라인 매출 순위 ↑', '기대효과 ↓', '이동수량 ↓', '단품코드'], key=f'sort_{scenario_key}')
-    with col_f4:
-        show_only_reorder = st.checkbox('리오더 병합만', value=False, key=f'reorder_{scenario_key}')
 
-    filtered = [r for r in results if r['mode'] in mode_filter]
+    filtered = list(results)
     if show_only_moved and not search_code:
         filtered = [r for r in filtered if any(v != 0 for v in r['moves'].values())]
-    if show_only_reorder:
-        filtered = [r for r in filtered if r['data'].get('reorder_codes')]
     if search_code:
         filtered = [r for r in filtered if r['code'].upper().startswith(search_code)]
 
@@ -207,7 +201,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
 
     container.markdown(f'**단품 × 채널 매트릭스 — {len(filtered):,}건**')
 
-    MAX_ROWS = 1000
+    MAX_ROWS = 2000
     if len(filtered) > MAX_ROWS:
         container.caption(f'⚠️ {len(filtered):,}건 中 상위 {MAX_ROWS}개만 표시 (성능). 정렬·필터로 좁히세요.')
         filtered = filtered[:MAX_ROWS]
@@ -681,7 +675,7 @@ def render_effect_tab():
 
 
 def render():
-    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v4.1</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v4.2</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
@@ -699,7 +693,7 @@ def render():
         if st.button('🔄 새로고침', use_container_width=True):
             st.rerun()
     with col_c:
-        st.caption('v4.1')
+        st.caption('v4.2')
 
     tab_d, tab_c, tab_x, tab_ch, tab_re, tab_fx = st.tabs(
         list(SCENARIOS.keys()) + ['🚫 제외 스타일', '📊 채널 별 세부', '🔁 리오더 매핑', '📈 실행 효과']
@@ -723,4 +717,4 @@ def render():
     with tab_fx:
         render_effect_tab()
 
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v4.1 — 자동분배 제거 · 리오더 병합 · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v4.2 — 자동분배 제거 · 리오더 병합 · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')
