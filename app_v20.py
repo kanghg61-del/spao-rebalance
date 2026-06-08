@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-v4.3 화면 — 출고율 게이트 제거(결품 즉시 보충) · 리오더 병합(컬러 11~12자리 동일) · 외부창고 분리(엔진) + v1.6 기능 복원
+v4.4 화면 — 누판율·주판율 데이터바 · 출고율 기준 완전 제거(슬라이더 삭제) · 재고/주문 RAW 정합 · 리오더 병합(컬러 동일) · 외부창고 분리
 복원: 단품코드 검색(앞 10자리) · 🚫 제외 스타일 탭 · 📊 채널 별 세부 탭(외부창고 컬럼은 여기만)
       · 체크박스 단품 선택 승인 · 사용자 정의 기준 명칭
 (페이지 설정·비밀번호 게이트·공통 CSS는 app.py 담당)
@@ -31,7 +31,7 @@ SCENARIOS = {
     '🎛️ 사용자 정의': {
         'desc': '상단 슬라이더로 직접 조정',
         'shortage_th': 1.0, 'target_woc': 2.0,
-        'ship_th': 0.90, 'min_move': 10, 'min_recv': 4,
+        'ship_th': 0.90, 'min_move': 0, 'min_recv': 4,
     },
 }
 
@@ -132,23 +132,22 @@ def _approve_dialog(scenario_key, sel_count, sel_qty, sel_amt, sel_rev, ch_in, c
 def render_scenario(scenario_key, container, allow_slider=False):
     preset = SCENARIOS[scenario_key]
 
+    # 출고율 게이트 제거(v4.3): 재고이동 기준에서 출고율은 사용하지 않음. ship_th는 엔진이 무시.
+    ship_th = 0.0
     if allow_slider:
         container.markdown('### 🎛️ 사용자 정의 기준')
-        sl1, sl2, sl3, sl4, sl5 = container.columns(5)
+        sl1, sl2, sl3, sl4 = container.columns(4)
         with sl1:
             shortage_th = st.slider('재배치 대상 (재고주수 0주 이하)', 0.5, 4.0, preset['shortage_th'], 0.5, key=f'sh_{scenario_key}')
         with sl2:
             target_woc = st.slider('목표 재고주수 (주)', 1.0, 6.0, preset['target_woc'], 0.5, key=f'tg_{scenario_key}')
         with sl3:
-            ship_th = st.slider('현 출고율 (%)', 50, 100, int(preset['ship_th']*100), 5, key=f'sp_{scenario_key}') / 100
-        with sl4:
             min_move = st.slider('이동 ≥ N장만 (비부가 제거)', 0, 50, preset['min_move'], 1, key=f'mn_{scenario_key}')
-        with sl5:
+        with sl4:
             min_recv = st.slider('소액 채널 제외 (주간주문 N장 미만)', 0, 20, preset.get('min_recv', 4), 1, key=f'mr_{scenario_key}')
     else:
         shortage_th = preset['shortage_th']
         target_woc = preset['target_woc']
-        ship_th = preset['ship_th']
         min_move = preset['min_move']
         min_recv = preset.get('min_recv', 4)
 
@@ -233,13 +232,23 @@ def render_scenario(scenario_key, container, allow_slider=False):
         kpi_card(k5, '회수 매출', f'{_rev/100000000:.2f}억', f'주간 · {_sub}')
         kpi_card(k6, '연 환산', f'{_rev*52/100000000:.0f}억', '× 52주')
 
+    # 누판율·주판율 데이터바(엑셀 조건부서식 막대처럼) — 각 컬럼 최댓값 기준 자동 스케일
+    _max_cum = max((r['data'].get('cum_rate', 0) for r in filtered), default=0) * 100
+    _max_wk = max((r['data'].get('wk_rate', 0) for r in filtered), default=0) * 100
+
+    def _bar(pct, vmax, width=10):
+        frac = (pct / vmax) if vmax > 0 else 0
+        full = max(0, min(width, int(round(frac * width))))
+        return '█' * full + '░' * (width - full)
+
     rows = []
     for r in filtered:
         d = r['data']; mv = r['moves']; af = r['after']; inv = d['inv']
         name = d['name']
         if len(name) > 14: name = name[:13] + '…'
+        cum = d.get('cum_rate', 0) * 100; wk = d.get('wk_rate', 0) * 100
         row = [d.get('rank_online', '-'), r['code'], name,
-               f"{d.get('cum_rate', 0)*100:.0f}%", f"{d.get('wk_rate', 0)*100:.0f}%", f"{int(d['ship_rate']*100)}%"]
+               f"{_bar(cum, _max_cum)} {cum:.0f}%", f"{_bar(wk, _max_wk)} {wk:.0f}%", f"{int(d['ship_rate']*100)}%"]
         for c in CHANNELS:
             o = d['orders'].get(c, 0)
             w = inv.get(c, 0) / o if o > 0 else None
@@ -676,7 +685,7 @@ def render_effect_tab():
 
 
 def render():
-    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v4.3</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v4.4</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
@@ -694,7 +703,7 @@ def render():
         if st.button('🔄 새로고침', use_container_width=True):
             st.rerun()
     with col_c:
-        st.caption('v4.3')
+        st.caption('v4.4')
 
     tab_d, tab_c, tab_x, tab_ch, tab_re, tab_fx = st.tabs(
         list(SCENARIOS.keys()) + ['🚫 제외 스타일', '📊 채널 별 세부', '🔁 리오더 매핑', '📈 실행 효과']
@@ -718,4 +727,4 @@ def render():
     with tab_fx:
         render_effect_tab()
 
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v4.3 — 출고율 게이트 제거(결품 즉시 보충) · 리오더 병합(컬러 11~12자리 동일) · 외부창고 분리(엔진) · 검색/제외 스타일/채널 별 세부/선택 승인')
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v4.4 — 누판율·주판율 데이터바 · 출고율 기준 완전 제거(슬라이더 삭제) · 재고/주문 RAW(재고내역·판매내역) 정합 · 리오더 병합(컬러 동일) · 외부창고 분리')
