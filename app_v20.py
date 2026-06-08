@@ -236,7 +236,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
     _max_cum = max((r['data'].get('cum_rate', 0) for r in filtered), default=0) * 100
     _max_wk = max((r['data'].get('wk_rate', 0) for r in filtered), default=0) * 100
 
-    def _bar(pct, vmax, width=7):
+    def _bar(pct, vmax, width=4):
         frac = (pct / vmax) if vmax > 0 else 0
         full = max(0, min(width, int(round(frac * width))))
         return '█' * full + '░' * (width - full)
