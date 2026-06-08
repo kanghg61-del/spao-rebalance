@@ -236,7 +236,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
     _max_cum = max((r['data'].get('cum_rate', 0) for r in filtered), default=0) * 100
     _max_wk = max((r['data'].get('wk_rate', 0) for r in filtered), default=0) * 100
 
-    def _bar(pct, vmax, width=10):
+    def _bar(pct, vmax, width=7):
         frac = (pct / vmax) if vmax > 0 else 0
         full = max(0, min(width, int(round(frac * width))))
         return '█' * full + '░' * (width - full)
@@ -247,8 +247,9 @@ def render_scenario(scenario_key, container, allow_slider=False):
         name = d['name']
         if len(name) > 14: name = name[:13] + '…'
         cum = d.get('cum_rate', 0) * 100; wk = d.get('wk_rate', 0) * 100
+        # 수치 먼저(항상 보이게) + 데이터바 — 컬럼이 좁아도 % 숫자는 잘리지 않음
         row = [d.get('rank_online', '-'), r['code'], name,
-               f"{_bar(cum, _max_cum)} {cum:.0f}%", f"{_bar(wk, _max_wk)} {wk:.0f}%", f"{int(d['ship_rate']*100)}%"]
+               f"{cum:>3.0f}%  {_bar(cum, _max_cum)}", f"{wk:>3.0f}%  {_bar(wk, _max_wk)}", f"{int(d['ship_rate']*100)}%"]
         for c in CHANNELS:
             o = d['orders'].get(c, 0)
             w = inv.get(c, 0) / o if o > 0 else None
