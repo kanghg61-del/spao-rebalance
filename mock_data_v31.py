@@ -25,7 +25,7 @@ EXT_WAREHOUSE = {
 }
 
 _DIR = os.path.dirname(__file__)
-CSV_PATH = os.path.join(_DIR, 'sku_master.csv')
+CSV_PATH = os.path.join(_DIR, 'sku_master_v31.csv')
 REORDER_SAVE_PATH = os.path.join(_DIR, 'reorder_mapping.csv')
 
 # 리오더 매핑 파일 후보 (기존코드/리오더코드 — rsc.reorder_style_mapping_spao 추출본)
