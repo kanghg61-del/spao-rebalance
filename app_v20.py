@@ -236,10 +236,20 @@ def render_scenario(scenario_key, container, allow_slider=False):
     _max_cum = max((r['data'].get('cum_rate', 0) for r in filtered), default=0) * 100
     _max_wk = max((r['data'].get('wk_rate', 0) for r in filtered), default=0) * 100
 
+    _SUB = '▏▎▍▌▋▊▉'  # 1/8~7/8 부분 블록 (8/8 = █) — 작은 값도 조각으로 보이게
+
     def _bar(pct, vmax, width=3):
         frac = (pct / vmax) if vmax > 0 else 0
-        full = max(0, min(width, int(round(frac * width))))
-        return '█' * full + '░' * (width - full)
+        frac = max(0.0, min(1.0, frac))
+        eighths = frac * width * 8
+        full = int(eighths // 8)
+        rem = int(eighths - full * 8)
+        if pct > 0 and full == 0 and rem == 0:
+            rem = 1  # 값이 있으면 최소 한 조각은 표시
+        s = '█' * full
+        if rem > 0 and full < width:
+            s += _SUB[rem - 1]
+        return (s + '░' * width)[:width]
 
     rows = []
     for r in filtered:
@@ -688,7 +698,7 @@ def render_effect_tab():
 
 
 def render():
-    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v4.8</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v4.9</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
@@ -730,4 +740,4 @@ def render():
     with tab_fx:
         render_effect_tab()
 
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v4.8 — 재고주수 색상(빨강<1주·노랑1~4주·초록≥4주) · 마이너 채널 제외 · 소액 결품 보충 · 출고율 기준 제거 · 재고/주문 RAW 정합 · 리오더 병합(컬러)')
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v4.9 — 데이터바 부분블록(작은 값도 표시) · 재고주수 색상(빨강<1·노랑1~4·초록≥4) · 마이너 채널 제외 · 소액 결품 보충 · 재고/주문 RAW 정합')
