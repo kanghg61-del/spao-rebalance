@@ -168,8 +168,13 @@ def calc_after_woc(sku_data, moves, channels):
 
 def calc_rebalance_group(group, params, channels):
     """
-    컬러(단품코드 12자리) 단위 재배치 — 같은 컬러의 사이즈들을 함께 보고
-    '컬러 전체를 충분히 채울 수 있는 수신 채널'만 채택(아소트 깨짐 방지).
+    컬러(단품코드 12자리) 단위 재배치 (v4.7) — 같은 컬러의 사이즈들을 함께 본다.
+      · 마이너 채널 제외 — 그룹 내 '수요 사이즈 수'가 최다 채널의 50% 미만인 채널은
+        해당 스타일에서 다수 결품(구색 미보유)으로 보고 수신 대상에서 제외한다.
+        (예: 이랜드몰이 한 스타일에서 1개 사이즈만 팔리면, 거기에 소량 채우는 대신
+         재고가 더 급한 정상 채널로 돌리거나, 갈 곳 없으면 이동하지 않는다.)
+      · 수신 우선순위 — 1순위 재고주수(낮을수록 결품 심함), 2순위 저수수료.
+      · 이동은 사이즈 내에서만(아소트 보호), 외부창고 OUT 제외, 사이즈별 합계 0.
 
     Args:
         group: {단품코드: sku_data}  (같은 컬러의 사이즈들)
@@ -181,10 +186,9 @@ def calc_rebalance_group(group, params, channels):
 
     short_th = params['shortage_threshold']
     target = params['target_woc']
-    resolve_line = min(RESOLVE_WOC, target)
 
     # ── 사이즈(SKU)별 결품/잉여 산출 ──
-    shortage = {}   # code -> {ch: (need_resolve, need_full)}
+    shortage = {}      # code -> {ch: need_full}
     surplus_left = {}  # code -> {ch: avail}  (사이즈 내에서만 이동 가능)
     for code, d in group.items():
         # 출고율 게이트 제거(v4.3) — locked(제외 스타일)만 건너뛰고, 출고율과 무관하게
@@ -205,13 +209,12 @@ def calc_rebalance_group(group, params, channels):
                 continue
             woc = i / o
             if woc <= short_th:
-                # 소액 채널은 결품이라도 수신 제외 (구색·물류비 대비 효과 미미)
+                # 소액 사이즈 제외(주간주문 min_recv 미만) — 기본 0(제외 안 함)
                 if o < params.get('min_recv_order', MIN_RECV_ORDER):
                     continue
                 need_full = max(0, int(math.ceil(target * o - i)))
-                need_resolve = max(0, int(math.ceil(resolve_line * o - i)))
                 if need_full > 0:
-                    sh[c] = (need_resolve, need_full)
+                    sh[c] = need_full
             elif woc > target:
                 avail = min(int((woc - target) * o), max(0, i - ext.get(c, 0)))
                 if avail > 0:
@@ -219,24 +222,29 @@ def calc_rebalance_group(group, params, channels):
         shortage[code] = sh
         surplus_left[code] = su
 
-    # ── 수신 채널 채택: 저수수료 우선, 컬러 커버리지 게이트 ──
-    for ch in sorted(channels, key=_prio):
-        sizes_short = [code for code in group if ch in shortage[code]]
-        if not sizes_short:
-            continue
-        # 각 사이즈에서 ch를 (목표까지 우선, 최소 해소) 채울 수 있는지 — 현재 남은 잉여 기준
-        plan = {}
-        for code in sizes_short:
-            nr, nf = shortage[code][ch]
-            avail = sum(surplus_left[code].values())
-            if avail >= max(nr, 1):
-                plan[code] = min(nf, avail)
-        coverage = len(plan) / len(sizes_short)
-        if coverage < COLOR_COVERAGE_TH:
-            continue  # 이 컬러를 ch에 보내면 구색이 깨짐 → 제외(잉여 보존, 차순위 채널이 사용)
-        # 채택 — 사이즈별로 고수수료(역순) 잉여부터 회수해 ch에 충전
-        for code, give in plan.items():
-            need = give
+    # ── 마이너 채널 제외(구색 보호) — 수요 사이즈 수가 최다 채널의 50% 미만이면 수신 제외 ──
+    demand_cnt = {c: sum(1 for code in group if group[code]['orders'].get(c, 0) > 0)
+                  for c in channels}
+    max_dc = max(demand_cnt.values()) if demand_cnt else 0
+    viable = {c for c in channels if max_dc > 0 and demand_cnt[c] >= 0.5 * max_dc}
+
+    # ── 채널별 그룹 재고주수(가중) — 낮을수록 결품 심함 ──
+    def group_woc(c):
+        ti = sum(group[code]['inv'].get(c, 0) for code in group)
+        to = sum(group[code]['orders'].get(c, 0) for code in group)
+        return (ti / to) if to > 0 else float('inf')
+
+    # ── 수신 채널: 1순위 재고주수↑(결품 심한 순), 2순위 저수수료. 마이너 채널 제외 ──
+    recv_order = sorted([c for c in channels if c in viable],
+                        key=lambda c: (group_woc(c), _prio(c)))
+    for ch in recv_order:
+        for code in group:
+            if ch not in shortage[code]:
+                continue
+            need = min(shortage[code][ch], sum(surplus_left[code].values()))
+            if need <= 0:
+                continue
+            # 사이즈별로 고수수료(역순) 잉여부터 회수해 ch에 충전
             for src in sorted(list(surplus_left[code].keys()), key=lambda x: -_prio(x)):
                 if need <= 0:
                     break
