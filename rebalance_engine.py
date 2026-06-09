@@ -55,9 +55,13 @@ def calc_rebalance(sku_data, params, channels):
     ord_ = {c: sku_data['orders'].get(c, 0) for c in channels}
     ext_wh = sku_data.get('ext_wh', {})
 
+    cap_pct = params.get('move_cap_pct', 0.5)
+
     def movable(c):
-        """OUT 가용 재고 = 채널 재고 - 외부창고 보관분"""
-        return max(0, inv[c] - ext_wh.get(c, 0))
+        """OUT 가용 재고 = min(채널 재고 - 외부창고 보관분, 현재고 cap_pct 상한)"""
+        base = max(0, inv[c] - ext_wh.get(c, 0))
+        cap = int(math.floor(cap_pct * inv[c])) if inv[c] > 0 else 0
+        return min(base, cap)
 
     target = params['target_woc']
     short_th = params['shortage_threshold']
@@ -194,6 +198,12 @@ def calc_rebalance_group(group, params, channels):
         pats = ch_excl.get(c, {}).get(direction)
         return bool(pats) and any(p and p in code for p in pats)
 
+    # ── 이동(OUT) 상한 — 하루에 각 채널 현재고의 cap_pct까지만 반출 가능 (기본 50%) ──
+    cap_pct = params.get('move_cap_pct', 0.5)
+
+    def _cap(i):
+        return int(math.floor(cap_pct * i)) if i > 0 else 0
+
     # ── 사이즈(SKU)별 결품/잉여 산출 ──
     shortage = {}      # code -> {ch: need_full}
     surplus_left = {}  # code -> {ch: avail}  (사이즈 내에서만 이동 가능)
@@ -210,7 +220,7 @@ def calc_rebalance_group(group, params, channels):
             if o <= 0 and i <= 0:
                 continue
             if o <= 0:
-                m = max(0, i - ext.get(c, 0))
+                m = min(max(0, i - ext.get(c, 0)), _cap(i))   # 현재고 cap_pct 상한
                 if m > 0 and not _x(code, c, 'out'):   # OUT 제외 채널은 잉여 공급 안 함
                     su[c] = int(m)
                 continue
@@ -223,7 +233,7 @@ def calc_rebalance_group(group, params, channels):
                 if need_full > 0 and not _x(code, c, 'in'):   # IN 제외 채널은 수신 안 함
                     sh[c] = need_full
             elif woc > target:
-                avail = min(int((woc - target) * o), max(0, i - ext.get(c, 0)))
+                avail = min(int((woc - target) * o), max(0, i - ext.get(c, 0)), _cap(i))  # 현재고 cap_pct 상한
                 if avail > 0 and not _x(code, c, 'out'):
                     su[c] = avail
         shortage[code] = sh
