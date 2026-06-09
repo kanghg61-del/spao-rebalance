@@ -93,9 +93,9 @@ def woc_color(w):
     try:
         v = float(str(w).replace('주', ''))
     except: return ''
-    if v < 2: return 'background-color: #5B1E1E; color: #FF5A5F; font-weight:bold'
-    if v < 4: return 'background-color: #5A4500; color: #FFC000; font-weight:bold'
-    return 'background-color: #1B4D3E; color: #4AE3B5; font-weight:bold'
+    if v < 1: return 'background-color: #5B1E1E; color: #FF5A5F; font-weight:bold'   # 빨강: 1주 미만
+    if v < 4: return 'background-color: #5A4500; color: #FFC000; font-weight:bold'   # 노랑: 1~4주
+    return 'background-color: #1B4D3E; color: #4AE3B5; font-weight:bold'            # 초록: 4주 이상
 
 
 def mv_color(v):
@@ -688,7 +688,7 @@ def render_effect_tab():
 
 
 def render():
-    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v4.7</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v4.8</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
@@ -730,4 +730,4 @@ def render():
     with tab_fx:
         render_effect_tab()
 
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v4.6 — 소액 사이즈 결품 보충(매출 회복 극대) · 누판율·주판율 데이터바 · 주간외형매출 · 출고율 기준 제거 · 재고/주문 RAW 정합 · 리오더 병합(컬러) · 외부창고 분리')
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v4.8 — 재고주수 색상(빨강<1주·노랑1~4주·초록≥4주) · 마이너 채널 제외 · 소액 결품 보충 · 출고율 기준 제거 · 재고/주문 RAW 정합 · 리오더 병합(컬러)')
