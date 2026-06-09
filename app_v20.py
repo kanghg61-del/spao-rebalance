@@ -23,7 +23,7 @@ CH_SHORT = {
 EXT_CHANNELS = [c for c in CHANNELS if c in EXT_WAREHOUSE]  # 무신사·지그재그·네이버
 
 SCENARIOS = {
-    '🛡️ 방어형 (추천)': {
+    '🛡️ 기본': {
         'desc': '부족 1주 / 목표 4주 — 결품 임박 시 4주까지 충전. 소액 사이즈도 결품이면 보충(매출 회복 극대)',
         'shortage_th': 1.0, 'target_woc': 4.0,
         'ship_th': 0.90, 'min_move': 0, 'min_recv': 0,
@@ -44,10 +44,14 @@ def load_data_v20():
 @st.cache_data(show_spinner=False)
 def calc_results_v20(params_key):
     skus = load_data_v20()
+    ch_excl = {}
+    if len(params_key) > 5 and params_key[5]:
+        for ch, direction, pats in params_key[5]:
+            ch_excl.setdefault(ch, {})[direction] = set(pats)
     params = {
         'shortage_threshold': params_key[0], 'target_woc': params_key[1],
         'ship_rate_threshold': params_key[2], 'min_move_qty': params_key[3],
-        'min_recv_order': params_key[4],
+        'min_recv_order': params_key[4], 'ch_excl': ch_excl,
     }
     # 컬러(단품코드 12자리) 단위로 묶어 그룹 재배치 — 아소트 깨짐 방지
     from collections import defaultdict
@@ -106,6 +110,16 @@ def _apply_overrides(results):
         else:
             out.append(r)
     return out
+
+
+def _ch_excl_key():
+    """채널별 IN/OUT 제외(세션) → 캐시 키용 해시가능 튜플."""
+    st_ex = st.session_state.get('ch_excl', {})
+    return tuple(sorted(
+        (ch, dr, tuple(sorted(st_ex.get(ch, {}).get(dr, []))))
+        for ch in CHANNELS for dr in ('in', 'out')
+        if st_ex.get(ch, {}).get(dr)
+    ))
 
 
 def woc_color(w):
@@ -185,7 +199,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
     container.markdown(f'<div class="scenario-box">{preset["desc"]}</div>', unsafe_allow_html=True)
 
     with st.spinner('계산 중...'):
-        params_key = (shortage_th, target_woc, ship_th, min_move, min_recv)
+        params_key = (shortage_th, target_woc, ship_th, min_move, min_recv, _ch_excl_key())
         results = calc_results_v20(params_key)
     results = _apply_exclusion(results)
     results = _apply_overrides(results)
@@ -409,48 +423,62 @@ def render_scenario(scenario_key, container, allow_slider=False):
 
 
 def render_excluded_tab():
-    st.markdown('### 🚫 자동 재배치 제외 스타일')
-    st.caption('예약판매·기획전·채널단독 스타일 등 자동 이동에서 제외할 단품코드를 입력하세요. '
-               '코드의 일부만 입력해도 매칭됩니다 (예: SPACG24 → SPACG24로 시작하는 모든 단품 제외).')
+    st.markdown('### 🚫 채널별 IN·OUT 제외 관리 (채널 담당 MD)')
+    st.caption('채널 MD가 자동 재배치에서 제외할 스타일을 채널별로 직접 관리합니다.  '
+               '**🟢 IN 제외** = 이 채널로 재고를 받지 않음(수신 차단)  ·  **🔴 OUT 제외** = 이 채널에서 재고를 빼지 않음(반출 차단).  '
+               '코드 일부만 입력해도 매칭(예: `SPACG24`).  입력 후 다른 탭으로 이동하면 재배치에 반영됩니다.')
 
-    col_in, col_stat = st.columns([3, 1])
-    with col_in:
-        excluded_text = st.text_area(
-            '제외 단품코드 (줄바꿈 또는 쉼표로 구분)',
-            value=st.session_state.get('excluded_text', ''),
-            height=200,
-            placeholder='예시:\nSPJJG25G0119095\nSPACG24A5\n(부분 일치도 가능)',
-            key='excluded_text_input',
-        )
-        codes_set = set()
-        for line in excluded_text.replace(',', '\n').split('\n'):
-            code = line.strip()
-            if code:
-                codes_set.add(code)
+    try:
+        skus = load_data_v20()
+    except Exception:
+        skus = None
+
+    ch_excl = st.session_state.get('ch_excl', {})
+    tabs = st.tabs([str(c) for c in CHANNELS])
+    for tab, c in zip(tabs, CHANNELS):
+        with tab:
+            ca, cb = st.columns(2)
+            with ca:
+                in_txt = st.text_area('🟢 IN 제외 (이 채널로 받지 않을 스타일)',
+                                      value=st.session_state.get(f'excl_in_{c}', ''), height=170,
+                                      placeholder='예:\nSPACG24A5\nSPJJG25G01', key=f'ta_in_{c}')
+            with cb:
+                out_txt = st.text_area('🔴 OUT 제외 (이 채널에서 빼지 않을 스타일)',
+                                       value=st.session_state.get(f'excl_out_{c}', ''), height=170,
+                                       placeholder='예:\nSPACG24A5', key=f'ta_out_{c}')
+            in_set = {x.strip() for x in in_txt.replace(',', '\n').split('\n') if x.strip()}
+            out_set = {x.strip() for x in out_txt.replace(',', '\n').split('\n') if x.strip()}
+            st.session_state[f'excl_in_{c}'] = in_txt
+            st.session_state[f'excl_out_{c}'] = out_txt
+            ch_excl.setdefault(c, {})['in'] = in_set
+            ch_excl[c]['out'] = out_set
+            m_in = sum(1 for code in skus if any(p in code for p in in_set)) if (skus and in_set) else 0
+            m_out = sum(1 for code in skus if any(p in code for p in out_set)) if (skus and out_set) else 0
+            mc1, mc2, mc3 = st.columns(3)
+            mc1.metric('IN 제외 패턴', f'{len(in_set):,}')
+            mc2.metric('OUT 제외 패턴', f'{len(out_set):,}')
+            mc3.metric('매칭 단품 (IN / OUT)', f'{m_in:,} / {m_out:,}')
+            if st.button('🗑️ 이 채널 제외 초기화', key=f'clr_{c}'):
+                st.session_state[f'excl_in_{c}'] = ''
+                st.session_state[f'excl_out_{c}'] = ''
+                ch_excl[c] = {'in': set(), 'out': set()}
+                st.rerun()
+    st.session_state['ch_excl'] = ch_excl
+
+    st.markdown('---')
+    with st.expander('🚫 전체 이동 제외 (예약판매·기획전 등 — 모든 채널에서 이동 자체를 막음)', expanded=False):
+        excluded_text = st.text_area('제외 단품코드 (줄바꿈 또는 쉼표로 구분)',
+                                     value=st.session_state.get('excluded_text', ''), height=130,
+                                     placeholder='예:\nSPJJG25G0119095\nSPACG24A5', key='excluded_text_input')
+        codes_set = {x.strip() for x in excluded_text.replace(',', '\n').split('\n') if x.strip()}
         st.session_state['excluded_codes'] = codes_set
         st.session_state['excluded_text'] = excluded_text
-
-    with col_stat:
-        st.metric('제외 패턴 수', f'{len(codes_set):,}')
-        try:
-            skus = load_data_v20()
-            matched = sum(1 for code in skus if any(ex in code for ex in codes_set))
-            st.metric('매칭 단품 수', f'{matched:,}')
-        except Exception:
-            st.metric('매칭 단품 수', '-')
-
-        if st.button('🗑️ 전체 초기화', use_container_width=True):
+        if skus and codes_set:
+            st.caption(f'매칭 단품 {sum(1 for code in skus if any(ex in code for ex in codes_set)):,}건')
+        if st.button('🗑️ 전체 이동 제외 초기화'):
             st.session_state['excluded_text'] = ''
             st.session_state['excluded_codes'] = set()
             st.rerun()
-
-    st.markdown('---')
-    st.caption('💡 **사용 예시**')
-    st.markdown('''
-    - **예약판매**: 예약 단품 코드 그대로 붙여넣기
-    - **기획전**: `SPACG24A5` 처럼 시작 코드만 입력하면 해당 시즌 전체 제외
-    - **단독 스타일**: 무신사 단독·지그재그 단독 등 채널별 단독 단품
-    ''')
 
 
 
@@ -533,8 +561,8 @@ def render_channel_tab():
 
     channel_pick = st.radio('채널 선택', CHANNELS, horizontal=True, key='ch_pick')
 
-    preset = SCENARIOS['🛡️ 방어형 (추천)']
-    params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'], preset['min_move'], preset.get('min_recv', 4))
+    preset = SCENARIOS['🛡️ 기본']
+    params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'], preset['min_move'], preset.get('min_recv', 4), _ch_excl_key())
     results_ch = _apply_exclusion(calc_results_v20(params_key))
 
     is_ext = channel_pick in EXT_WAREHOUSE
@@ -756,7 +784,7 @@ def render_effect_tab():
 
 
 def render():
-    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v5.2</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v5.3</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
@@ -774,12 +802,12 @@ def render():
         if st.button('🔄 새로고침', use_container_width=True):
             st.rerun()
     with col_c:
-        st.caption('v5.2')
+        st.caption('v5.3')
 
-    tabs = st.tabs(list(SCENARIOS.keys()) + ['🚫 제외 스타일', '📊 채널 별 세부', '🔁 리오더 매핑', '📈 실행 효과'])
+    tabs = st.tabs(list(SCENARIOS.keys()) + ['🚫 채널 IN·OUT 제외', '📊 채널 별 세부', '🔁 리오더 매핑', '📈 실행 효과'])
     tab_d, tab_c, tab_x, tab_ch, tab_re, tab_fx = tabs
     with tab_d:
-        render_scenario('🛡️ 방어형 (추천)', st, allow_slider=False)
+        render_scenario('🛡️ 기본', st, allow_slider=False)
     with tab_c:
         render_scenario('🎛️ 사용자 정의', st, allow_slider=True)
     with tab_x:
@@ -791,4 +819,4 @@ def render():
     with tab_fx:
         render_effect_tab()
 
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v5.2 — 이동량 직접수정(이동후 재고량·주수 자동반영) · 이동후재고량 음영 · 이동없으면 현재고 표기 · 단품명 전체')
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v5.3 — 채널별 IN·OUT 제외(MD 직접관리) · 기본 탭 명칭 · 이동량 직접수정 · 이동후재고량 음영')

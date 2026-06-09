@@ -187,6 +187,13 @@ def calc_rebalance_group(group, params, channels):
     short_th = params['shortage_threshold']
     target = params['target_woc']
 
+    # ── 채널별 IN/OUT 제외 (채널 MD 직접 관리) — 코드 부분일치 ──
+    ch_excl = params.get('ch_excl', {})
+
+    def _x(code, c, direction):
+        pats = ch_excl.get(c, {}).get(direction)
+        return bool(pats) and any(p and p in code for p in pats)
+
     # ── 사이즈(SKU)별 결품/잉여 산출 ──
     shortage = {}      # code -> {ch: need_full}
     surplus_left = {}  # code -> {ch: avail}  (사이즈 내에서만 이동 가능)
@@ -204,7 +211,7 @@ def calc_rebalance_group(group, params, channels):
                 continue
             if o <= 0:
                 m = max(0, i - ext.get(c, 0))
-                if m > 0:
+                if m > 0 and not _x(code, c, 'out'):   # OUT 제외 채널은 잉여 공급 안 함
                     su[c] = int(m)
                 continue
             woc = i / o
@@ -213,11 +220,11 @@ def calc_rebalance_group(group, params, channels):
                 if o < params.get('min_recv_order', MIN_RECV_ORDER):
                     continue
                 need_full = max(0, int(math.ceil(target * o - i)))
-                if need_full > 0:
+                if need_full > 0 and not _x(code, c, 'in'):   # IN 제외 채널은 수신 안 함
                     sh[c] = need_full
             elif woc > target:
                 avail = min(int((woc - target) * o), max(0, i - ext.get(c, 0)))
-                if avail > 0:
+                if avail > 0 and not _x(code, c, 'out'):
                     su[c] = avail
         shortage[code] = sh
         surplus_left[code] = su
