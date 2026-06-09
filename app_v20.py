@@ -88,6 +88,26 @@ def _apply_exclusion(results):
     return out
 
 
+def _apply_overrides(results):
+    """이동량 직접 수정(세션) 반영 — 해당 단품 moves를 사용자 입력값으로 교체하고 after/효과 재계산."""
+    ov = st.session_state.get('move_overrides', {})
+    if not ov:
+        return results
+    out = []
+    for r in results:
+        o = ov.get(r['code'])
+        if o:
+            r2 = dict(r)
+            moves = {c: int(o.get(c, 0)) for c in CHANNELS}
+            r2['moves'] = moves
+            r2['after'] = calc_after_woc(r['data'], moves, CHANNELS)
+            r2['revenue'] = calc_expected_revenue(r['data'], moves, CHANNELS, r['data']['price'])
+            out.append(r2)
+        else:
+            out.append(r)
+    return out
+
+
 def woc_color(w):
     if w is None or w == '' or pd.isna(w): return ''
     try:
@@ -168,6 +188,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
         params_key = (shortage_th, target_woc, ship_th, min_move, min_recv)
         results = calc_results_v20(params_key)
     results = _apply_exclusion(results)
+    results = _apply_overrides(results)
 
     total_skus = len(results)
     moved_count = sum(1 for r in results if any(v != 0 for v in r['moves'].values()))
@@ -263,14 +284,9 @@ def render_scenario(scenario_key, container, allow_slider=False):
         for c in CHANNELS:                       # 이동 후 재고보유주수
             w = af.get(c)
             row.append(f'{round(w)}주' if w is not None else '')
-        for c in CHANNELS:                       # 이동 후 재고량 (+증감)
+        for c in CHANNELS:                       # 이동 후 재고량 — 이동 없으면 현 재고량, 이동 시 +증감
             v = mv.get(c, 0); ni = inv.get(c, 0) + v
-            if v == 0 and ni == 0:
-                row.append('')
-            elif v == 0:
-                row.append(f'{ni:,}')
-            else:
-                row.append(f'{ni:,} ({v:+d})')
+            row.append(f'{ni:,}' if v == 0 else f'{ni:,} ({v:+d})')
         row.append(round(r['revenue'] / 10000))
         rows.append(row)
 
@@ -320,6 +336,38 @@ def render_scenario(scenario_key, container, allow_slider=False):
                         it = filtered[i]
                         d0 = it['data']
                         st.markdown(f"**`{it['code']}`** · 순위 {d0.get('rank_online','-')} · {d0['name']}")
+            # ── 이동량 직접 수정 (단일 선택 시) — 이동 후 재고량·재고주수 자동 반영 ──
+            if len(selected_rows) == 1 and selected_rows[0] < len(filtered):
+                _it = filtered[selected_rows[0]]; _code = _it['code']; _d = _it['data']
+                with container.expander(f'✏️ 이동량 직접 수정 — {_code} · {_d["name"]}', expanded=True):
+                    _ov = st.session_state.get('move_overrides', {}).get(_code)
+                    _base = _ov if _ov else _it['moves']
+                    ecols = st.columns(len(CHANNELS))
+                    new_mv = {}
+                    for j, c in enumerate(CHANNELS):
+                        with ecols[j]:
+                            new_mv[c] = st.number_input(f'{CH_SHORT[c]} 이동(±)', value=int(_base.get(c, 0)),
+                                                        step=1, key=f'em_{scenario_key}_{_code}_{c}')
+                    prev_rows = []
+                    for c in CHANNELS:
+                        i0 = _d['inv'].get(c, 0); o0 = _d['orders'].get(c, 0); ni = i0 + new_mv[c]
+                        prev_rows.append({'채널': CH_SHORT[c], '현재고': i0, '이동(±)': new_mv[c],
+                                          '이동후재고': ni,
+                                          '이동후주수': (f'{round(ni/o0)}주' if o0 > 0 else '-')})
+                    st.dataframe(pd.DataFrame(prev_rows), use_container_width=True, hide_index=True,
+                                 height=38 + 35 * len(CHANNELS))
+                    _net = sum(new_mv.values())
+                    if _net != 0:
+                        st.warning(f'⚠️ IN/OUT 합계 {_net:+d} (0 아님) — 채널 간 이동은 합계 0 권장')
+                    eb1, eb2 = st.columns(2)
+                    if eb1.button('💾 이 값으로 적용', type='primary', use_container_width=True,
+                                  key=f'emap_{scenario_key}_{_code}'):
+                        st.session_state.setdefault('move_overrides', {})[_code] = dict(new_mv)
+                        st.rerun()
+                    if eb2.button('↩️ 추천값 복원', use_container_width=True,
+                                  key=f'emrs_{scenario_key}_{_code}'):
+                        st.session_state.get('move_overrides', {}).pop(_code, None)
+                        st.rerun()
     else:
         container.info('필터 조건에 맞는 단품이 없습니다.')
 
@@ -708,7 +756,7 @@ def render_effect_tab():
 
 
 def render():
-    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v5.1</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v5.2</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
@@ -726,7 +774,7 @@ def render():
         if st.button('🔄 새로고침', use_container_width=True):
             st.rerun()
     with col_c:
-        st.caption('v5.1')
+        st.caption('v5.2')
 
     tabs = st.tabs(list(SCENARIOS.keys()) + ['🚫 제외 스타일', '📊 채널 별 세부', '🔁 리오더 매핑', '📈 실행 효과'])
     tab_d, tab_c, tab_x, tab_ch, tab_re, tab_fx = tabs
@@ -743,4 +791,4 @@ def render():
     with tab_fx:
         render_effect_tab()
 
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v5.1 — 이동후재고량 증감음영(녹/적·흰글자·우측정렬) · 행 선택 시 전체 단품명 · 단품명 전체 · 재고주수 색상(<1/1~4/≥4) · 마이너 채널 제외')
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v5.2 — 이동량 직접수정(이동후 재고량·주수 자동반영) · 이동후재고량 음영 · 이동없으면 현재고 표기 · 단품명 전체')
