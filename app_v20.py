@@ -107,6 +107,17 @@ def mv_color(v):
     return 'background-color: #5B1E1E; color: #FF5A5F; font-weight:bold; text-align:center'
 
 
+def qty_color(s):
+    """이동 후 재고량 셀: 증가(+)=녹색음영 / 감소(-)=레드음영, 글자 흰색, 우측정렬."""
+    if not isinstance(s, str) or s == '':
+        return 'text-align:right'
+    if '(+' in s:
+        return 'background-color: #1B4D3E; color: #FFFFFF; font-weight:bold; text-align:right'
+    if '(-' in s:
+        return 'background-color: #5B1E1E; color: #FFFFFF; font-weight:bold; text-align:right'
+    return 'color: #FFFFFF; text-align:right'
+
+
 
 @st.dialog('✅ 재고 이동 전송 확인')
 def _approve_dialog(scenario_key, sel_count, sel_qty, sel_amt, sel_rev, ch_in, ch_out, exec_id):
@@ -279,11 +290,15 @@ def render_scenario(scenario_key, container, allow_slider=False):
         woc_cols = [('현 재고보유주수', CH_SHORT[c]) for c in CHANNELS] + \
                    [('이동 후 재고보유주수', CH_SHORT[c]) for c in CHANNELS]
         mv_cols = [('이동수량 (장)', CH_SHORT[c]) for c in CHANNELS]
+        qty_cols = [('이동 후 재고량 (장,±)', CH_SHORT[c]) for c in CHANNELS]
 
-        styled = df.style.map(woc_color, subset=woc_cols).map(mv_color, subset=mv_cols)
+        styled = (df.style
+                  .map(woc_color, subset=woc_cols)
+                  .map(mv_color, subset=mv_cols)
+                  .map(qty_color, subset=qty_cols))
         styled = styled.format({('효과', '만원'): '{:,}'.format})
 
-        container.caption('💡 좌측 ☑ 박스 클릭으로 단품 선택 · 헤더 클릭으로 전체 선택')
+        container.caption('💡 좌측 ☑ 박스(행) 클릭 → 단품 선택 + 아래에 전체 단품명 표시 · 헤더 클릭으로 전체 선택')
         event = container.dataframe(
             styled,
             use_container_width=True,
@@ -299,6 +314,12 @@ def render_scenario(scenario_key, container, allow_slider=False):
             container.caption(f'✅ 미선택 시 전체 {len(df):,}건 실행 대상')
         else:
             container.caption(f'✅ 선택: **{sel_count:,}건** / 전체 {len(df):,}건')
+            with container.expander(f'🔎 선택 단품 전체 단품명 ({len(selected_rows)}건)', expanded=True):
+                for i in selected_rows:
+                    if i < len(filtered):
+                        it = filtered[i]
+                        d0 = it['data']
+                        st.markdown(f"**`{it['code']}`** · 순위 {d0.get('rank_online','-')} · {d0['name']}")
     else:
         container.info('필터 조건에 맞는 단품이 없습니다.')
 
@@ -687,7 +708,7 @@ def render_effect_tab():
 
 
 def render():
-    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v5.0</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v5.1</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
@@ -705,28 +726,21 @@ def render():
         if st.button('🔄 새로고침', use_container_width=True):
             st.rerun()
     with col_c:
-        st.caption('v4.4')
+        st.caption('v5.1')
 
-    tab_d, tab_c, tab_x, tab_ch, tab_re, tab_fx = st.tabs(
-        list(SCENARIOS.keys()) + ['🚫 제외 스타일', '📊 채널 별 세부', '🔁 리오더 매핑', '📈 실행 효과']
-    )
-
+    tabs = st.tabs(list(SCENARIOS.keys()) + ['🚫 제외 스타일', '📊 채널 별 세부', '🔁 리오더 매핑', '📈 실행 효과'])
+    tab_d, tab_c, tab_x, tab_ch, tab_re, tab_fx = tabs
     with tab_d:
         render_scenario('🛡️ 방어형 (추천)', st, allow_slider=False)
-
     with tab_c:
         render_scenario('🎛️ 사용자 정의', st, allow_slider=True)
-
     with tab_x:
         render_excluded_tab()
-
     with tab_ch:
         render_channel_tab()
-
     with tab_re:
         render_reorder_tab()
-
     with tab_fx:
         render_effect_tab()
 
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v4.9 — 데이터바 부분블록(작은 값도 표시) · 재고주수 색상(빨강<1·노랑1~4·초록≥4) · 마이너 채널 제외 · 소액 결품 보충 · 재고/주문 RAW 정합')
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v5.1 — 이동후재고량 증감음영(녹/적·흰글자·우측정렬) · 행 선택 시 전체 단품명 · 단품명 전체 · 재고주수 색상(<1/1~4/≥4) · 마이너 채널 제외')
