@@ -232,46 +232,34 @@ def render_scenario(scenario_key, container, allow_slider=False):
         kpi_card(k5, '회수 매출', f'{_rev/100000000:.2f}억', f'주간 · {_sub}')
         kpi_card(k6, '연 환산', f'{_rev*52/100000000:.0f}억', '× 52주')
 
-    # 누판율·주판율 데이터바(엑셀 조건부서식 막대처럼) — 각 컬럼 최댓값 기준 자동 스케일
-    _max_cum = max((r['data'].get('cum_rate', 0) for r in filtered), default=0) * 100
-    _max_wk = max((r['data'].get('wk_rate', 0) for r in filtered), default=0) * 100
-
-    _SUB = '▏▎▍▌▋▊▉'  # 1/8~7/8 부분 블록 (8/8 = █) — 작은 값도 조각으로 보이게
-
-    def _bar(pct, vmax, width=3):
-        frac = (pct / vmax) if vmax > 0 else 0
-        frac = max(0.0, min(1.0, frac))
-        eighths = frac * width * 8
-        full = int(eighths // 8)
-        rem = int(eighths - full * 8)
-        if pct > 0 and full == 0 and rem == 0:
-            rem = 1  # 값이 있으면 최소 한 조각은 표시
-        s = '█' * full
-        if rem > 0 and full < width:
-            s += _SUB[rem - 1]
-        return (s + '░' * width)[:width]
-
     rows = []
     for r in filtered:
         d = r['data']; mv = r['moves']; af = r['after']; inv = d['inv']
-        name = d['name']
-        if len(name) > 14: name = name[:13] + '…'
+        name = d['name']  # 전체 단품명 유지 — 셀에 마우스 올리면(또는 클릭) 전체 표시
         cum = d.get('cum_rate', 0) * 100; wk = d.get('wk_rate', 0) * 100
         sv = d.get('wk_sales', 0)
         sales_str = f"{round(sv/10000):,}만" if sv else '-'
-        # 수치 먼저(항상 보이게) + 최소 데이터바
+        # 누판/주판/출고 — 조건부서식 없이 % 텍스트만
         row = [d.get('rank_online', '-'), r['code'], name, sales_str,
-               f"{cum:.0f}% {_bar(cum, _max_cum)}", f"{wk:.0f}% {_bar(wk, _max_wk)}", f"{int(d['ship_rate']*100)}%"]
-        for c in CHANNELS:
+               f"{cum:.0f}%", f"{wk:.0f}%", f"{int(d['ship_rate']*100)}%"]
+        for c in CHANNELS:                       # 현 재고보유주수
             o = d['orders'].get(c, 0)
             w = inv.get(c, 0) / o if o > 0 else None
             row.append(f'{round(w)}주' if w is not None else '')
-        for c in CHANNELS:
+        for c in CHANNELS:                       # 이동수량
             v = mv.get(c, 0)
             row.append('0' if v == 0 else f'{v:+d}')
-        for c in CHANNELS:
+        for c in CHANNELS:                       # 이동 후 재고보유주수
             w = af.get(c)
             row.append(f'{round(w)}주' if w is not None else '')
+        for c in CHANNELS:                       # 이동 후 재고량 (+증감)
+            v = mv.get(c, 0); ni = inv.get(c, 0) + v
+            if v == 0 and ni == 0:
+                row.append('')
+            elif v == 0:
+                row.append(f'{ni:,}')
+            else:
+                row.append(f'{ni:,} ({v:+d})')
         row.append(round(r['revenue'] / 10000))
         rows.append(row)
 
@@ -279,10 +267,11 @@ def render_scenario(scenario_key, container, allow_slider=False):
     selected_rows = []
     if rows:
         columns = pd.MultiIndex.from_tuples(
-            [('', '온라인순위'), ('', '단품코드'), ('', '단품명'), ('', '주간외형매출'), ('', '누판율'), ('', '주판율'), ('', '출고율')] +
+            [('', '순위'), ('', '단품코드'), ('', '단품명'), ('', '주간외형매출'), ('', '누판'), ('', '주판'), ('', '출고')] +
             [('현 재고보유주수', CH_SHORT[c]) for c in CHANNELS] +
             [('이동수량 (장)', CH_SHORT[c]) for c in CHANNELS] +
             [('이동 후 재고보유주수', CH_SHORT[c]) for c in CHANNELS] +
+            [('이동 후 재고량 (장,±)', CH_SHORT[c]) for c in CHANNELS] +
             [('효과', '만원')]
         )
         df = pd.DataFrame(rows, columns=columns)
@@ -314,11 +303,11 @@ def render_scenario(scenario_key, container, allow_slider=False):
         container.info('필터 조건에 맞는 단품이 없습니다.')
 
     container.caption(
-        '🎨 **재고보유주수**: 🔴 < 2주   🟡 2~4주   🟢 ≥ 4주    |    '
+        '🎨 **재고보유주수**: 🔴 < 1주   🟡 1~4주   🟢 ≥ 4주    |    '
         '**이동수량**: 🟢 +IN  🔴 -OUT  ⚪ 0    |    '
-        '단위: 재고/이동후 = "주" · 이동 = "장(±)" · 효과 = "만원"    |    '
+        '단위: 재고주수 = "주" · 이동 = "장(±)" · 이동 후 재고량 = "장(괄호=이동 전 대비 증감)" · 효과 = "만원"    |    '
         '※ 이동수량 산정 시 외부창고(AENS·ADU3·ADQS) 보관분 제외 — 재고주수는 포함 (상세: 채널 별 세부 탭)    |    '
-        '🎯 분배: 결품 실해소 가능 채널에 우선 배분(소량 무의미 이동 제외) · 동률 시 저수수료 순(공홈>네이버>이몰>무신>카카오>지재)'
+        '🎯 분배: 마이너(구색 미보유) 채널 제외 · 결품 심한(재고주수 낮은) 채널 우선, 동률 시 저수수료 순(공홈>네이버>이몰>무신>카카오>지재)'
     )
 
     sel_items = []
@@ -698,7 +687,7 @@ def render_effect_tab():
 
 
 def render():
-    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v4.9</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-bar">REBA_재고재배치 Agent — 운영 대시보드<span class="ver-badge">v5.0</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
