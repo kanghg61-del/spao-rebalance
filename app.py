@@ -4,7 +4,6 @@ AI 온라인 재고 자동 재배치 — 운영 대시보드 (듀얼 버전)
 """
 import os
 import streamlit as st
-from pathlib import Path
 
 st.set_page_config(
     page_title='AICA_온라인 재고관리 Agent',
@@ -76,35 +75,6 @@ st.markdown("""
     .stSidebar p, .stSidebar label, .stSidebar [data-testid="stWidgetLabel"] p { color: #FFFFFF !important; }
 </style>
 """, unsafe_allow_html=True)
-
-
-def _aica_download_section():
-    aica_dir = Path(__file__).parent
-    html_path = aica_dir / 'AICA_morning_brief.html'
-    zip_path = aica_dir / 'AICA_light.zip'
-    with st.sidebar:
-        st.markdown("---")
-        st.markdown("### 🐱 AICA 아침 브리핑")
-        st.caption("매일 아침 재고 + 대시보드 바로가기")
-        with st.expander("💾 다운로드 (경량 5KB)", expanded=False):
-            st.markdown("**경량 버전**: HTML + .bat · Chrome 풀스크린 알람")
-            if zip_path.exists():
-                with open(zip_path, 'rb') as f:
-                    st.download_button(label="📥 AICA 경량 ZIP", data=f.read(),
-                                       file_name='AICA_light.zip',
-                                       mime='application/zip', use_container_width=True)
-            if html_path.exists():
-                with open(html_path, 'rb') as f:
-                    st.download_button(label="📄 HTML 단독", data=f.read(),
-                                       file_name='AICA_morning_brief.html',
-                                       mime='text/html', use_container_width=True)
-            st.caption("사용법: ZIP 풀고 .bat 더블클릭 → 매일 07:00 작업 스케줄러 등록")
-        with st.expander("🐾 데스크톱 펫 (80MB)", expanded=False):
-            st.markdown("바탕화면 산책 + 트레이 상주 + 자동 알람")
-            st.caption("사내 NAS / OneDrive / GitHub Releases 호스팅 권장")
-
-
-_aica_download_section()
 
 ver = st.radio(
     '대시보드 버전',
