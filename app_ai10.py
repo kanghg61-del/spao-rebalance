@@ -85,7 +85,7 @@ def _risk_df(rows):
 
 def render():
     st.markdown(
-        '<div class="title-bar">AICA — 온라인 재고관리 에이전트'
+        '<div class="title-bar">AICA_온라인 재고관리 Agent'
         '<span class="ver-badge">🤖 AI 1.0 ver (테스트)</span></div>',
         unsafe_allow_html=True)
     last = get_last_update_time()

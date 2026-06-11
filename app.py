@@ -11,7 +11,7 @@ import os
 import streamlit as st
 
 st.set_page_config(
-    page_title='REBA_재고재배치 Agent',
+    page_title='AICA_온라인 재고관리 Agent',
     page_icon='📊',
     layout='wide',
     initial_sidebar_state='collapsed',
@@ -43,7 +43,7 @@ def _check_password():
         .login-sub { color: #FFFFFF; font-size: 13px; margin-bottom: 24px; }
     </style>
     <div class="login-box">
-        <div class="login-title">🔒 REBA_재고재배치 Agent</div>
+        <div class="login-title">🔒 AICA_온라인 재고관리 Agent</div>
         <div class="login-sub">운영 대시보드 · 비밀번호를 입력하세요</div>
     </div>
     """, unsafe_allow_html=True)
