@@ -76,16 +76,37 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ============================================================
+# 버전 전환 — 좌: 🤖 AI 1.0 ver (테스트) / 우: 🟢 v5.6 (최신, 기본)
+# 큰 탭 형태 노출 (라디오 기반 — 선택된 버전만 실행해 성능 유지)
+# ============================================================
+st.markdown("""
+<style>
+    div[role="radiogroup"] { gap: 8px; }
+    div[role="radiogroup"] label {
+        background: #15202C; border: 1px solid #2E3D4E;
+        border-radius: 10px 10px 0 0; padding: 10px 26px; margin-right: 4px;
+        cursor: pointer;
+    }
+    div[role="radiogroup"] label:has(input:checked) {
+        background: #4AE3B5; border-color: #4AE3B5;
+    }
+    div[role="radiogroup"] label:has(input:checked) p { color: #0A141F !important; }
+    div[role="radiogroup"] label p { font-size: 16px !important; font-weight: 700; }
+</style>
+""", unsafe_allow_html=True)
+
 ver = st.radio(
-    '대시보드 버전',
-    ['🟢 v5.6 (최신)', '🤖 AI 1.0 ver (테스트)'],
+    '대시보드 버전 선택 — 🤖 AI 1.0은 테스트 버전입니다',
+    ['🤖 AI 1.0 ver (테스트)', '🟢 v5.6 (최신)'],
+    index=1,
     horizontal=True,
     key='app_version',
 )
 
-if ver.startswith('🟢'):
-    import app_v20
-    app_v20.render()
-else:
+if ver.startswith('🤖'):
     import app_ai10
     app_ai10.render()
+else:
+    import app_v20
+    app_v20.render()
