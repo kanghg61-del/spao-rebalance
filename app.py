@@ -1,14 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 AI 온라인 재고 자동 재배치 — 운영 대시보드 (듀얼 버전)
-
-- 상단 토글로 버전 전환:
-  · v5.6 (최신): 운영 기준 — 기본/사용자정의/채널 IN·OUT 제외/채널 세부/리오더 매핑/실행 효과
-  · AI 1.0 ver (테스트): 결품 위험 확률 레이더(포아송) + 오늘의 AI 브리핑 + XAI 권고 사유
-- 배포: 비밀번호 게이트 (환경변수 APP_PASSWORD, 기본 'spao')
 """
 import os
 import streamlit as st
+from pathlib import Path
 
 st.set_page_config(
     page_title='AICA_온라인 재고관리 Agent',
@@ -18,9 +14,6 @@ st.set_page_config(
 )
 
 
-# ============================================================
-# 비밀번호 게이트 (회원가입 없이 비밀번호만으로 접근)
-# ============================================================
 def _check_password():
     expected = None
     try:
@@ -30,29 +23,22 @@ def _check_password():
     expected = expected or os.environ.get('APP_PASSWORD', 'spao')
     if st.session_state.get('auth_ok'):
         return True
-
     st.markdown("""
     <style>
-        .stApp { background-color: #0A141F; }
-        .login-box {
-            max-width: 420px; margin: 80px auto; padding: 32px;
-            background: #15202C; border: 1px solid #4AE3B5;
-            border-radius: 12px; text-align: center;
-        }
-        .login-title { color: #4AE3B5; font-size: 22px; font-weight: bold; margin-bottom: 8px; }
-        .login-sub { color: #FFFFFF; font-size: 13px; margin-bottom: 24px; }
+    .stApp { background-color: #0A141F; }
+    .login-box { max-width: 420px; margin: 80px auto; padding: 32px; background: #15202C; border: 1px solid #4AE3B5; border-radius: 12px; text-align: center; }
+    .login-title { color: #4AE3B5; font-size: 22px; font-weight: bold; margin-bottom: 8px; }
+    .login-sub { color: #FFFFFF; font-size: 13px; margin-bottom: 24px; }
     </style>
     <div class="login-box">
         <div class="login-title">🔒 AICA_온라인 재고관리 Agent</div>
         <div class="login-sub">운영 대시보드 · 비밀번호를 입력하세요</div>
     </div>
     """, unsafe_allow_html=True)
-
     _, mid, _ = st.columns([1, 2, 1])
     with mid:
         with st.form('login_form', clear_on_submit=False):
-            pw = st.text_input('Password', type='password', label_visibility='collapsed',
-                               placeholder='비밀번호 입력')
+            pw = st.text_input('Password', type='password', label_visibility='collapsed', placeholder='비밀번호 입력')
             submitted = st.form_submit_button('🔓 입장', use_container_width=True, type='primary')
         if submitted:
             if pw == expected:
@@ -91,9 +77,35 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ============================================================
-# 버전 전환 (v5.6 최신 / AI 1.0 테스트)
-# ============================================================
+
+def _aica_download_section():
+    aica_dir = Path(__file__).parent
+    html_path = aica_dir / 'AICA_morning_brief.html'
+    zip_path = aica_dir / 'AICA_light.zip'
+    with st.sidebar:
+        st.markdown("---")
+        st.markdown("### 🐱 AICA 아침 브리핑")
+        st.caption("매일 아침 재고 + 대시보드 바로가기")
+        with st.expander("💾 다운로드 (경량 5KB)", expanded=False):
+            st.markdown("**경량 버전**: HTML + .bat · Chrome 풀스크린 알람")
+            if zip_path.exists():
+                with open(zip_path, 'rb') as f:
+                    st.download_button(label="📥 AICA 경량 ZIP", data=f.read(),
+                                       file_name='AICA_light.zip',
+                                       mime='application/zip', use_container_width=True)
+            if html_path.exists():
+                with open(html_path, 'rb') as f:
+                    st.download_button(label="📄 HTML 단독", data=f.read(),
+                                       file_name='AICA_morning_brief.html',
+                                       mime='text/html', use_container_width=True)
+            st.caption("사용법: ZIP 풀고 .bat 더블클릭 → 매일 07:00 작업 스케줄러 등록")
+        with st.expander("🐾 데스크톱 펫 (80MB)", expanded=False):
+            st.markdown("바탕화면 산책 + 트레이 상주 + 자동 알람")
+            st.caption("사내 NAS / OneDrive / GitHub Releases 호스팅 권장")
+
+
+_aica_download_section()
+
 ver = st.radio(
     '대시보드 버전',
     ['🟢 v5.6 (최신)', '🤖 AI 1.0 ver (테스트)'],
