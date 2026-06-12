@@ -750,73 +750,6 @@ def render_effect_tab():
 
 
 
-def render_aica_download_tab():
-    """AICA 아침 브리핑 다운로드 탭"""
-    from pathlib import Path
-    aica_dir = Path(__file__).parent
-    html_path = aica_dir / 'AICA_morning_brief.html'
-    zip_path = aica_dir / 'AICA_light.zip'
-
-    st.markdown('### 🐱 AICA 아침 브리핑 다운로드')
-    st.caption('매일 아침 재고 상황을 음성으로 브리핑하고, 클릭 시 대시보드로 바로 이동하는 알림 프로그램')
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown('#### 💾 경량 버전 (5KB)')
-        st.markdown(
-            'HTML + .bat 파일 묶음 · **Chrome/Edge 풀스크린 알람** \n\n'
-            '- 별도 설치 불필요\n'
-            '- Windows 작업 스케줄러로 매일 07:00 자동 실행\n'
-            '- 음성 한국어 TTS + "지금 실행" 버튼 → 대시보드'
-        )
-        if zip_path.exists():
-            with open(zip_path, 'rb') as f:
-                st.download_button(
-                    label='📥 AICA 경량 ZIP 다운로드',
-                    data=f.read(),
-                    file_name='AICA_light.zip',
-                    mime='application/zip',
-                    use_container_width=True,
-                    type='primary',
-                )
-        if html_path.exists():
-            with open(html_path, 'rb') as f:
-                st.download_button(
-                    label='📄 HTML 단독 다운로드',
-                    data=f.read(),
-                    file_name='AICA_morning_brief.html',
-                    mime='text/html',
-                    use_container_width=True,
-                )
-        st.caption(
-            '**사용법**: ZIP 압축 풀고 .bat 더블클릭 → 풀스크린 브리핑. '
-            '매일 자동 실행은 Win+R → `taskschd.msc` → 매일 07:00 트리거 등록.'
-        )
-
-    with col2:
-        st.markdown('#### 🐾 데스크톱 펫 (풀버전 80MB)')
-        st.markdown(
-            '바탕화면에서 산책하는 귀여운 아바타 펫 · **Always On Top + 트레이 상주**\n\n'
-            '- 8개 캐릭터 (🐱🐶🐼🦊🐰🐹🤖🎯)\n'
-            '- 산책·점프·낮잠·말풍선 등 풀세트 행동\n'
-            '- 매일 07:00 자동 알람 + 음성 브리핑'
-        )
-        st.info(
-            '📦 용량이 커서 클라우드 직접 다운로드는 어렵습니다. '
-            '**사내 NAS · OneDrive · GitHub Releases** 호스팅을 추천합니다. '
-            'URL이 정해지면 여기에 다운로드 버튼을 추가할 수 있어요.'
-        )
-
-    st.divider()
-    st.markdown('#### 📋 자동 실행 설정 가이드')
-    st.markdown(
-        '1. ZIP 다운로드 후 압축 풀기\n'
-        '2. `Win + R` → `shell:startup` → 열린 폴더에 `.bat` 바로가기 복사 (부팅 시 자동)\n'
-        '3. `Win + R` → `taskschd.msc` → 기본 작업 만들기 → 매일 07:00 트리거 + `.bat` 실행 동작\n'
-        '4. 브라우저 한국어 음성 미설치 시 → Windows 설정 → 시간 및 언어 → 음성 → 한국어 추가'
-    )
-
 def render():
     st.markdown('<div class="title-bar">AICA_온라인 재고관리 Agent — 운영 대시보드<span class="ver-badge">v5.6</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
@@ -838,8 +771,8 @@ def render():
     with col_c:
         st.caption('v5.6')
 
-    tabs = st.tabs(list(SCENARIOS.keys()) + ['🚫 채널 IN·OUT 제외', '📊 채널 별 세부', '🔁 리오더 매핑', '📈 실행 효과', '📥 AICA 다운로드'])
-    tab_d, tab_c, tab_x, tab_ch, tab_re, tab_fx, tab_dl = tabs
+    tabs = st.tabs(list(SCENARIOS.keys()) + ['🚫 채널 IN·OUT 제외', '📊 채널 별 세부', '🔁 리오더 매핑', '📈 실행 효과'])
+    tab_d, tab_c, tab_x, tab_ch, tab_re, tab_fx = tabs
     with tab_d:
         render_scenario('🛡️ 기본', st, allow_slider=False)
     with tab_c:
@@ -852,6 +785,4 @@ def render():
         render_reorder_tab()
     with tab_fx:
         render_effect_tab()
-    with tab_dl:
-        render_aica_download_tab()
     st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v5.6 — 이동 상한(현재고의 50%, 사용자정의 0~100% 조정) · 행 직접편집 제거 · 채널별 IN·OUT 제외(MD) · 기본 탭')
