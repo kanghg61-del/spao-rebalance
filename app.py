@@ -97,16 +97,16 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 ver = st.radio(
-    '대시보드 버전 선택 — 🤖 AI 1.0은 테스트 버전입니다',
-    ['🤖 AI 1.0 ver (테스트)', '🟢 v5.6 (최신)'],
+    '대시보드 버전 선택 — 🤖 AICA 2.0은 스파오 미팅 반영 테스트 버전입니다',
+    ['🤖 AICA 2.0 (테스트)', '🟢 v5.6 (최신)'],
     index=1,
     horizontal=True,
     key='app_version',
 )
 
 if ver.startswith('🤖'):
-    import app_ai10
-    app_ai10.render()
+    import app_aica20
+    app_aica20.render()
 else:
     import app_v20
     app_v20.render()
