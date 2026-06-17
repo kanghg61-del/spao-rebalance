@@ -292,3 +292,37 @@ def calc_expected_revenue(sku_data, moves, channels, price):
         new_short = max(0, o - new_inv)
         revenue += (old_short - new_short) * price
     return int(revenue)
+
+
+def calc_distribution(sku_data, moves, channels, dist_target=2.0, bw_name='반응과'):
+    """회전(채널 간 이동) 후에도 남은 결품을 반응과 재고로 보충 = SCM '분배' 요청.
+    Returns: (dist dict {channel:int IN}, used int 반응과 차감 총량)."""
+    dist = {c: 0 for c in channels}
+    bw = int(sku_data['inv'].get(bw_name, 0))
+    if bw <= 0 or sku_data.get('locked', False):
+        return dist, 0
+    need = {}
+    for c in channels:
+        o = sku_data['orders'].get(c, 0)
+        if o <= 0:
+            continue
+        after_i = sku_data['inv'].get(c, 0) + moves.get(c, 0)
+        nd = int(math.ceil(dist_target * o - after_i))
+        if nd > 0:
+            need[c] = nd
+    if not need:
+        return dist, 0
+    supply = min(bw, sum(need.values()))
+    rem = supply
+
+    def _woc_after(c):
+        o = sku_data['orders'].get(c, 0)
+        return (sku_data['inv'].get(c, 0) + moves.get(c, 0)) / o if o > 0 else 999
+
+    for c in sorted(need, key=lambda x: (_woc_after(x), _prio(x))):
+        if rem <= 0:
+            break
+        tk = min(need[c], rem)
+        dist[c] = tk
+        rem -= tk
+    return dist, supply
