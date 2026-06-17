@@ -905,4 +905,3 @@ def render():
     with tab_fx:
         render_effect_tab()
     st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  v5.6 — 채널 별 세부 V4 양식(외부창고 비중·복종별 결품률·매장/물류 컬럼) · 이동 상한 50%')
-OUT 제외(MD) · 기본 탭')
