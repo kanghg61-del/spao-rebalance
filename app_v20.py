@@ -558,12 +558,19 @@ def _rate_color(v):
     return 'background-color:#1B4D3E; color:#4AE3B5; font-weight:bold'
 
 
+def _hl_sum(row):
+    v0 = str(row.iloc[0])
+    is_sum = v0 == '합계' or v0 == '— 합계 —'
+    sty = 'background-color:#1E2D40; color:#FFFFFF; font-weight:bold' if is_sum else ''
+    return [sty] * len(row)
+
+
 def _int0(v):
     try:
         f = float(v)
     except (TypeError, ValueError):
         return ''
-    if f != f:  # NaN
+    if f != f:
         return ''
     return f'{int(round(f))}'
 
@@ -585,7 +592,14 @@ def _ch_effect(d, mv_ch, ch):
 
 
 def render_channel_tab():
-    st.markdown('### 📊 채널 담당자용 상세 데이터')
+    st.markdown("""
+    <style>
+    .stTabs div[role="radiogroup"] label:has(input:checked){background:#FFC000 !important; border-color:#FFC000 !important;}
+    .stTabs div[role="radiogroup"] label:has(input:checked) p{color:#0A141F !important;}
+    .stTabs .stTabs [data-baseweb="tab"][aria-selected="true"]{background:#FFC000 !important; color:#0A141F !important;}
+    .stTabs .stTabs [data-baseweb="tab"][aria-selected="true"] p{color:#0A141F !important;}
+    </style>
+    """, unsafe_allow_html=True)
 
     picks = ['전체'] + list(CHANNELS)
     channel_pick = st.radio('채널 선택', picks, horizontal=True, key='ch_pick', label_visibility='collapsed')
@@ -624,7 +638,7 @@ def render_channel_tab():
 
     sub_overview, sub_item, sub_sku = st.tabs(['📋 재고 현황', '🧺 아이템별', '🔎 단품 상세'])
 
-    # ───────────── 재고 현황 (KPI + 복종별) ─────────────
+    # ───────────── 재고 현황 ─────────────
     with sub_overview:
         tot_inv = sum(g_inv(r['data']) for r in results_ch)
         tot_amt = sum(g_inv(r['data']) * r['data'].get('price', 0) for r in results_ch)
@@ -688,9 +702,9 @@ def render_channel_tab():
                 f'<div class="kpi-value" style="color:{clr}">{br:.1f}%</div>'
                 f'<div class="kpi-sub">{urg:,}/{item:,}</div></div>', unsafe_allow_html=True)
 
-    # ───────────── 아이템별 재고 현황 ─────────────
+    # ───────────── 아이템별 ─────────────
     with sub_item:
-        st.caption('아이템 = 상품코드 3~4번째 자리(예: SPPG23U07 → PG). 선택 채널 기준 집계 · 주간 판매량 높은 순.')
+        st.caption('아이템 = 상품코드 3~4번째 자리(예: SPPG23U07 → PG). 선택 채널 기준 집계 · 주간 판매량 높은 순. (맨 위 합계)')
         iagg = {}
         for r in results_ch:
             d = r['data']; it = _item(r['code'])
@@ -702,26 +716,35 @@ def render_channel_tab():
                 if i / o < 1:
                     a[4] += 1
         tsales = sum(a[1] for a in iagg.values()) or 1
-        irows = []
+        t_inv = sum(a[0] for a in iagg.values())
+        t_amt = sum(a[2] for a in iagg.values())
+        t_it = sum(a[3] for a in iagg.values())
+        t_ur = sum(a[4] for a in iagg.values())
+        body = []
         for it, a in iagg.items():
             if a[0] == 0 and a[1] == 0:
                 continue
-            irows.append({
+            body.append({
                 '아이템': it, '총 재고량': a[0], '현 재고금액(만원)': round(a[2] / 10000),
                 '주간 판매량': a[1], '판매량 비중(%)': round(a[1] / tsales * 100, 2),
                 '결품률(%)': round(a[4] / a[3] * 100, 1) if a[3] else 0.0,
             })
-        irows.sort(key=lambda x: -x['주간 판매량'])
-        if irows:
+        body.sort(key=lambda x: -x['주간 판매량'])
+        sumrow = {'아이템': '합계', '총 재고량': t_inv, '현 재고금액(만원)': round(t_amt / 10000),
+                  '주간 판매량': sum(x['주간 판매량'] for x in body),
+                  '판매량 비중(%)': 100.0, '결품률(%)': round(t_ur / t_it * 100, 1) if t_it else 0.0}
+        irows = [sumrow] + body
+        if body:
             idf = pd.DataFrame(irows)
             istyled = (idf.style.map(_rate_color, subset=['결품률(%)'])
+                       .apply(_hl_sum, axis=1)
                        .format({'총 재고량': '{:,}'.format, '현 재고금액(만원)': '{:,}'.format,
                                 '주간 판매량': '{:,}'.format, '판매량 비중(%)': '{:.2f}'.format,
                                 '결품률(%)': '{:.1f}'.format}))
             st.dataframe(istyled, use_container_width=True, height=440, hide_index=True)
         st.caption('※ 직전일 재고·증감은 일일 스냅샷 연동(9/1) 후 표시. 현재는 당일 재고·주간 판매량 기준.')
 
-    # ───────────── 단품(SKU) 상세 ─────────────
+    # ───────────── 단품 상세 ─────────────
     with sub_sku:
         f1, f2, f3, f4, f5 = st.columns([1.6, 1.6, 1.3, 2.4, 2])
         with f1:
@@ -736,6 +759,7 @@ def render_channel_tab():
             ch_sort = st.selectbox('정렬', ['온라인 매출 순위 ↑', '기대효과 ↓', '이동수량 ↓', '단품코드'], key='ch_sort')
 
         rows = []
+        s_daily = s_damt = s_inv = s_iamt = s_ext = s_mv = s_ni = s_eff = 0.0
         for r in results_ch:
             d = r['data']
             o = g_ord(d); i = g_inv(d); mv = g_move(r); p = d.get('price', 0)
@@ -752,6 +776,7 @@ def render_channel_tab():
             sojin = round(i / daily) if daily > 0 else None
             ni = i + (0 if is_all else mv)
             woc2 = (ni / o) if o > 0 else None
+            ext = g_ext(d); eff = g_eff(r)
             if woc is None:
                 stat = '– 무판매'
             elif woc < 1:
@@ -766,14 +791,16 @@ def render_channel_tab():
                 '상품명': (d['name'][:22] + '…') if len(d['name']) > 22 else d['name'],
                 '일평균 판매량': round(daily, 1), '일평균 매출(만원)': round(daily * p / 10000, 1),
                 '현 재고량': i, '현 재고금액(만원)': round(i * p / 10000),
-                '내부창고': '—', '🔌항만': '—', '🔌부평': '—', '외부창고': g_ext(d),
+                '내부창고': '—', '🔌항만': '—', '🔌부평': '—', '외부창고': ext,
                 '현 재고주수': round(woc) if woc is not None else None,
                 '소진예상(일)': sojin if sojin is not None else None,
                 '추천이동': mv, '이동후재고': ni,
                 '이동 후 재고주수': round(woc2) if woc2 is not None else None,
-                '효과(만원)': round(g_eff(r) / 10000),
+                '효과(만원)': round(eff / 10000),
             }
-            rows.append((row, (sojin if sojin is not None else 10 ** 9), g_eff(r), abs(mv), d.get('rank_online', 9999), r['code']))
+            rows.append((row, (sojin if sojin is not None else 10 ** 9), eff, abs(mv), d.get('rank_online', 9999), r['code']))
+            s_daily += daily; s_damt += daily * p / 10000; s_inv += i; s_iamt += i * p / 10000
+            s_ext += ext; s_mv += mv; s_ni += ni; s_eff += eff / 10000
 
         if ch_sort == '온라인 매출 순위 ↑':
             rows.sort(key=lambda x: x[4])
@@ -785,18 +812,28 @@ def render_channel_tab():
             rows.sort(key=lambda x: x[5])
 
         data = [x[0] for x in rows]
-        st.caption(f'총 {len(data):,}건' + (' · 상위 500건 표시' if len(data) > 500 else ''))
-        data = data[:500]
+        st.caption(f'총 {len(data):,}건' + (' · 합계 외 상위 500건 표시' if len(data) > 500 else '') + ' · 맨 위 합계')
+        sumrow = {
+            '상태': '— 합계 —', '복종': '', '상품코드': '', '단품코드(SKU)': f'{len(data):,}건', '상품명': '',
+            '일평균 판매량': round(s_daily, 1), '일평균 매출(만원)': round(s_damt, 1),
+            '현 재고량': int(s_inv), '현 재고금액(만원)': round(s_iamt),
+            '내부창고': '', '🔌항만': '', '🔌부평': '', '외부창고': int(s_ext),
+            '현 재고주수': '', '소진예상(일)': '', '추천이동': int(s_mv), '이동후재고': int(s_ni),
+            '이동 후 재고주수': '', '효과(만원)': round(s_eff),
+        }
+        disp = [sumrow] + data[:500]
 
         if data:
-            df_ch = pd.DataFrame(data)
+            df_ch = pd.DataFrame(disp)
             styled = (df_ch.style
                       .map(_stat_color, subset=['상태'])
                       .map(woc_color, subset=['현 재고주수', '이동 후 재고주수'])
                       .map(_move_color, subset=['추천이동'])
+                      .apply(_hl_sum, axis=1)
                       .format({'일평균 판매량': '{:.1f}'.format, '일평균 매출(만원)': '{:.1f}'.format,
                                '현 재고량': '{:,}'.format, '현 재고금액(만원)': '{:,}'.format,
                                '현 재고주수': _int0, '이동 후 재고주수': _int0, '소진예상(일)': _int0,
+                               '추천이동': '{:,}'.format, '이동후재고': '{:,}'.format, '외부창고': '{:,}'.format,
                                '효과(만원)': '{:,}'.format}))
             st.dataframe(styled, use_container_width=True, height=520, hide_index=True,
                          column_config={'복종': st.column_config.TextColumn('복종', width='small')})
