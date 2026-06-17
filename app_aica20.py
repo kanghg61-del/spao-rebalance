@@ -94,16 +94,18 @@ def render():
         '<b>🔌 표시(입고예정·매장/본부 재고)는 신규 데이터 소스로 9/1 API 연동 예정 → 현재는 데모(mock)</b>입니다.</div>',
         unsafe_allow_html=True)
 
-    tabs = st.tabs(['🤖 브리핑', '🚨 리오더 요청 허브', '📦 입고 예정 반영', '🏬 통합 재고 뷰', '🎚️ 목표주수 완화'])
+    tabs = st.tabs(['🤖 브리핑', '🧩 단품 한판', '🚨 리오더 요청 허브', '📦 입고 예정 반영', '🏬 통합 재고 뷰', '🎚️ 목표주수 완화'])
     with tabs[0]:
         _tab_brief()
     with tabs[1]:
-        _tab_reorder()
+        _tab_onepan()
     with tabs[2]:
-        _tab_inbound()
+        _tab_reorder()
     with tabs[3]:
-        _tab_unified()
+        _tab_inbound()
     with tabs[4]:
+        _tab_unified()
+    with tabs[5]:
         _tab_scenario()
 
 
@@ -283,3 +285,99 @@ def _tab_scenario():
         '목표를 낮추면 채워야 할 목표선이 내려가 이동량·회수효과가 줄지만, 그만큼 보수적으로 운영됩니다. '
         '정식 적용 전 운영 안정화 기간에 본 비교로 기준을 합의하세요. (확정 시 v5.6 기본값에 반영)</div>',
         unsafe_allow_html=True)
+
+
+def _grade_color(s):
+    if not isinstance(s, str):
+        return ''
+    if 'X' in s:
+        return 'background-color:#5B1E1E; color:#FF6B70; font-weight:bold'
+    if 'M' in s:
+        return 'background-color:#5A4500; color:#FFC000; font-weight:bold'
+    if 'S' in s:
+        return 'background-color:#1B4D3E; color:#4AE3B5; font-weight:bold'
+    return 'color:#9FB0C0'
+
+
+def _tab_onepan():
+    st.markdown('### 🧩 단품 한판 (통합)')
+    st.markdown(
+        '<div class="scenario-box">스파오 6개 엑셀(공홈 결품체크·계산기, 네이버/지그재그/키즈 한판, 지그재그 마케팅)을 '
+        '한 화면으로 흡수하는 통합 단품판. <b>진단등급(S/M/X)·현재고·주판·재고주수·필업 요청수량·주력채널은 실데이터</b>, '
+        '<b>🔌 필업박스(아소트 박스당 피스)·마케팅(메가위크/라이브 가중)은 9/1 연동/마스터 확보 후 표시</b>입니다. '
+        '진단: 🟢S 우수(≥2주) · 🟡M 주의(1~2주) · 🔴X 결품임박(&lt;1주). 필업요청 = 목표 4주 − 현재고(공홈 계산기 안전계수).</div>',
+        unsafe_allow_html=True)
+
+    skus = load_data_v20()
+    rows = []
+    nX = nM = nS = 0
+    fill_q = 0
+    fill_amt = 0
+    for code, d in skus.items():
+        ti = sum(d['inv'].get(ch, 0) for ch in CHANNELS)
+        to = sum(d['orders'].get(ch, 0) for ch in CHANNELS)
+        if to <= 0 and ti <= 0:
+            continue
+        woc = ti / to if to > 0 else None
+        if woc is None:
+            grade = '– 무판매'
+        elif woc < 1:
+            grade = '🔴 X 결품임박'; nX += 1
+        elif woc < 2:
+            grade = '🟡 M 주의'; nM += 1
+        else:
+            grade = '🟢 S 우수'; nS += 1
+        fillq = max(0, round(4 * to - ti)) if to > 0 else 0
+        fill_q += fillq
+        fill_amt += fillq * d.get('price', 0)
+        topch = max(CHANNELS, key=lambda ch: d['orders'].get(ch, 0)) if to > 0 else '-'
+        rows.append({
+            '진단': grade, '단품코드': code,
+            '상품명': (d['name'][:20] + '…') if len(d['name']) > 20 else d['name'],
+            '주력채널': CH_SHORT.get(topch, topch), '현재고': ti, '주판': to,
+            '재고주수': round(woc, 1) if woc is not None else None,
+            '필업요청(장)': fillq, '🔌필업박스': '—', '🔌마케팅': '—',
+            '_sort': fillq,
+        })
+
+    k = st.columns(5)
+    _kpi(k[0], '🔴 결품임박(X)', f'{nX:,}건', '재고주수 < 1주')
+    _kpi(k[1], '🟡 주의(M)', f'{nM:,}건', '1~2주')
+    _kpi(k[2], '🟢 우수(S)', f'{nS:,}건', '≥ 2주')
+    _kpi(k[3], '📦 필업 요청수량', f'{fill_q:,}장', '목표 4주 − 현재고')
+    _kpi(k[4], '💰 필업 요청금액', f'{fill_amt/1e8:.1f}억', '필업 × 정상가')
+
+    f1, f2, f3 = st.columns([1.5, 3, 2])
+    with f1:
+        g = st.selectbox('진단', ['전체', '🔴 X 결품임박', '🟡 M 주의', '🟢 S 우수'], key='op_grade')
+    with f2:
+        q = st.text_input('검색 (단품코드 앞 10자리)', key='op_q').strip().upper()
+    with f3:
+        srt = st.selectbox('정렬', ['필업요청 ↓', '주판 ↓', '재고주수 ↑'], key='op_sort')
+
+    view = rows
+    if g != '전체':
+        view = [r for r in view if r['진단'] == g]
+    if q:
+        view = [r for r in view if r['단품코드'].startswith(q)]
+    if srt == '필업요청 ↓':
+        view.sort(key=lambda r: -r['_sort'])
+    elif srt == '주판 ↓':
+        view.sort(key=lambda r: -r['주판'])
+    else:
+        view.sort(key=lambda r: (r['재고주수'] if r['재고주수'] is not None else 999))
+    st.caption(f'총 {len(view):,}건' + (' · 상위 500건 표시' if len(view) > 500 else ''))
+    view = view[:500]
+
+    if view:
+        df = pd.DataFrame([{kk: vv for kk, vv in r.items() if kk != '_sort'} for r in view])
+        styled = (df.style.map(_grade_color, subset=['진단'])
+                  .map(woc_color, subset=['재고주수'])
+                  .format({'현재고': '{:,}'.format, '주판': '{:,}'.format,
+                           '필업요청(장)': '{:,}'.format, '재고주수': lambda v: '' if v is None else f'{v:.1f}'}))
+        st.dataframe(styled, use_container_width=True, height=520, hide_index=True)
+    else:
+        st.info('조건에 맞는 단품이 없습니다.')
+
+    st.caption('✉️ ARS 자동메일: 매주 월 06:00 결품임박(X) 단품을 SCM팀에 자동 작성·발송 (🚨 리오더 요청 허브 탭에서 초안 확인). '
+               '🔌 필업박스·마케팅 뱃지는 박스 마스터·마케팅 캘린더 연동 후 활성화.')
