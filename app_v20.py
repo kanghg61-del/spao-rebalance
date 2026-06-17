@@ -523,7 +523,6 @@ def render_reorder_tab():
 
 
 def _stat_color(s):
-    """상태 배지 셀 색 (V4 양식)."""
     if not isinstance(s, str):
         return ''
     if '긴급' in s:
@@ -547,6 +546,28 @@ def _move_color(v):
     return 'color:#9FB0C0; text-align:right'
 
 
+def _rate_color(v):
+    try:
+        x = float(v)
+    except Exception:
+        return ''
+    if x >= 25:
+        return 'background-color:#5B1E1E; color:#FF6B70; font-weight:bold'
+    if x >= 10:
+        return 'background-color:#5A4500; color:#FFC000; font-weight:bold'
+    return 'background-color:#1B4D3E; color:#4AE3B5; font-weight:bold'
+
+
+def _int0(v):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return ''
+    if f != f:  # NaN
+        return ''
+    return f'{int(round(f))}'
+
+
 BOK_LIST = ['A', 'C', 'G', 'K', 'M', 'U', 'W']
 
 
@@ -554,23 +575,29 @@ def _bok(code):
     return code[7] if len(code) > 7 else '?'
 
 
+def _item(code):
+    return code[2:4] if len(code) > 3 else '?'
+
+
+def _ch_effect(d, mv_ch, ch):
+    o = d['orders'].get(ch, 0); i = d['inv'].get(ch, 0); p = d.get('price', 0)
+    return (max(0, o - i) - max(0, o - (i + mv_ch))) * p
+
+
 def render_channel_tab():
     st.markdown('### 📊 채널 담당자용 상세 데이터')
-    st.caption('기존 스파오 재고 대시보드(V4) 양식 — 채널 선택(전체→공홈→이랜드몰→무신사→지그재그→네이버→카카오선물하기). '
-               '데이터는 본 Agent(v5.6 엔진) 산출값입니다.')
 
     picks = ['전체'] + list(CHANNELS)
-    channel_pick = st.radio('채널 선택', picks, horizontal=True, key='ch_pick')
+    channel_pick = st.radio('채널 선택', picks, horizontal=True, key='ch_pick', label_visibility='collapsed')
     is_all = channel_pick == '전체'
     is_ext = (not is_all) and channel_pick in EXT_WAREHOUSE
-    wh_label = f"{EXT_WAREHOUSE[channel_pick][0]}({EXT_WAREHOUSE[channel_pick][1]})" if is_ext else None
+    wh_label = f'{EXT_WAREHOUSE[channel_pick][0]}({EXT_WAREHOUSE[channel_pick][1]})' if is_ext else None
 
     preset = SCENARIOS['🛡️ 기본']
     params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'],
                   preset['min_move'], preset.get('min_recv', 4), _ch_excl_key())
     results_ch = _apply_exclusion(calc_results_v20(params_key))
 
-    # ── 선택 채널('전체'=온라인 6채널 합산) 기준 getter ──
     def g_inv(d):
         return sum(d['inv'].get(c, 0) for c in CHANNELS) if is_all else d['inv'].get(channel_pick, 0)
 
@@ -587,158 +614,196 @@ def render_channel_tab():
             return sum(d.get('ext_wh', {}).get(c, 0) for c in EXT_WAREHOUSE)
         return d.get('ext_wh', {}).get(channel_pick, 0) if is_ext else 0
 
-    # ── 재고 현황 집계 ──
-    tot_inv = sum(g_inv(r['data']) for r in results_ch)
-    n_item = sum(1 for r in results_ch if g_ord(r['data']) > 0)
-    n_urgent = sum(1 for r in results_ch if g_ord(r['data']) > 0 and g_inv(r['data']) / max(1, g_ord(r['data'])) < 1)
-    rate = n_urgent / max(1, n_item) * 100
-    tot_in = sum(max(0, g_move(r)) for r in results_ch)
-    tot_ext = sum(g_ext(r['data']) for r in results_ch)
-    ext_pct = tot_ext / max(1, tot_inv) * 100
-    # 전체 전용: '한 채널이라도 결품' (운영 체감 결품률)
-    union_item = union_urg = 0
-    if is_all:
-        for r in results_ch:
-            d = r['data']
-            act = [c for c in CHANNELS if d['orders'].get(c, 0) > 0]
-            if act:
-                union_item += 1
-                if any(d['inv'].get(c, 0) / d['orders'][c] < 1 for c in act):
-                    union_urg += 1
-    union_rate = union_urg / max(1, union_item) * 100
+    def g_eff(r):
+        return r['revenue'] if is_all else _ch_effect(r['data'], r['moves'].get(channel_pick, 0), channel_pick)
 
     def kcard(col, label, value, sub=''):
         col.markdown(f'<div class="kpi-card"><div class="kpi-label">{label}</div>'
                      f'<div class="kpi-value">{value}</div><div class="kpi-sub">{sub}</div></div>',
                      unsafe_allow_html=True)
 
-    st.markdown('#### 📋 재고 현황')
-    if is_all:
-        c = st.columns(8)
-        kcard(c[0], '품목 수', f'{n_item:,}', '주문 발생 SKU')
-        kcard(c[1], '총 재고', f'{tot_inv:,}장', '온라인 6채널 합산')
-        kcard(c[2], '긴급 결품', f'{n_urgent:,}건', '합산 재고주수 < 1주')
-        kcard(c[3], '결품률(합산)', f'{rate:.1f}%', '6채널 재고 합산 기준')
-        kcard(c[4], '결품(채널)', f'{union_rate:.1f}%', '한 채널이라도 결품')
-        kcard(c[5], '추천 이동(IN)', f'{tot_in:,}장', '금주 충전')
-        kcard(c[6], '외부창고', f'{tot_ext:,}장', 'AENS·ADU3·ADQS')
-        kcard(c[7], '외부창고 비중', f'{ext_pct:.1f}%', '외부창고 / 총재고')
-        st.caption('ℹ️ **결품률(합산) vs 결품(채널)** — 합산은 6채널 재고를 합쳐 봐서 낮게(7%대) 보입니다(재고 풀링 효과). '
-                   '실제 운영 체감은 "한 채널이라도 결품"인 **결품(채널)** 지표를 보세요. 채널별 결품률은 각 채널 탭에서 확인.')
-    else:
-        n = 6 if is_ext else 5
-        c = st.columns(n)
-        kcard(c[0], '품목 수', f'{n_item:,}', '주문 발생 SKU')
-        kcard(c[1], '총 재고', f'{tot_inv:,}장', f'{channel_pick}')
-        kcard(c[2], '긴급 결품', f'{n_urgent:,}건', '재고주수 < 1주')
-        kcard(c[3], '결품률', f'{rate:.1f}%', f'{n_urgent:,}/{n_item:,}')
-        kcard(c[4], '추천 이동(IN)', f'{tot_in:,}장', '금주 충전')
-        if is_ext:
-            kcard(c[5], '외부창고', f'{tot_ext:,}장', f'{wh_label} · 비중 {ext_pct:.1f}%')
-        st.caption(f'ℹ️ {channel_pick} 결품률 {rate:.1f}% — 마이너 채널(이랜드몰·카카오 등)은 운영 SKU·SKU당 재고가 적어 '
-                   '결품률이 구조적으로 높게 나옵니다(데이터 오류 아님). 전체(합산)와의 차이는 재고 풀링 효과입니다.')
+    sub_overview, sub_item, sub_sku = st.tabs(['📋 재고 현황', '🧺 아이템별', '🔎 단품 상세'])
 
-    # ── 복종별 결품률 (코드 8번째 자리 = A/C/G/K/M/U/W, 실데이터) ──
-    bstat = {b: [0, 0] for b in BOK_LIST}
-    for r in results_ch:
-        b = _bok(r['code'])
-        if b in bstat:
-            o = g_ord(r['data']); i = g_inv(r['data'])
-            if o > 0:
-                bstat[b][0] += 1
-                if i / o < 1:
-                    bstat[b][1] += 1
-    st.markdown('#### 🧬 복종별 결품률')
-    bc = st.columns(len(BOK_LIST))
-    for j, b in enumerate(BOK_LIST):
-        item, urg = bstat[b]
-        br = urg / item * 100 if item else 0
-        clr = '#FF6B70' if br >= 25 else '#FFC000' if br >= 10 else '#4AE3B5'
-        bc[j].markdown(
-            f'<div class="kpi-card"><div class="kpi-label">복종 {b}</div>'
-            f'<div class="kpi-value" style="color:{clr}">{br:.1f}%</div>'
-            f'<div class="kpi-sub">{urg:,}/{item:,}</div></div>', unsafe_allow_html=True)
+    # ───────────── 재고 현황 (KPI + 복종별) ─────────────
+    with sub_overview:
+        tot_inv = sum(g_inv(r['data']) for r in results_ch)
+        tot_amt = sum(g_inv(r['data']) * r['data'].get('price', 0) for r in results_ch)
+        n_item = sum(1 for r in results_ch if g_ord(r['data']) > 0)
+        n_urgent = sum(1 for r in results_ch if g_ord(r['data']) > 0 and g_inv(r['data']) / max(1, g_ord(r['data'])) < 1)
+        rate = n_urgent / max(1, n_item) * 100
+        tot_in = sum(max(0, g_move(r)) for r in results_ch)
+        tot_ext = sum(g_ext(r['data']) for r in results_ch)
+        ext_pct = tot_ext / max(1, tot_inv) * 100
+        union_item = union_urg = 0
+        if is_all:
+            for r in results_ch:
+                d = r['data']
+                act = [c for c in CHANNELS if d['orders'].get(c, 0) > 0]
+                if act:
+                    union_item += 1
+                    if any(d['inv'].get(c, 0) / d['orders'][c] < 1 for c in act):
+                        union_urg += 1
+        union_rate = union_urg / max(1, union_item) * 100
 
-    # ── 필터 ──
-    st.markdown(f'#### 🔎 {channel_pick} 아이템별 재고 현황')
-    f1, f2, f3, f4, f5 = st.columns([1.6, 1.6, 1.3, 2.4, 2])
-    with f1:
-        only_urgent = st.checkbox('🔴 결품(주의)만', value=False, key='ch_only_urgent')
-    with f2:
-        only_moved = st.checkbox('이동 발생만', value=False, key='ch_only_moved')
-    with f3:
-        bok_pick = st.selectbox('복종', ['전체'] + BOK_LIST, key='ch_bok')
-    with f4:
-        ch_search = st.text_input('검색 (상품코드/SKU)', placeholder='앞 10자리만 입력해도 OK', key='ch_search').strip().upper()
-    with f5:
-        ch_sort = st.selectbox('정렬', ['소진일 ↑ (위험순)', '일평균판매 ↓', '추천이동 ↓', '온라인 순위 ↑'], key='ch_sort')
-
-    rows = []
-    for r in results_ch:
-        d = r['data']
-        o = g_ord(d); i = g_inv(d); mv = g_move(r)
-        if only_moved and mv == 0:
-            continue
-        woc = (i / o) if o > 0 else None
-        if only_urgent and not (woc is not None and woc < 2):
-            continue
-        if bok_pick != '전체' and _bok(r['code']) != bok_pick:
-            continue
-        if ch_search and not r['code'].upper().startswith(ch_search):
-            continue
-        daily = o / 7 if o > 0 else 0
-        sojin = round(i / daily) if daily > 0 else None
-        if woc is None:
-            stat = '– 무판매'
-        elif woc < 1:
-            stat = '🔴 긴급결품'
-        elif woc < 2:
-            stat = '🟡 주의'
+        if is_all:
+            c = st.columns(8)
+            kcard(c[0], '품목 수', f'{n_item:,}', '주문 발생 SKU')
+            kcard(c[1], '총 재고량', f'{tot_inv:,}장', f'재고금액 {tot_amt/1e8:.0f}억')
+            kcard(c[2], '긴급 결품', f'{n_urgent:,}건', '재고주수 < 1주')
+            kcard(c[3], '결품률(합산)', f'{rate:.1f}%', '6채널 재고 합산')
+            kcard(c[4], '결품(채널)', f'{union_rate:.1f}%', '한 채널이라도 결품')
+            kcard(c[5], '추천 이동(IN)', f'{tot_in:,}장', '금주 충전')
+            kcard(c[6], '외부창고', f'{tot_ext:,}장', 'AENS·ADU3·ADQS')
+            kcard(c[7], '외부창고 비중', f'{ext_pct:.1f}%', '외부창고 / 총재고')
+            st.caption('ℹ️ 결품률(합산)은 6채널 재고를 합쳐 봐 낮게(7%대) 보입니다(풀링 효과). 운영 체감은 "한 채널이라도 결품"인 결품(채널)을 보세요.')
         else:
-            stat = '🟢 정상'
-        row = {
-            '순위': d.get('rank_online', 9999), '상태': stat, '복종': _bok(r['code']),
-            '상품코드': r['code'][:10], '단품코드(SKU)': r['code'],
-            '상품명': (d['name'][:22] + '…') if len(d['name']) > 22 else d['name'],
-            '일평균판매': round(daily, 1), '현재고': i,
-            '🔌매장재고': '—', '🔌항만': '—', '🔌부평': '—', '물류(외부창고)': g_ext(d),
-            '재고주수': round(woc, 1) if woc is not None else None,
-            '소진예상(일)': sojin if sojin is not None else None,
-            '추천이동': mv, '이동후재고': i + (0 if is_all else mv),
-            '효과(만원)': round(r['revenue'] / 10000),
-        }
-        rows.append((row, (sojin if sojin is not None else 10 ** 9), daily, abs(mv), d.get('rank_online', 9999)))
+            n = 6 if is_ext else 5
+            c = st.columns(n)
+            kcard(c[0], '품목 수', f'{n_item:,}', '주문 발생 SKU')
+            kcard(c[1], '총 재고량', f'{tot_inv:,}장', f'{channel_pick}')
+            kcard(c[2], '긴급 결품', f'{n_urgent:,}건', '재고주수 < 1주')
+            kcard(c[3], '결품률', f'{rate:.1f}%', f'{n_urgent:,}/{n_item:,}')
+            kcard(c[4], '추천 이동(IN)', f'{tot_in:,}장', '금주 충전')
+            if is_ext:
+                kcard(c[5], '외부창고', f'{tot_ext:,}장', f'{wh_label} · 비중 {ext_pct:.1f}%')
+            st.caption(f'ℹ️ {channel_pick} 결품률 {rate:.1f}% — 마이너 채널은 운영 SKU·SKU당 재고가 적어 구조적으로 높습니다(데이터 오류 아님).')
 
-    if ch_sort == '소진일 ↑ (위험순)':
-        rows.sort(key=lambda x: x[1])
-    elif ch_sort == '일평균판매 ↓':
-        rows.sort(key=lambda x: -x[2])
-    elif ch_sort == '추천이동 ↓':
-        rows.sort(key=lambda x: -x[3])
-    else:
-        rows.sort(key=lambda x: x[4])
+        bstat = {b: [0, 0] for b in BOK_LIST}
+        for r in results_ch:
+            b = _bok(r['code'])
+            if b in bstat:
+                o = g_ord(r['data']); i = g_inv(r['data'])
+                if o > 0:
+                    bstat[b][0] += 1
+                    if i / o < 1:
+                        bstat[b][1] += 1
+        st.markdown('##### 🧬 복종별 결품률')
+        bc = st.columns(len(BOK_LIST))
+        for j, b in enumerate(BOK_LIST):
+            item, urg = bstat[b]
+            br = urg / item * 100 if item else 0
+            clr = '#FF6B70' if br >= 25 else '#FFC000' if br >= 10 else '#4AE3B5'
+            bc[j].markdown(
+                f'<div class="kpi-card"><div class="kpi-label">복종 {b}</div>'
+                f'<div class="kpi-value" style="color:{clr}">{br:.1f}%</div>'
+                f'<div class="kpi-sub">{urg:,}/{item:,}</div></div>', unsafe_allow_html=True)
 
-    data = [x[0] for x in rows]
-    st.caption(f'총 {len(data):,}건' + (f' · 상위 500건 표시' if len(data) > 500 else ''))
-    data = data[:500]
+    # ───────────── 아이템별 재고 현황 ─────────────
+    with sub_item:
+        st.caption('아이템 = 상품코드 3~4번째 자리(예: SPPG23U07 → PG). 선택 채널 기준 집계 · 주간 판매량 높은 순.')
+        iagg = {}
+        for r in results_ch:
+            d = r['data']; it = _item(r['code'])
+            o = g_ord(d); i = g_inv(d); p = d.get('price', 0)
+            a = iagg.setdefault(it, [0, 0, 0, 0, 0])
+            a[0] += i; a[1] += o; a[2] += i * p
+            if o > 0:
+                a[3] += 1
+                if i / o < 1:
+                    a[4] += 1
+        tsales = sum(a[1] for a in iagg.values()) or 1
+        irows = []
+        for it, a in iagg.items():
+            if a[0] == 0 and a[1] == 0:
+                continue
+            irows.append({
+                '아이템': it, '총 재고량': a[0], '현 재고금액(만원)': round(a[2] / 10000),
+                '주간 판매량': a[1], '판매량 비중(%)': round(a[1] / tsales * 100, 2),
+                '결품률(%)': round(a[4] / a[3] * 100, 1) if a[3] else 0.0,
+            })
+        irows.sort(key=lambda x: -x['주간 판매량'])
+        if irows:
+            idf = pd.DataFrame(irows)
+            istyled = (idf.style.map(_rate_color, subset=['결품률(%)'])
+                       .format({'총 재고량': '{:,}'.format, '현 재고금액(만원)': '{:,}'.format,
+                                '주간 판매량': '{:,}'.format, '판매량 비중(%)': '{:.2f}'.format,
+                                '결품률(%)': '{:.1f}'.format}))
+            st.dataframe(istyled, use_container_width=True, height=440, hide_index=True)
+        st.caption('※ 직전일 재고·증감은 일일 스냅샷 연동(9/1) 후 표시. 현재는 당일 재고·주간 판매량 기준.')
 
-    if data:
-        df_ch = pd.DataFrame(data)
-        styled = (df_ch.style
-                  .map(_stat_color, subset=['상태'])
-                  .map(woc_color, subset=['재고주수'])
-                  .map(_move_color, subset=['추천이동'])
-                  .format({'일평균판매': '{:.1f}'.format, '효과(만원)': '{:,}'.format}))
-        st.dataframe(styled, use_container_width=True, height=520, hide_index=True)
-    else:
-        st.info('표시할 단품이 없습니다.')
+    # ───────────── 단품(SKU) 상세 ─────────────
+    with sub_sku:
+        f1, f2, f3, f4, f5 = st.columns([1.6, 1.6, 1.3, 2.4, 2])
+        with f1:
+            only_urgent = st.checkbox('🔴 결품(주의)만', value=False, key='ch_only_urgent')
+        with f2:
+            only_moved = st.checkbox('이동 발생만', value=False, key='ch_only_moved')
+        with f3:
+            bok_pick = st.selectbox('복종', ['전체'] + BOK_LIST, key='ch_bok')
+        with f4:
+            ch_search = st.text_input('검색 (상품코드/SKU)', placeholder='앞 10자리만 입력해도 OK', key='ch_search').strip().upper()
+        with f5:
+            ch_sort = st.selectbox('정렬', ['온라인 매출 순위 ↑', '기대효과 ↓', '이동수량 ↓', '단품코드'], key='ch_sort')
 
-    st.caption('🎨 상태: 🔴 긴급결품(재고주수<1주) · 🟡 주의(1~2주) · 🟢 정상(≥2주)   |   '
-               '소진예상(일) = 현재고 ÷ 일평균판매   |   추천이동: 🟢+IN / 🔴−OUT   |   '
-               '물류(외부창고) = AENS·ADU3·ADQS 실데이터(무신사·지그재그·네이버)')
-    st.caption('🔌 **매장재고·항만·부평** = 매장/물류 신규 데이터 — 9/1 물류 API 연동 시 표시 예정(현재 미연동 → "—"). '
-               '온라인 채널 데이터만으로는 산출 불가하여 추정값을 넣지 않았습니다.')
+        rows = []
+        for r in results_ch:
+            d = r['data']
+            o = g_ord(d); i = g_inv(d); mv = g_move(r); p = d.get('price', 0)
+            if only_moved and mv == 0:
+                continue
+            woc = (i / o) if o > 0 else None
+            if only_urgent and not (woc is not None and woc < 2):
+                continue
+            if bok_pick != '전체' and _bok(r['code']) != bok_pick:
+                continue
+            if ch_search and not r['code'].upper().startswith(ch_search):
+                continue
+            daily = o / 7 if o > 0 else 0
+            sojin = round(i / daily) if daily > 0 else None
+            ni = i + (0 if is_all else mv)
+            woc2 = (ni / o) if o > 0 else None
+            if woc is None:
+                stat = '– 무판매'
+            elif woc < 1:
+                stat = '🔴 긴급결품'
+            elif woc < 2:
+                stat = '🟡 주의'
+            else:
+                stat = '🟢 정상'
+            row = {
+                '상태': stat, '복종': _bok(r['code']),
+                '상품코드': r['code'][:10], '단품코드(SKU)': r['code'],
+                '상품명': (d['name'][:22] + '…') if len(d['name']) > 22 else d['name'],
+                '일평균 판매량': round(daily, 1), '일평균 매출(만원)': round(daily * p / 10000, 1),
+                '현 재고량': i, '현 재고금액(만원)': round(i * p / 10000),
+                '내부창고': '—', '🔌항만': '—', '🔌부평': '—', '외부창고': g_ext(d),
+                '현 재고주수': round(woc) if woc is not None else None,
+                '소진예상(일)': sojin if sojin is not None else None,
+                '추천이동': mv, '이동후재고': ni,
+                '이동 후 재고주수': round(woc2) if woc2 is not None else None,
+                '효과(만원)': round(g_eff(r) / 10000),
+            }
+            rows.append((row, (sojin if sojin is not None else 10 ** 9), g_eff(r), abs(mv), d.get('rank_online', 9999), r['code']))
 
+        if ch_sort == '온라인 매출 순위 ↑':
+            rows.sort(key=lambda x: x[4])
+        elif ch_sort == '기대효과 ↓':
+            rows.sort(key=lambda x: -x[2])
+        elif ch_sort == '이동수량 ↓':
+            rows.sort(key=lambda x: -x[3])
+        else:
+            rows.sort(key=lambda x: x[5])
+
+        data = [x[0] for x in rows]
+        st.caption(f'총 {len(data):,}건' + (' · 상위 500건 표시' if len(data) > 500 else ''))
+        data = data[:500]
+
+        if data:
+            df_ch = pd.DataFrame(data)
+            styled = (df_ch.style
+                      .map(_stat_color, subset=['상태'])
+                      .map(woc_color, subset=['현 재고주수', '이동 후 재고주수'])
+                      .map(_move_color, subset=['추천이동'])
+                      .format({'일평균 판매량': '{:.1f}'.format, '일평균 매출(만원)': '{:.1f}'.format,
+                               '현 재고량': '{:,}'.format, '현 재고금액(만원)': '{:,}'.format,
+                               '현 재고주수': _int0, '이동 후 재고주수': _int0, '소진예상(일)': _int0,
+                               '효과(만원)': '{:,}'.format}))
+            st.dataframe(styled, use_container_width=True, height=520, hide_index=True,
+                         column_config={'복종': st.column_config.TextColumn('복종', width='small')})
+        else:
+            st.info('표시할 단품이 없습니다.')
+
+        st.caption('🎨 상태: 🔴 긴급결품(<1주) · 🟡 주의(1~2주) · 🟢 정상(≥2주)   |   효과=선택 채널 기준(전체=합산)   |   외부창고=AENS·ADU3·ADQS 실데이터   |   🔌 내부창고·항만·부평=물류 API 연동(9/1) 후 표시')
 
 
 def render_effect_tab():
