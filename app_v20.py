@@ -177,8 +177,8 @@ def _approve_dialog(scenario_key, sel_count, sel_qty, sel_amt, sel_rev, ch_in, c
         st.rerun()
 
 
-def _chan_recovery_html(items):
-    """채널별 회수매출 가로 막대 (회전+분배 통합)."""
+def _chan_recovery_mini(items):
+    """회수매출 채널별 — 회수매출 카드 안에 들어가는 컴팩트 막대."""
     rev = {c: 0 for c in CHANNELS}
     for r in items:
         d = r['data']
@@ -187,17 +187,16 @@ def _chan_recovery_html(items):
             comb = r['moves'].get(c, 0) + r.get('dist', {}).get(c, 0)
             rev[c] += (max(0, o - i) - max(0, o - (i + comb))) * d['price']
     mx = max(rev.values()) or 1
-    bars = []
+    out = []
     for c in sorted(CHANNELS, key=lambda x: -rev[x]):
         pct = rev[c] / mx * 100
-        bars.append(
-            f'<div style="display:flex;align-items:center;margin:4px 0">'
-            f'<div style="width:64px;color:#FFFFFF;font-size:12px">{CH_SHORT[c]}</div>'
-            f'<div style="flex:1;background:#1C2836;border-radius:4px;overflow:hidden;margin:0 8px">'
-            f'<div style="width:{pct:.0f}%;background:#4AE3B5;height:15px;border-radius:4px"></div></div>'
-            f'<div style="width:74px;text-align:right;color:#4AE3B5;font-size:12px;font-weight:bold">{rev[c]/1e8:.2f}억</div></div>')
-    return ('<div class="scenario-box" style="padding:8px 14px"><div style="color:#FFFFFF;font-weight:bold;'
-            'font-size:13px;margin-bottom:4px">📊 채널별 회수매출 (회전+분배)</div>' + ''.join(bars) + '</div>')
+        out.append(
+            f'<div style="display:flex;align-items:center;line-height:1.05;margin:1px 0">'
+            f'<span style="width:32px;color:#9FB0C0;font-size:9px">{CH_SHORT[c]}</span>'
+            f'<span style="flex:1;background:#1C2836;border-radius:2px;height:7px;overflow:hidden;margin:0 4px">'
+            f'<span style="display:block;width:{pct:.0f}%;background:#4AE3B5;height:7px"></span></span>'
+            f'<span style="width:38px;text-align:right;color:#4AE3B5;font-size:9px">{rev[c]/1e8:.2f}</span></div>')
+    return ''.join(out)
 
 
 def render_scenario(scenario_key, container, allow_slider=False):
@@ -295,15 +294,18 @@ def render_scenario(scenario_key, container, allow_slider=False):
         _units, _units_amt, _in, _amt, _dist, _rev, _sub = total_units, total_units_amt, total_in, total_amt, total_dist, total_rev, '전체 기준'
         _chart_items = filtered
     with kpi_ph:
-        k1, k2, k3, k4, k5, k6, k7 = st.columns(7)
+        k1, k2, k3, k4, k5, k6, k7 = st.columns([1, 1, 1, 1, 1, 2.1, 1])
         kpi_card(k1, '총 단품량', f'{_units:,}장', f'6채널 재고 합계 · {_sub}')
         kpi_card(k2, '총 이동량(회전)', f'{_in:,}장', f'주간 IN · {_sub}')
         kpi_card(k3, '분배량(반응과→)', f'{_dist:,}장', f'SCM 요청 · {_sub}')
         kpi_card(k4, '총 재고금액', f'{_units_amt/100000000:.1f}억', '재고수량 × 정상가')
         kpi_card(k5, '총 이동 금액', f'{_amt/100000000:.2f}억', '이동수량 × 정상가')
-        kpi_card(k6, '회수 매출', f'{_rev/100000000:.2f}억', f'주간 · 회전+분배 · {_sub}')
+        k6.markdown(
+            f'<div class="kpi-card"><div class="kpi-label">회수 매출 · 채널별(억)</div>'
+            f'<div class="kpi-value" style="font-size:21px">{_rev/100000000:.2f}억</div>'
+            f'<div style="margin-top:3px">{_chan_recovery_mini(_chart_items)}</div></div>',
+            unsafe_allow_html=True)
         kpi_card(k7, '연 환산', f'{_rev*52/100000000:.0f}억', '× 52주')
-        st.markdown(_chan_recovery_html(_chart_items), unsafe_allow_html=True)
 
     rows = []
     for r in filtered:
@@ -608,6 +610,76 @@ def _ch_effect(d, mv_ch, ch):
     return (max(0, o - i) - max(0, o - (i + mv_ch))) * p
 
 
+def _render_group(results_ch, keyfn, g_inv, g_ord, g_move, g_eff, g_ext, g_dist, keycol, namefn=False):
+    """아이템별/스타일별 집계표 — 단품 상세와 동일 지표를 그룹 합산하여 렌더(맨 위 합계행)."""
+    agg = {}
+    nm = {}
+    for r in results_ch:
+        d = r['data']; k = keyfn(r['code']); p = d.get('price', 0)
+        o = g_ord(d); i = g_inv(d)
+        a = agg.setdefault(k, dict(sku=0, ordd=0, inv=0, invamt=0, salesamt=0, ext=0, mv=0, dist=0, eff=0, item=0, urg=0))
+        a['sku'] += 1; a['ordd'] += o; a['inv'] += i; a['invamt'] += i * p; a['salesamt'] += o * p
+        a['ext'] += g_ext(d); a['mv'] += max(0, g_move(r)); a['dist'] += g_dist(r); a['eff'] += g_eff(r)
+        if o > 0:
+            a['item'] += 1
+            if i / o < 1:
+                a['urg'] += 1
+        if namefn:
+            nm.setdefault(k, d['name'])
+    tot_ord = sum(a['ordd'] for a in agg.values()) or 1
+
+    def mk(k, a):
+        woc = a['inv'] / a['ordd'] if a['ordd'] > 0 else None
+        daily = a['ordd'] / 7
+        row = {keycol: k}
+        if namefn:
+            v = nm.get(k, '')
+            row['대표 상품명'] = (v[:18] + '…') if len(v) > 18 else v
+        row.update({
+            'SKU수': a['sku'], '주간 판매량': a['ordd'], '일평균 판매량': round(daily, 1),
+            '일평균 매출(만원)': round(a['salesamt'] / 7 / 10000), '현 재고량': a['inv'],
+            '현 재고금액(만원)': round(a['invamt'] / 10000), '외부창고': a['ext'],
+            '현 재고주수': round(woc) if woc is not None else None,
+            '소진예상(일)': round(a['inv'] / daily) if daily > 0 else None,
+            '추천이동(회전)': a['mv'], '분배(반응과→)': a['dist'], '효과(만원)': round(a['eff'] / 10000),
+            '판매량 비중(%)': round(a['ordd'] / tot_ord * 100, 2),
+            '결품률(%)': round(a['urg'] / a['item'] * 100, 1) if a['item'] else 0.0,
+        })
+        return row
+
+    body = [mk(k, a) for k, a in agg.items() if not (a['inv'] == 0 and a['ordd'] == 0)]
+    body.sort(key=lambda x: -x['주간 판매량'])
+    if not body:
+        st.info('표시할 항목이 없습니다.')
+        return
+    T = {f: sum(a[f] for a in agg.values()) for f in ('sku', 'ordd', 'inv', 'invamt', 'salesamt', 'ext', 'mv', 'dist', 'eff', 'item', 'urg')}
+    woc = T['inv'] / T['ordd'] if T['ordd'] > 0 else None
+    daily = T['ordd'] / 7
+    sumrow = {keycol: '합계'}
+    if namefn:
+        sumrow['대표 상품명'] = f'{len(body):,}개'
+    sumrow.update({
+        'SKU수': T['sku'], '주간 판매량': T['ordd'], '일평균 판매량': round(daily, 1),
+        '일평균 매출(만원)': round(T['salesamt'] / 7 / 10000), '현 재고량': T['inv'],
+        '현 재고금액(만원)': round(T['invamt'] / 10000), '외부창고': T['ext'],
+        '현 재고주수': round(woc) if woc is not None else None,
+        '소진예상(일)': round(T['inv'] / daily) if daily > 0 else None,
+        '추천이동(회전)': T['mv'], '분배(반응과→)': T['dist'], '효과(만원)': round(T['eff'] / 10000),
+        '판매량 비중(%)': 100.0, '결품률(%)': round(T['urg'] / T['item'] * 100, 1) if T['item'] else 0.0,
+    })
+    df = pd.DataFrame([sumrow] + body)
+    styled = (df.style.map(_rate_color, subset=['결품률(%)'])
+              .map(woc_color, subset=['현 재고주수'])
+              .map(mv_color, subset=['추천이동(회전)', '분배(반응과→)'])
+              .apply(_hl_sum, axis=1)
+              .format({'SKU수': '{:,}'.format, '주간 판매량': '{:,}'.format, '일평균 판매량': '{:.1f}'.format,
+                       '일평균 매출(만원)': '{:,}'.format, '현 재고량': '{:,}'.format, '현 재고금액(만원)': '{:,}'.format,
+                       '외부창고': '{:,}'.format, '현 재고주수': _int0, '소진예상(일)': _int0,
+                       '추천이동(회전)': '{:,}'.format, '분배(반응과→)': '{:,}'.format, '효과(만원)': '{:,}'.format,
+                       '판매량 비중(%)': '{:.2f}'.format, '결품률(%)': '{:.1f}'.format}))
+    st.dataframe(styled, use_container_width=True, height=440, hide_index=True)
+
+
 def render_channel_tab():
     st.markdown("""
     <style>
@@ -647,6 +719,9 @@ def render_channel_tab():
 
     def g_eff(r):
         return r['revenue'] if is_all else _ch_effect(r['data'], r['moves'].get(channel_pick, 0), channel_pick)
+
+    def g_dist(r):
+        return r.get('dist_total', 0) if is_all else r.get('dist', {}).get(channel_pick, 0)
 
     def kcard(col, label, value, sub=''):
         col.markdown(f'<div class="kpi-card"><div class="kpi-label">{label}</div>'
@@ -741,84 +816,13 @@ def render_channel_tab():
 
     # ───────────── 아이템별 ─────────────
     with sub_item:
-        st.caption('아이템 = 상품코드 3~4번째 자리(예: SPPG23U07 → PG). 선택 채널 기준 집계 · 주간 판매량 높은 순. (맨 위 합계)')
-        iagg = {}
-        for r in results_ch:
-            d = r['data']; it = _item(r['code'])
-            o = g_ord(d); i = g_inv(d); p = d.get('price', 0)
-            a = iagg.setdefault(it, [0, 0, 0, 0, 0])
-            a[0] += i; a[1] += o; a[2] += i * p
-            if o > 0:
-                a[3] += 1
-                if i / o < 1:
-                    a[4] += 1
-        tsales = sum(a[1] for a in iagg.values()) or 1
-        t_inv = sum(a[0] for a in iagg.values())
-        t_amt = sum(a[2] for a in iagg.values())
-        t_it = sum(a[3] for a in iagg.values())
-        t_ur = sum(a[4] for a in iagg.values())
-        body = []
-        for it, a in iagg.items():
-            if a[0] == 0 and a[1] == 0:
-                continue
-            body.append({
-                '아이템': it, '총 재고량': a[0], '현 재고금액(만원)': round(a[2] / 10000),
-                '주간 판매량': a[1], '판매량 비중(%)': round(a[1] / tsales * 100, 2),
-                '결품률(%)': round(a[4] / a[3] * 100, 1) if a[3] else 0.0,
-            })
-        body.sort(key=lambda x: -x['주간 판매량'])
-        sumrow = {'아이템': '합계', '총 재고량': t_inv, '현 재고금액(만원)': round(t_amt / 10000),
-                  '주간 판매량': sum(x['주간 판매량'] for x in body),
-                  '판매량 비중(%)': 100.0, '결품률(%)': round(t_ur / t_it * 100, 1) if t_it else 0.0}
-        irows = [sumrow] + body
-        if body:
-            idf = pd.DataFrame(irows)
-            istyled = (idf.style.map(_rate_color, subset=['결품률(%)'])
-                       .apply(_hl_sum, axis=1)
-                       .format({'총 재고량': '{:,}'.format, '현 재고금액(만원)': '{:,}'.format,
-                                '주간 판매량': '{:,}'.format, '판매량 비중(%)': '{:.2f}'.format,
-                                '결품률(%)': '{:.1f}'.format}))
-            st.dataframe(istyled, use_container_width=True, height=440, hide_index=True)
-        st.caption('※ 직전일 재고·증감은 일일 스냅샷 연동(9/1) 후 표시. 현재는 당일 재고·주간 판매량 기준.')
+        st.caption('아이템 = 상품코드 3~4번째 자리(예: SPPG23U07 → PG). 선택 채널 기준 집계 · 단품 상세 지표 동일 · 맨 위 합계.')
+        _render_group(results_ch, _item, g_inv, g_ord, g_move, g_eff, g_ext, g_dist, '아이템')
+
     # ───────────── 스타일별 (상품코드 10자리) ─────────────
     with sub_style:
-        st.caption('스타일 = 상품코드 10자리 기준. 선택 채널 기준 집계 · 주간 판매량 높은 순. (맨 위 합계)')
-        sagg = {}
-        snm = {}
-        for r in results_ch:
-            d = r['data']; sc = r['code'][:10]
-            o = g_ord(d); i = g_inv(d); p = d.get('price', 0)
-            a = sagg.setdefault(sc, [0, 0, 0, 0, 0])
-            a[0] += i; a[1] += o; a[2] += i * p
-            if o > 0:
-                a[3] += 1
-                if i / o < 1:
-                    a[4] += 1
-            snm.setdefault(sc, d['name'])
-        ts = sum(a[1] for a in sagg.values()) or 1
-        sbody = []
-        for sc, a in sagg.items():
-            if a[0] == 0 and a[1] == 0:
-                continue
-            nm = snm.get(sc, '')
-            sbody.append({'스타일코드': sc, '대표 상품명': (nm[:20] + '…') if len(nm) > 20 else nm,
-                          '총 재고량': a[0], '현 재고금액(만원)': round(a[2] / 10000),
-                          '주간 판매량': a[1], '판매량 비중(%)': round(a[1] / ts * 100, 2),
-                          '결품률(%)': round(a[4] / a[3] * 100, 1) if a[3] else 0.0})
-        sbody.sort(key=lambda x: -x['주간 판매량'])
-        ssum = {'스타일코드': '합계', '대표 상품명': f'{len(sbody):,}개 스타일',
-                '총 재고량': sum(x['총 재고량'] for x in sbody),
-                '현 재고금액(만원)': sum(x['현 재고금액(만원)'] for x in sbody),
-                '주간 판매량': sum(x['주간 판매량'] for x in sbody), '판매량 비중(%)': 100.0,
-                '결품률(%)': round(sum(a[4] for a in sagg.values()) / max(1, sum(a[3] for a in sagg.values())) * 100, 1)}
-        srows = [ssum] + sbody
-        if sbody:
-            sdf = pd.DataFrame(srows)
-            sstyled = (sdf.style.map(_rate_color, subset=['결품률(%)']).apply(_hl_sum, axis=1)
-                       .format({'총 재고량': '{:,}'.format, '현 재고금액(만원)': '{:,}'.format,
-                                '주간 판매량': '{:,}'.format, '판매량 비중(%)': '{:.2f}'.format,
-                                '결품률(%)': '{:.1f}'.format}))
-            st.dataframe(sstyled, use_container_width=True, height=440, hide_index=True)
+        st.caption('스타일 = 상품코드 10자리 기준. 선택 채널 기준 집계 · 단품 상세 지표 동일 · 맨 위 합계.')
+        _render_group(results_ch, lambda c: c[:10], g_inv, g_ord, g_move, g_eff, g_ext, g_dist, '스타일코드', namefn=True)
 
     # ───────────── 단품 상세 ─────────────
     with sub_sku:
