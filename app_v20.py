@@ -192,8 +192,8 @@ def _chan_recovery_bar(items):
         for c in order)
     leg = '  '.join(
         f'<span style="color:{pal[c]};font-size:11px">●</span>'
-        f'<span style="color:#FFFFFF;font-size:10px"> {CH_SHORT[c]} {rev[c]/tot*100:.0f}%</span>'
-        for c in order[:3])
+        f'<span style="color:#FFFFFF;font-size:10px"> {CH_SHORT[c]} {rev[c]/1e8:.2f}억</span>'
+        for c in order[:4])
     return (f'<div style="display:flex;width:100%;border-radius:3px;overflow:hidden;margin:6px 0 4px">{seg}</div>'
             f'<div style="line-height:1.3">{leg}</div>')
 
@@ -237,7 +237,8 @@ def render_scenario(scenario_key, container, allow_slider=False):
     total_rev = sum(r['revenue'] for r in results)
 
     def kpi_card(col, label, value, sub=''):
-        col.markdown(f"""<div class="kpi-card"><div class="kpi-label">{label}</div>
+        col.markdown(f"""<div class="kpi-card" style="min-height:120px;display:flex;flex-direction:column;justify-content:center">
+            <div class="kpi-label">{label}</div>
             <div class="kpi-value">{value}</div><div class="kpi-sub">{sub}</div></div>""", unsafe_allow_html=True)
 
     kpi_ph = container.container()
@@ -297,7 +298,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
         kpi_card(k3, '총 재고금액', f'{_units_amt/100000000:.1f}억', '재고수량 × 정상가')
         kpi_card(k4, '총 이동 금액', f'{_amt/100000000:.2f}억', '이동수량 × 정상가')
         k5.markdown(
-            f'<div class="kpi-card"><div class="kpi-label">회수 매출 · 채널 구성</div>'
+            f'<div class="kpi-card" style="min-height:120px"><div class="kpi-label">회수 매출 · 채널 구성</div>'
             f'<div class="kpi-value">{_rev/100000000:.2f}억</div>'
             f'{_chan_recovery_bar(_chart_items)}</div>', unsafe_allow_html=True)
         kpi_card(k6, '연 환산', f'{_rev*52/100000000:.0f}억', '× 52주')
@@ -309,7 +310,8 @@ def render_scenario(scenario_key, container, allow_slider=False):
         cum = d.get('cum_rate', 0) * 100; wk = d.get('wk_rate', 0) * 100
         sv = d.get('wk_sales', 0)
         sales_str = f"{round(sv/10000):,}만" if sv else '-'
-        row = [r['code'], name, sales_str, f"{cum:.0f}%", f"{wk:.0f}%", f"{int(d['ship_rate']*100)}%"]
+        row = [r['code'], name, sales_str, f"{cum:.0f}%", f"{wk:.0f}%", f"{int(d['ship_rate']*100)}%",
+               f"{inv.get('반응과', 0):,}"]
         for c in CHANNELS:
             o = d['orders'].get(c, 0)
             w = inv.get(c, 0) / o if o > 0 else None
@@ -330,7 +332,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
     selected_rows = []
     if rows:
         columns = pd.MultiIndex.from_tuples(
-            [('', '단품코드'), ('', '단품명'), ('', '주간외형매출'), ('', '누판'), ('', '주판'), ('', '출고')] +
+            [('', '단품코드'), ('', '단품명'), ('', '주간외형매출'), ('', '누판'), ('', '주판'), ('', '출고'), ('', '반응과재고')] +
             [('현 재고보유주수', CH_SHORT[c]) for c in CHANNELS] +
             [('이동수량 (장)', CH_SHORT[c]) for c in CHANNELS] +
             [('이동 후 재고보유주수', CH_SHORT[c]) for c in CHANNELS] +
