@@ -1173,6 +1173,7 @@ def render_onepan_tab():
         topch = max(CHANNELS, key=lambda ch: d['orders'].get(ch, 0)) if to > 0 else '-'
         sty_code = code[:10]
         sty_name_full = smap.get(sty_code, d['name'])
+        woc_after = (ti + fillq) / to if to > 0 else None
         rows.append({
             '진단': grade,
             '스타일코드': sty_code,
@@ -1186,6 +1187,7 @@ def render_onepan_tab():
             '재고주수': round(woc, 1) if woc is not None else None,
             '필업요청(장)': fillq,
             '필업요청금액(만원)': round(fillq * price / 10000),
+            '이동 후 재고주수': round(woc_after, 1) if woc_after is not None else None,
             '예상 회수매출(만원)': round(fillq * price / 10000),
             '_sort': fillq,
             '_price': price,
@@ -1223,6 +1225,7 @@ def render_onepan_tab():
             elif woc < 1: grade = '🔴 X'
             elif woc < 4: grade = '🟡 M'
             else: grade = '🟢 S'
+            woc_after = (g['inv'] + g['qty']) / g['ord'] if g['ord'] > 0 else None
             top_list.append({
                 '진단': grade,
                 '스타일코드': sty,
@@ -1233,13 +1236,15 @@ def render_onepan_tab():
                 '재고주수': round(woc, 1) if woc is not None else None,
                 '필업요청(장)': g['qty'],
                 '필업요청금액(만원)': round(g['amt'] / 10000),
+                '이동 후 재고주수': round(woc_after, 1) if woc_after is not None else None,
                 '예상 회수매출(만원)': round(g['amt'] / 10000),
             })
         df_top = pd.DataFrame(top_list)
         styled_top = (df_top.style.map(_grade_color, subset=['진단'])
-                      .map(woc_color, subset=['재고주수'])
+                      .map(woc_color, subset=['재고주수', '이동 후 재고주수'])
                       .format({'현재고': '{:,}'.format, '주판': '{:,}'.format,
                                '재고주수': lambda v: '' if v is None else f'{v:.1f}',
+                               '이동 후 재고주수': lambda v: '' if v is None else f'{v:.1f}',
                                '필업요청(장)': '{:,}'.format,
                                '필업요청금액(만원)': '{:,}'.format,
                                '예상 회수매출(만원)': '{:,}'.format}))
@@ -1276,16 +1281,18 @@ def render_onepan_tab():
     view = view[:500]
     cols_order = ['진단', '스타일코드', '단품코드', '스타일명', '주력채널',
                   '현재고', '반응과 전체수량', '반응과 전체금액(만원)',
-                  '주판', '재고주수', '필업요청(장)', '필업요청금액(만원)', '예상 회수매출(만원)']
+                  '주판', '재고주수', '필업요청(장)', '필업요청금액(만원)',
+                  '이동 후 재고주수', '예상 회수매출(만원)']
     if view:
         df = pd.DataFrame([{kc: r[kc] for kc in cols_order} for r in view])
         styled = (df.style.map(_grade_color, subset=['진단'])
-                  .map(woc_color, subset=['재고주수'])
+                  .map(woc_color, subset=['재고주수', '이동 후 재고주수'])
                   .format({'현재고': '{:,}'.format, '주판': '{:,}'.format,
                            '반응과 전체수량': '{:,}'.format, '반응과 전체금액(만원)': '{:,}'.format,
                            '필업요청(장)': '{:,}'.format, '필업요청금액(만원)': '{:,}'.format,
                            '예상 회수매출(만원)': '{:,}'.format,
-                           '재고주수': lambda v: '' if v is None else f'{v:.1f}'}))
+                           '재고주수': lambda v: '' if v is None else f'{v:.1f}',
+                           '이동 후 재고주수': lambda v: '' if v is None else f'{v:.1f}'}))
         st.dataframe(styled, use_container_width=True, height=460, hide_index=True)
     else:
         st.info('조건에 맞는 단품이 없습니다.')
@@ -1358,27 +1365,42 @@ def render_reorder_request_tab():
         st.info('현재 결품 임박 스타일이 없습니다.')
         selected_styles = set()
     else:
-        hdr = st.columns([0.5, 0.8, 1.3, 3.0, 1.4, 1.4, 1.4])
-        for i, h in enumerate(['**선택**', '**진단**', '**스타일코드**', '**스타일명**',
-                                '**1주 주문액**', '**권장(2주)**', '**기대매출**']):
-            hdr[i].markdown(h)
-        selected_styles = set()
+        # 단품 표와 동일한 컬럼 양식 — 핵심 10 스타일도 같은 표로
+        top_list = []
         for sty, g in top_styles:
-            cc = st.columns([0.5, 0.8, 1.3, 3.0, 1.4, 1.4, 1.4])
-            checked = cc[0].checkbox('', value=True, key=f'styck_{sty}', label_visibility='collapsed')
-            if checked:
-                selected_styles.add(sty)
-            woc = (g['inv'] / g['ord']) if g['ord'] else None
+            woc = (g['inv'] / g['ord']) if g['ord'] > 0 else None
             if woc is None: grade = '–'
             elif woc < 1: grade = '🔴 X'
             elif woc < 4: grade = '🟡 M'
             else: grade = '🟢 S'
-            cc[1].markdown(grade)
-            cc[2].markdown(f'`{sty}`')
-            cc[3].markdown((g['name'][:32] + '…') if len(g['name']) > 32 else g['name'])
-            cc[4].markdown(f"{g['amt1w']/10000:,.0f} 만원")
-            cc[5].markdown(f"{g['reord']:,} 장")
-            cc[6].markdown(f"{g['exp']/10000:,.0f} 만원")
+            woc_after = (g['inv'] + g['reord']) / g['ord'] if g['ord'] > 0 else None
+            top_list.append({
+                '선택': True,
+                '진단': grade,
+                '스타일코드': sty,
+                '스타일명': (g['name'][:28] + '…') if len(g['name']) > 28 else g['name'],
+                '주력채널': '-',
+                '현재고': g['inv'],
+                '주판': g['ord'],
+                '재고주수': f"{round(woc, 1)}주" if woc is not None else '',
+                '필업요청(장)': g['reord'],
+                '필업요청금액(만원)': round(g['exp'] / 10000),
+                '이동 후 재고주수': f"{round(woc_after, 1)}주" if woc_after is not None else '',
+                '예상 회수매출(만원)': round(g['exp'] / 10000),
+            })
+        df_top = pd.DataFrame(top_list)
+        edited = st.data_editor(
+            df_top,
+            use_container_width=True,
+            hide_index=True,
+            height=400,
+            disabled=[c for c in df_top.columns if c != '선택'],
+            column_config={
+                '선택': st.column_config.CheckboxColumn('선택', default=True),
+            },
+            key='reo_top_editor',
+        )
+        selected_styles = set(edited[edited['선택']]['스타일코드'].tolist())
 
         sel_units = [u for sty, g in top_styles if sty in selected_styles for u in g['units']]
         sel_amt1w = sum(u['amt1w'] for u in sel_units)
@@ -1403,20 +1425,25 @@ def render_reorder_request_tab():
     view = [r for r in flt if (not q or r['code'].startswith(q) or r['sty_code'].startswith(q))][:topn]
 
     if view:
-        df = pd.DataFrame([{
-            '진단': r['grade'],
-            '스타일코드': r['sty_code'],
-            '단품코드': r['code'],
-            '스타일명': (r['sty_name'][:24] + '…') if len(r['sty_name']) > 24 else r['sty_name'],
-            '주력채널': '-',
-            '현재고': r['inv'],
-            '주판': r['ord'],
-            '재고주수': f"{r['woc']}주",
-            '필업요청(장)': r['reord2'],
-            '필업요청금액(만원)': round(r['exp'] / 10000),
-            '예상 회수매출(만원)': round(r['exp'] / 10000),
-        } for r in view])
-        styled = df.style.map(_grade_color, subset=['진단']).map(woc_color, subset=['재고주수']).format({
+        df_rows = []
+        for r in view:
+            woc_after = (r['inv'] + r['reord2']) / r['ord'] if r['ord'] > 0 else None
+            df_rows.append({
+                '진단': r['grade'],
+                '스타일코드': r['sty_code'],
+                '단품코드': r['code'],
+                '스타일명': (r['sty_name'][:24] + '…') if len(r['sty_name']) > 24 else r['sty_name'],
+                '주력채널': '-',
+                '현재고': r['inv'],
+                '주판': r['ord'],
+                '재고주수': f"{r['woc']}주",
+                '필업요청(장)': r['reord2'],
+                '필업요청금액(만원)': round(r['exp'] / 10000),
+                '이동 후 재고주수': f"{round(woc_after, 1)}주" if woc_after is not None else '',
+                '예상 회수매출(만원)': round(r['exp'] / 10000),
+            })
+        df = pd.DataFrame(df_rows)
+        styled = df.style.map(_grade_color, subset=['진단']).map(woc_color, subset=['재고주수', '이동 후 재고주수']).format({
             '현재고': '{:,}'.format, '주판': '{:,}'.format,
             '필업요청(장)': '{:,}'.format, '필업요청금액(만원)': '{:,}'.format,
             '예상 회수매출(만원)': '{:,}'.format})
@@ -1471,17 +1498,19 @@ def render_inbound_tab():
         r['pt'] = _mock_int(r['code'], 'pt', 0, max(1, r['short'] // 3))
         r['incoming'] = r['po'] + r['tr'] + r['pt']
 
-    # 상단: 스타일 그룹
-    st.markdown('#### ⭐ 입고 예정 — 스타일 기준 (굵직한 단위)')
+    # 상단: 스타일 그룹 — 단품 기준과 동일한 양식
+    st.markdown('#### ⭐ 입고 예정 — 스타일 기준')
     st.caption('스타일별 합산 입고예정·결품해소 효과 확인. 의사결정은 스타일 단위 → 단품 단위 순.')
     sty_grp = {}
     for r in rows:
         sty = r['code'][:10]
         g = sty_grp.setdefault(sty, {'units': [], 'name': r['name'],
                                      'inv': 0, 'ord': 0, 'incoming': 0,
+                                     'po': 0, 'tr': 0, 'pt': 0,
                                      'min_eta': 999})
         g['units'].append(r)
         g['inv'] += r['inv']; g['ord'] += r['ord']; g['incoming'] += r['incoming']
+        g['po'] += r['po']; g['tr'] += r['tr']; g['pt'] += r['pt']
         if r['eta'] < g['min_eta']:
             g['min_eta'] = r['eta']
     top_styles = sorted(sty_grp.items(), key=lambda kv: -kv[1]['ord'])[:15]
@@ -1491,21 +1520,23 @@ def render_inbound_tab():
         for sty, g in top_styles:
             eta_eff = g['incoming'] if (apply_in and g['min_eta'] < 7) else 0
             avail = g['inv'] + eta_eff
+            woc_cur = round(g['inv'] / g['ord'], 2) if g['ord'] else None
             woc2 = round(avail / g['ord'], 2) if g['ord'] else None
             sty_out.append({
                 '스타일코드': sty,
-                '대표 단품명': g['name'][:24] + ('…' if len(g['name']) > 24 else ''),
-                '단품수': len(g['units']),
-                '합산 현재고': g['inv'],
-                '주간판매': g['ord'],
+                '스타일명': (g['name'][:18] + '…') if len(g['name']) > 18 else g['name'],
+                '현재고': g['inv'], '주간판매': g['ord'],
+                '현재고주수': f"{woc_cur}주" if woc_cur is not None else '',
+                '🔌발주완료': g['po'], '🔌이동중': g['tr'], '🔌항만입항': g['pt'],
                 '🔌입고예정계': g['incoming'],
-                '최단 입고예정일': f"D-{g['min_eta']}",
+                '입고예정일': f"D-{g['min_eta']}",
                 '보정 가용재고': avail,
                 '보정 재고주수': (f"{woc2}주" if woc2 is not None else ''),
             })
         df_sty = pd.DataFrame(sty_out)
-        st_sty = df_sty.style.map(woc_color, subset=['보정 재고주수']).format(
-            {'단품수': '{:,}'.format, '합산 현재고': '{:,}'.format, '주간판매': '{:,}'.format,
+        st_sty = df_sty.style.map(woc_color, subset=['현재고주수', '보정 재고주수']).format(
+            {'현재고': '{:,}'.format, '주간판매': '{:,}'.format,
+             '🔌발주완료': '{:,}'.format, '🔌이동중': '{:,}'.format, '🔌항만입항': '{:,}'.format,
              '🔌입고예정계': '{:,}'.format, '보정 가용재고': '{:,}'.format})
         st.dataframe(st_sty, use_container_width=True, height=420, hide_index=True)
 
@@ -1624,53 +1655,4 @@ def render():
     reorder_info = get_reorder_info()
     if reorder_info['file']:
         reorder_txt = f"리오더 병합: {reorder_info['merged']:,}건 ({reorder_info['file']})"
-    else:
-        reorder_txt = '리오더 매핑 파일 없음 (reorder_mapping.csv 추가 시 자동 병합)'
-    col_a, col_b, col_c = st.columns([4, 1, 1])
-    with col_a:
-        st.caption(
-            f'마지막 갱신: **{last.strftime("%Y-%m-%d %H:%M")}**   |   '
-            f'다음 갱신: 매일 06:00 (Airflow · EHUB 06:00 & 샵링크 06:30 배치 후)   |   '
-            f'{reorder_txt}'
-        )
-    with col_b:
-        if st.button('🔄 새로고침', use_container_width=True):
-            st.rerun()
-    with col_c:
-        st.caption('v0.8')
-
-    # 메뉴군 — 2군(통합 재고뷰, 6번째)·3군(채널 IN-OUT, 9번째) 앞 간격
-    st.markdown("""
-    <style>
-    div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(6),
-    div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(9){
-        margin-left: 68px;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-    # 새 탭 순서:
-    # [기본/임의/실행효과/추가분배/리오더] | [통합재고뷰/채널세부/입고] | [IN-OUT/리오더매핑]
-    labels = ['🛡️ 재배치(기본)', '🎛️ 재배치(임의)', '📈 실행 효과',
-              '🧩 추가 분배', '🚨 리오더 요청',
-              '🏬 통합 재고뷰', '📊 채널 별 세부', '📦 입고 예정',
-              '🚫 채널 IN-OUT (MD 기입)', '🔁 리오더 매핑 (SCM 기입)']
-    t = st.tabs(labels)
-    with t[0]:
-        render_scenario('🛡️ 기본', st, allow_slider=False)
-    with t[1]:
-        render_scenario('🎛️ 사용자 정의', st, allow_slider=True)
-    with t[2]:
-        render_effect_tab()
-    with t[3]:
-        render_onepan_tab()
-    with t[4]:
-        render_reorder_request_tab()
-    with t[5]:
-        render_unified_tab()
-    with t[6]:
-        render_channel_tab()
-    with t[7]:
-        render_inbound_tab()
-    with t[8]:
-        render
+ 
