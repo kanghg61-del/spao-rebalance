@@ -1655,4 +1655,55 @@ def render():
     reorder_info = get_reorder_info()
     if reorder_info['file']:
         reorder_txt = f"리오더 병합: {reorder_info['merged']:,}건 ({reorder_info['file']})"
- 
+    else:
+        reorder_txt = '리오더 매핑 파일 없음 (reorder_mapping.csv 추가 시 자동 병합)'
+    col_a, col_b, col_c = st.columns([4, 1, 1])
+    with col_a:
+        st.caption(
+            f'마지막 갱신: **{last.strftime("%Y-%m-%d %H:%M")}**   |   '
+            f'다음 갱신: 매일 06:00 (Airflow · EHUB 06:00 & 샵링크 06:30 배치 후)   |   '
+            f'{reorder_txt}'
+        )
+    with col_b:
+        if st.button('🔄 새로고침', use_container_width=True):
+            st.rerun()
+    with col_c:
+        st.caption('v0.8')
+
+    # 메뉴군 — 2군(통합 재고뷰, 6번째)·3군(채널 IN-OUT, 9번째) 앞 간격
+    st.markdown("""
+    <style>
+    div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(6),
+    div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(9){
+        margin-left: 68px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # 탭: [기본/임의/실행효과/추가분배/리오더] | [통합재고뷰/채널세부/입고] | [IN-OUT/리오더매핑]
+    labels = ['🛡️ 재배치(기본)', '🎛️ 재배치(임의)', '📈 실행 효과',
+              '🧩 추가 분배', '🚨 리오더 요청',
+              '🏬 통합 재고뷰', '📊 채널 별 세부', '📦 입고 예정',
+              '🚫 채널 IN-OUT (MD 기입)', '🔁 리오더 매핑 (SCM 기입)']
+    t = st.tabs(labels)
+    with t[0]:
+        render_scenario('🛡️ 기본', st, allow_slider=False)
+    with t[1]:
+        render_scenario('🎛️ 사용자 정의', st, allow_slider=True)
+    with t[2]:
+        render_effect_tab()
+    with t[3]:
+        render_onepan_tab()
+    with t[4]:
+        render_reorder_request_tab()
+    with t[5]:
+        render_unified_tab()
+    with t[6]:
+        render_channel_tab()
+    with t[7]:
+        render_inbound_tab()
+    with t[8]:
+        render_excluded_tab()
+    with t[9]:
+        render_reorder_tab()
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  온라인 재고관리 Agent v0.8')
