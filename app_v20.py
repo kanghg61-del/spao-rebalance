@@ -639,12 +639,14 @@ def _render_group(results_ch, keyfn, g_inv, g_ord, g_move, g_eff, g_ext, keycol,
             v = nm.get(k, '')
             row['대표 상품명'] = (v[:18] + '…') if len(v) > 18 else v
         row.update({
-            'SKU수': a['sku'], '주간 판매량': a['ordd'], '일평균 판매량': round(daily, 1),
+            '주간 판매량': a['ordd'], '일평균 판매량': round(daily, 1),
             '일평균 매출(만원)': round(a['salesamt'] / 7 / 10000), '현 재고량': a['inv'],
             '현 재고금액(만원)': round(a['invamt'] / 10000), '외부창고': a['ext'],
             '현 재고주수': round(woc) if woc is not None else None,
             '소진예상(일)': round(a['inv'] / daily) if daily > 0 else None,
-            '추천이동(회전)': a['mv'], '효과(만원)': round(a['eff'] / 10000),
+            '추천이동(회전)': a['mv'],
+            '이동 후 재고주수': round((a['inv'] + a['mv']) / a['ordd']) if a['ordd'] > 0 else None,
+            '효과(만원)': round(a['eff'] / 10000),
             '판매량 비중(%)': round(a['ordd'] / tot_ord * 100, 2),
             '결품률(%)': round(a['urg'] / a['item'] * 100, 1) if a['item'] else 0.0,
         })
@@ -662,22 +664,25 @@ def _render_group(results_ch, keyfn, g_inv, g_ord, g_move, g_eff, g_ext, keycol,
     if namefn:
         sumrow['대표 상품명'] = f'{len(body):,}개'
     sumrow.update({
-        'SKU수': T['sku'], '주간 판매량': T['ordd'], '일평균 판매량': round(daily, 1),
+        '주간 판매량': T['ordd'], '일평균 판매량': round(daily, 1),
         '일평균 매출(만원)': round(T['salesamt'] / 7 / 10000), '현 재고량': T['inv'],
         '현 재고금액(만원)': round(T['invamt'] / 10000), '외부창고': T['ext'],
         '현 재고주수': round(woc) if woc is not None else None,
         '소진예상(일)': round(T['inv'] / daily) if daily > 0 else None,
-        '추천이동(회전)': T['mv'], '효과(만원)': round(T['eff'] / 10000),
+        '추천이동(회전)': T['mv'],
+        '이동 후 재고주수': round((T['inv'] + T['mv']) / T['ordd']) if T['ordd'] > 0 else None,
+        '효과(만원)': round(T['eff'] / 10000),
         '판매량 비중(%)': 100.0, '결품률(%)': round(T['urg'] / T['item'] * 100, 1) if T['item'] else 0.0,
     })
     df = pd.DataFrame([sumrow] + body)
     styled = (df.style.map(_rate_color, subset=['결품률(%)'])
-              .map(woc_color, subset=['현 재고주수'])
+              .map(woc_color, subset=['현 재고주수', '이동 후 재고주수'])
               .map(mv_color, subset=['추천이동(회전)'])
               .apply(_hl_sum, axis=1)
-              .format({'SKU수': '{:,}'.format, '주간 판매량': '{:,}'.format, '일평균 판매량': '{:.1f}'.format,
+              .format({'주간 판매량': '{:,}'.format, '일평균 판매량': '{:.1f}'.format,
                        '일평균 매출(만원)': '{:,}'.format, '현 재고량': '{:,}'.format, '현 재고금액(만원)': '{:,}'.format,
-                       '외부창고': '{:,}'.format, '현 재고주수': _woc, '소진예상(일)': _int0,
+                       '외부창고': '{:,}'.format, '현 재고주수': _woc, '이동 후 재고주수': _woc,
+                       '소진예상(일)': _int0,
                        '추천이동(회전)': '{:,}'.format, '효과(만원)': '{:,}'.format,
                        '판매량 비중(%)': '{:.2f}'.format, '결품률(%)': '{:.1f}'.format}))
     st.dataframe(styled, use_container_width=True, height=440, hide_index=True)
@@ -1112,9 +1117,9 @@ def render_onepan_tab():
     st.markdown('### 🧩 추가 분배')
     st.markdown(
         '<div class="scenario-box">스파오 6개 엑셀(공홈 결품체크·계산기, 네이버/지그재그/키즈 한판, 지그재그 마케팅)을 '
-        '한 화면으로 흡수하는 통합 단품판. <b>진단등급(S/M/X)·현재고·주판·재고주수·필업 요청수량·주력채널은 실데이터</b>, '
+        '한 화면으로 흡수하는 통합 단품판. <b>진단(S/M/X)·현재고·주판·재고주수·필업 요청수량·주력채널은 실데이터</b>, '
         '<b>🔌 필업박스(아소트 박스당 피스)·마케팅(메가위크/라이브 가중)은 9/1 연동/마스터 확보 후 표시</b>입니다. '
-        '진단: 🟢S 우수(≥2주) · 🟡M 주의(1~2주) · 🔴X 결품임박(&lt;1주). 필업요청 = 목표 4주 − 현재고(공홈 계산기 안전계수).</div>',
+        '진단: 🔴 X 결품임박(&lt;1주) · 🟡 M 주의(1~4주) · 🟢 S 정상(≥4주) — 채널별 세부 탭과 동일 기준.</div>',
         unsafe_allow_html=True)
 
     skus = load_data_v20()
@@ -1132,10 +1137,10 @@ def render_onepan_tab():
             grade = '– 무판매'
         elif woc < 1:
             grade = '🔴 X 결품임박'; nX += 1
-        elif woc < 2:
+        elif woc < 4:
             grade = '🟡 M 주의'; nM += 1
         else:
-            grade = '🟢 S 우수'; nS += 1
+            grade = '🟢 S 정상'; nS += 1
         fillq = max(0, round(4 * to - ti)) if to > 0 else 0
         fill_q += fillq
         fill_amt += fillq * d.get('price', 0)
@@ -1147,18 +1152,52 @@ def render_onepan_tab():
             '재고주수': round(woc, 1) if woc is not None else None,
             '필업요청(장)': fillq, '🔌필업박스': '—', '🔌마케팅': '—',
             '_sort': fillq,
+            '_price': d.get('price', 0),
         })
 
     k = st.columns(5)
     _kpi(k[0], '🔴 결품임박(X)', f'{nX:,}건', '재고주수 < 1주')
-    _kpi(k[1], '🟡 주의(M)', f'{nM:,}건', '1~2주')
-    _kpi(k[2], '🟢 우수(S)', f'{nS:,}건', '≥ 2주')
+    _kpi(k[1], '🟡 주의(M)', f'{nM:,}건', '1~4주')
+    _kpi(k[2], '🟢 정상(S)', f'{nS:,}건', '≥ 4주')
     _kpi(k[3], '📦 필업 요청수량', f'{fill_q:,}장', '목표 4주 − 현재고')
     _kpi(k[4], '💰 필업 요청금액', f'{fill_amt/1e8:.1f}억', '필업 × 정상가')
 
+    # ── 추가 분배 핵심 10 스타일 ─────────────────────────────────────
+    st.markdown('#### ⭐ 추가 분배 핵심 10 스타일')
+    st.caption('단품을 스타일(단품코드 앞 10자리)로 묶어 **필업 요청금액(필업×정상가) 큰 순** 정렬. '
+               '핵심 스타일만 우선 분배해도 결품 영향이 큰 매출 회수 효과를 얻습니다.')
+    style_grp = {}
+    for r in rows:
+        sty = r['단품코드'][:10]
+        g = style_grp.setdefault(sty, {'units': [], 'amt': 0, 'qty': 0, 'name': r['상품명']})
+        g['units'].append(r)
+        g['amt'] += r['필업요청(장)'] * r['_price']
+        g['qty'] += r['필업요청(장)']
+    top10 = sorted(style_grp.items(), key=lambda kv: -kv[1]['amt'])[:10]
+    if top10:
+        df_top = pd.DataFrame([{
+            '순위': i + 1, '스타일코드': sty, '대표 단품명': g['name'],
+            '단품수': len(g['units']), '필업 요청수량(장)': g['qty'],
+            '필업 요청금액(만원)': round(g['amt'] / 10000),
+            '예상 회수매출(만원)': round(g['amt'] / 10000),
+        } for i, (sty, g) in enumerate(top10)])
+        st.dataframe(df_top.style.format({'단품수': '{:,}'.format, '필업 요청수량(장)': '{:,}'.format,
+                                          '필업 요청금액(만원)': '{:,}'.format, '예상 회수매출(만원)': '{:,}'.format}),
+                     use_container_width=True, height=400, hide_index=True)
+        top10_amt = sum(g['amt'] for _, g in top10)
+        share = (top10_amt / fill_amt * 100) if fill_amt else 0
+        st.markdown(f'<div class="scenario-box">⭐ <b>상위 10 스타일 합산 기대매출: {top10_amt/1e8:.2f}억</b> '
+                    f'({share:.0f}% / 전체 필업 요청금액 {fill_amt/1e8:.1f}억). '
+                    '10 스타일만 우선 처리해도 결품 영향 매출의 큰 부분을 회수합니다.</div>',
+                    unsafe_allow_html=True)
+    else:
+        st.info('표시할 핵심 스타일이 없습니다.')
+
+    # ── 전체 단품 리스트 ────────────────────────────────────────────────
+    st.markdown('#### 📋 전체 단품 리스트')
     f1, f2, f3 = st.columns([1.5, 3, 2])
     with f1:
-        g = st.selectbox('진단', ['전체', '🔴 X 결품임박', '🟡 M 주의', '🟢 S 우수'], key='op_grade')
+        g = st.selectbox('진단', ['전체', '🔴 X 결품임박', '🟡 M 주의', '🟢 S 정상'], key='op_grade')
     with f2:
         q = st.text_input('검색 (단품코드 앞 10자리)', key='op_q').strip().upper()
     with f3:
@@ -1179,12 +1218,12 @@ def render_onepan_tab():
     view = view[:500]
 
     if view:
-        df = pd.DataFrame([{kk: vv for kk, vv in r.items() if kk != '_sort'} for r in view])
+        df = pd.DataFrame([{kk: vv for kk, vv in r.items() if kk not in ('_sort', '_price')} for r in view])
         styled = (df.style.map(_grade_color, subset=['진단'])
                   .map(woc_color, subset=['재고주수'])
                   .format({'현재고': '{:,}'.format, '주판': '{:,}'.format,
                            '필업요청(장)': '{:,}'.format, '재고주수': lambda v: '' if v is None else f'{v:.1f}'}))
-        st.dataframe(styled, use_container_width=True, height=520, hide_index=True)
+        st.dataframe(styled, use_container_width=True, height=460, hide_index=True)
     else:
         st.info('조건에 맞는 단품이 없습니다.')
 
@@ -1194,7 +1233,6 @@ def render_onepan_tab():
     actx, acty, _ = st.columns([2, 2, 4])
     target_count = len(view)
     target_qty = sum(r['필업요청(장)'] for r in view)
-    target_amt = sum(r['필업요청(장)'] * r.get('_sort', 0) * 0 for r in view)  # placeholder
     with actx:
         if st.button(f'⚡ 직접 실행 ({target_count:,}건)', type='primary',
                      use_container_width=True, key='op_exec',
@@ -1217,63 +1255,71 @@ def render_reorder_request_tab():
     st.caption('결품 임박(온라인 합산 재고주수 < 1주) 단품을 자동 추출합니다. 회전(재배치)으로 못 메우는 잠재 결품을 '
                '리오더로 연결 — ARS가 베스트만 관리하는 것과 달리 **워스트(잠재 결품)까지 관리**합니다. (실데이터)')
     rows = imminent_rows()
+    # 1주 기준 재계산 (입력 데이터 = 1주 주판량)
+    for r in rows:
+        r['amt1w'] = r['ord'] * r['price']
+        r['reord2'] = max(0, r['ord'] * 2 - r['inv'])
+        r['exp'] = r['reord2'] * r['price']
+
     c1, c2, c3 = st.columns(3)
     _kpi(c1, '결품 임박 단품', f'{len(rows):,}건', '재고주수 < 1주')
-    _kpi(c2, '4주 결품 노출액', f"{sum(r['loss'] for r in rows)/1e8:.1f}억", '부족분 × 정상가')
-    _kpi(c3, '리오더 권장 물량', f"{sum(r['short'] for r in rows):,}장", '4주 수요 − 현재고')
+    _kpi(c2, '1주 결품 노출액', f"{sum(r['amt1w'] for r in rows)/1e8:.1f}억", '1주 주판 × 정상가')
+    _kpi(c3, '리오더 권장 물량 (2주분)', f"{sum(r['reord2'] for r in rows):,}장", '2주 수요 − 현재고')
 
-    # ── 핵심 10 스타일 (스타일 = 단품코드 앞 10자리) ─────────────────
-    st.markdown('#### ⭐ 매출 핵심 10 스타일 — 리오더 우선 검토 대상')
-    st.caption('단품을 스타일(단품코드 앞 10자리)로 묶어 **4주 결품 노출액 큰 순**으로 정렬. '
-               '체크박스 선택 시 그 스타일의 단품 + 합산 기대효과가 아래 단품판·메일 초안에 자동 반영됩니다.')
+    # ── 리오더 우선 검토 10 스타일 ────────────────────────────────────
+    st.markdown('#### ⭐ 리오더 우선 검토 10 스타일')
+    st.caption('단품을 스타일(단품코드 앞 10자리)로 묶어 **1주 주문액 큰 순** 정렬. '
+               '체크박스 선택 시 그 스타일의 단품 + 합산 기대매출이 아래 단품판·메일 초안에 자동 반영됩니다.')
 
     style_groups = {}
     for r in rows:
         sty = r['code'][:10]
-        g = style_groups.setdefault(sty, {'units': [], 'loss': 0, 'short': 0, 'name': r['name']})
+        g = style_groups.setdefault(sty, {'units': [], 'amt1w': 0, 'reord': 0, 'exp': 0, 'name': r['name']})
         g['units'].append(r)
-        g['loss'] += r['loss']
-        g['short'] += r['short']
-    top_styles = sorted(style_groups.items(), key=lambda kv: -kv[1]['loss'])[:10]
+        g['amt1w'] += r['amt1w']
+        g['reord'] += r['reord2']
+        g['exp'] += r['exp']
+    top_styles = sorted(style_groups.items(), key=lambda kv: -kv[1]['amt1w'])[:10]
 
     if not top_styles:
         st.info('현재 결품 임박 스타일이 없습니다.')
         selected_styles = set()
     else:
-        # 헤더 + 행 그리드 — 체크박스 / 스타일코드 / 단품수 / 4주 노출액 / 권장 / 대표 단품명
-        hdr = st.columns([0.6, 1.6, 0.8, 1.4, 1.2, 3.4])
+        # 헤더 + 행: 선택 / 순위 / 스타일코드 / 대표 단품명 / 1주 주문액 / 권장 리오더(2주)
+        hdr = st.columns([0.5, 0.6, 1.5, 3.0, 1.5, 1.5])
         hdr[0].markdown('**선택**')
-        hdr[1].markdown('**스타일코드**')
-        hdr[2].markdown('**단품수**')
-        hdr[3].markdown('**4주 노출액**')
-        hdr[4].markdown('**권장 리오더**')
-        hdr[5].markdown('**대표 단품명**')
+        hdr[1].markdown('**순위**')
+        hdr[2].markdown('**스타일코드**')
+        hdr[3].markdown('**대표 단품명**')
+        hdr[4].markdown('**1주 주문액**')
+        hdr[5].markdown('**권장 리오더(2주)**')
         selected_styles = set()
-        for sty, g in top_styles:
-            cc = st.columns([0.6, 1.6, 0.8, 1.4, 1.2, 3.4])
+        for i, (sty, g) in enumerate(top_styles):
+            cc = st.columns([0.5, 0.6, 1.5, 3.0, 1.5, 1.5])
             checked = cc[0].checkbox('', value=True, key=f'styck_{sty}', label_visibility='collapsed')
             if checked:
                 selected_styles.add(sty)
-            cc[1].markdown(f'`{sty}`')
-            cc[2].markdown(f"{len(g['units']):,}")
-            cc[3].markdown(f"{g['loss']/10000:,.0f} 만원")
-            cc[4].markdown(f"{g['short']:,} 장")
-            cc[5].markdown(g['name'][:28] + ('…' if len(g['name']) > 28 else ''))
+            cc[1].markdown(f'{i+1}')
+            cc[2].markdown(f'`{sty}`')
+            cc[3].markdown(g['name'][:32] + ('…' if len(g['name']) > 32 else ''))
+            cc[4].markdown(f"{g['amt1w']/10000:,.0f} 만원")
+            cc[5].markdown(f"{g['reord']:,} 장")
 
-        # 선택된 스타일의 합산 기대효과 KPI
+        # 선택된 스타일의 합산 KPI
         sel_units = [u for sty, g in top_styles if sty in selected_styles for u in g['units']]
-        sel_loss = sum(u['loss'] for u in sel_units)
-        sel_short = sum(u['short'] for u in sel_units)
+        sel_amt1w = sum(u['amt1w'] for u in sel_units)
+        sel_reord = sum(u['reord2'] for u in sel_units)
+        sel_exp = sum(u['exp'] for u in sel_units)
         e1, e2, e3 = st.columns(3)
-        _kpi(e1, '✅ 선택 스타일', f'{len(selected_styles):,}개', f"단품 {len(sel_units):,}건")
-        _kpi(e2, '💰 합산 기대효과 (리오더 시 회수)', f'{sel_loss/1e8:.2f}억', '4주 결품 노출액 = 부족분 × 정상가')
-        _kpi(e3, '📦 합산 리오더 권장 물량', f'{sel_short:,}장', '4주 수요 − 현재고')
+        _kpi(e1, '✅ 선택 스타일', f'{len(selected_styles):,}개', f'1주 주문액 {sel_amt1w/1e8:.2f}억')
+        _kpi(e2, '📦 합산 권장 리오더 (2주분)', f'{sel_reord:,}장', '2주 수요 − 현재고')
+        _kpi(e3, '💰 리오더 시 기대매출', f'{sel_exp/1e8:.2f}억', '권장리오더 × 정상가')
 
-    # ── 단품판 (선택 스타일에 한정) ─────────────────────────────────
+    # ── 단품 리스트 ───────────────────────────────────────────────────
     st.markdown('#### 📋 리오더 대상 단품 리스트')
     f1, f2 = st.columns([3, 2])
     with f1:
-        q = st.text_input('단품코드 검색', placeholder='앞 10자리 입력 (예: SPCKG24G01)', key='aica_reo_q').strip().upper()
+        q = st.text_input('단품코드 검색', placeholder='앞 10자리 입력', key='aica_reo_q').strip().upper()
     with f2:
         topn = st.selectbox('표시 건수', [30, 50, 100, 200], index=1, key='aica_reo_top')
     if top_styles and selected_styles:
@@ -1286,33 +1332,36 @@ def render_reorder_request_tab():
         '온라인순위': r['rank'], '단품코드': r['code'],
         '단품명': (r['name'][:20] + '…') if len(r['name']) > 20 else r['name'],
         '현재고(장)': r['inv'], '주간판매(장)': r['ord'], '재고주수': f"{r['woc']}주",
-        '4주 수요(장)': r['wk4'], '리오더 권장(장)': r['short'], '노출액(만원)': round(r['loss'] / 10000),
+        '1주 주문액(만원)': round(r['amt1w'] / 10000),
+        '권장 리오더(2주, 장)': r['reord2'],
+        '기대매출(만원)': round(r['exp'] / 10000),
     } for r in view])
     if not df.empty:
-        styled = df.style.map(woc_color, subset=['재고주수']).format({'노출액(만원)': '{:,}'.format})
+        styled = df.style.map(woc_color, subset=['재고주수']).format(
+            {'1주 주문액(만원)': '{:,}'.format, '권장 리오더(2주, 장)': '{:,}'.format,
+             '기대매출(만원)': '{:,}'.format})
         st.dataframe(styled, use_container_width=True, height=380, hide_index=True)
     else:
         st.info('선택한 스타일에 해당하는 단품이 없습니다.')
 
-    # ── 메일 초안 (선택 스타일 기준) ─────────────────────────────────
+    # ── 메일 초안 ────────────────────────────────────────────────────
     st.markdown('#### ✉️ 리오더 요청 메일 초안')
-    st.caption('직접 명령하지 않고, **요청 가능한 상태 + 4주 판매량 데이터**까지만 제공합니다(6/12 합의). '
-               '선택된 핵심 스타일을 우선 노출.')
+    st.caption('직접 명령하지 않고, **요청 가능한 상태 + 1주 주문량 + 2주 권장 리오더**까지만 제공합니다(6/12 합의).')
     n_mail = min(10, len(view))
     body = [
-        f'제목: [리오더 요청] 결품 임박 단품 {n_mail}건 검토 요청 — 핵심 스타일 {len(selected_styles)}개',
+        f'제목: [리오더 요청] 결품 임박 단품 {n_mail}건 검토 요청 — 우선 검토 스타일 {len(selected_styles)}개',
         '',
-        '안녕하세요. 온라인 재고 모니터링 기준 1주 내 결품이 예상되는 핵심 스타일/단품입니다.',
-        '4주 판매량 대비 부족분 기준 리오더 검토 부탁드립니다.',
+        '안녕하세요. 온라인 재고 모니터링 기준 1주 내 결품이 예상되는 우선 검토 단품입니다.',
+        '1주 주문량 기준 2주 안전재고 확보를 위한 리오더 검토 부탁드립니다.',
         '',
-        f"{'단품코드':<17}{'4주수요':>7}{'현재고':>7}{'권장리오더':>9}  단품명",
+        f"{'단품코드':<17}{'주판':>5}{'현재고':>7}{'권장(2주)':>10}  단품명",
     ]
     for r in view[:n_mail]:
-        body.append(f"{r['code']:<17}{r['wk4']:>7}{r['inv']:>7}{r['short']:>9}  {r['name'][:18]}")
+        body.append(f"{r['code']:<17}{r['ord']:>5}{r['inv']:>7}{r['reord2']:>10}  {r['name'][:18]}")
     if top_styles and selected_styles:
         sel_units_all = [u for sty, g in top_styles if sty in selected_styles for u in g['units']]
-        sel_loss_all = sum(u['loss'] for u in sel_units_all)
-        body += ['', f'합산 기대효과(선택 스타일): {sel_loss_all/1e8:.2f}억 (4주 결품 노출액 회수 기준)']
+        sel_exp_all = sum(u['exp'] for u in sel_units_all)
+        body += ['', f'선택 스타일 합산 기대매출: {sel_exp_all/1e8:.2f}억 (권장 리오더 × 정상가)']
     body += ['', '※ 본 메일은 자동 추출한 초안입니다. 실제 발주는 MD 검토 후 진행해 주세요.']
     st.text_area('메일 초안 (복사해서 사용)', value='\n'.join(body), height=260, key='aica_reo_mail')
 
@@ -1327,31 +1376,84 @@ def render_reorder_request_tab():
 
 def render_inbound_tab():
     st.markdown('### 📦 입고 예정')
-    st.markdown('<div class="scenario-box">🔌 <b>신규 데이터 — 9/1 API/수기 연동 예정</b>. 발주완료·이동중·항만입항(입항 중) '
-                '수량을 가용재고에 더해 결품 판정을 보정합니다. <b>아래 입고예정 수치는 데모(mock)</b>이며, 현재고·주간판매는 실데이터입니다.</div>',
+    st.markdown('<div class="scenario-box">🔌 <b>신규 데이터 — 9/1 API/수기 연동 예정</b>. 발주완료·이동중·항만입항 '
+                '수량을 입고예정일(D-day) 기준 가용재고에 더해 결품 판정을 보정합니다. '
+                '<b>입고예정일이 D-7 미만(오늘부터 7일 이내)인 경우만 +반영</b> — 그 외는 표시만. '
+                '<b>아래 입고예정 수치·예정일은 데모(mock)</b>이며, 현재고·주간판매는 실데이터입니다.</div>',
                 unsafe_allow_html=True)
-    apply_in = st.toggle('입고 예정 반영 (가용재고 = 현재고 + 입고예정)', value=True, key='aica_in_apply')
+    apply_in = st.toggle('입고 예정 반영 (D-7 미만만 가용재고 = 현재고 + 입고예정)', value=True, key='aica_in_apply')
 
-    rows = imminent_rows()[:60]
+    rows = imminent_rows()
+    # 입고 예정 mock (단품별 결정적, 0~21일 후)
+    for r in rows:
+        r['eta'] = _mock_int(r['code'], 'eta', 0, 21)
+        r['po'] = _mock_int(r['code'], 'po', 0, max(1, r['short']))
+        r['tr'] = _mock_int(r['code'], 'tr', 0, max(1, r['short'] // 2))
+        r['pt'] = _mock_int(r['code'], 'pt', 0, max(1, r['short'] // 3))
+        r['incoming'] = r['po'] + r['tr'] + r['pt']
+
+    # ── 상단: 스타일 그룹 (굵직한 단위) ───────────────────────────────
+    st.markdown('#### ⭐ 입고 예정 — 스타일 기준 (굵직한 단위)')
+    st.caption('스타일별 합산 입고예정·결품해소 효과 확인. 의사결정은 스타일 단위 → 단품 단위 순으로.')
+    sty_grp = {}
+    for r in rows:
+        sty = r['code'][:10]
+        g = sty_grp.setdefault(sty, {'units': [], 'name': r['name'],
+                                     'inv': 0, 'ord': 0, 'incoming': 0,
+                                     'min_eta': 999})
+        g['units'].append(r)
+        g['inv'] += r['inv']; g['ord'] += r['ord']; g['incoming'] += r['incoming']
+        if r['eta'] < g['min_eta']:
+            g['min_eta'] = r['eta']
+    top_styles = sorted(sty_grp.items(), key=lambda kv: -kv[1]['ord'])[:15]
+
+    if top_styles:
+        sty_out = []
+        for sty, g in top_styles:
+            eta_eff = g['incoming'] if (apply_in and g['min_eta'] < 7) else 0
+            avail = g['inv'] + eta_eff
+            woc2 = round(avail / g['ord'], 2) if g['ord'] else None
+            sty_out.append({
+                '스타일코드': sty,
+                '대표 단품명': g['name'][:24] + ('…' if len(g['name']) > 24 else ''),
+                '단품수': len(g['units']),
+                '합산 현재고': g['inv'],
+                '주간판매': g['ord'],
+                '🔌입고예정계': g['incoming'],
+                '최단 입고예정일': f"D-{g['min_eta']}",
+                '보정 가용재고': avail,
+                '보정 재고주수': (f"{woc2}주" if woc2 is not None else ''),
+            })
+        df_sty = pd.DataFrame(sty_out)
+        st_sty = df_sty.style.map(woc_color, subset=['보정 재고주수']).format(
+            {'단품수': '{:,}'.format, '합산 현재고': '{:,}'.format, '주간판매': '{:,}'.format,
+             '🔌입고예정계': '{:,}'.format, '보정 가용재고': '{:,}'.format})
+        st.dataframe(st_sty, use_container_width=True, height=420, hide_index=True)
+
+    # ── 하단: 단품 ──────────────────────────────────────────────────────
+    st.markdown('#### 📋 입고 예정 — 단품 기준 (상세)')
+    sku_rows = rows[:60]
     out = []
     resolved = 0
-    for r in rows:
-        po = _mock_int(r['code'], 'po', 0, max(1, r['short']))
-        transit = _mock_int(r['code'], 'tr', 0, max(1, r['short'] // 2))
-        port = _mock_int(r['code'], 'pt', 0, max(1, r['short'] // 3))
-        incoming = po + transit + port
-        avail = r['inv'] + (incoming if apply_in else 0)
+    for r in sku_rows:
+        eta_eff = r['incoming'] if (apply_in and r['eta'] < 7) else 0
+        avail = r['inv'] + eta_eff
         woc2 = round(avail / r['ord'], 2) if r['ord'] else None
         if apply_in and woc2 is not None and woc2 >= 1:
             resolved += 1
         out.append({
-            '단품코드': r['code'], '현재고': r['inv'], '주간판매': r['ord'], '현재고주수': f"{r['woc']}주",
-            '🔌발주완료': po, '🔌이동중': transit, '🔌항만입항': port, '🔌입고예정계': incoming,
-            '보정 가용재고': avail, '보정 재고주수': (f"{woc2}주" if woc2 is not None else ''),
+            '단품코드': r['code'],
+            '단품명': (r['name'][:18] + '…') if len(r['name']) > 18 else r['name'],
+            '현재고': r['inv'], '주간판매': r['ord'], '현재고주수': f"{r['woc']}주",
+            '🔌발주완료': r['po'], '🔌이동중': r['tr'], '🔌항만입항': r['pt'],
+            '🔌입고예정계': r['incoming'],
+            '입고예정일': f"D-{r['eta']}",
+            '보정 가용재고': avail,
+            '보정 재고주수': (f"{woc2}주" if woc2 is not None else ''),
         })
     c1, c2 = st.columns(2)
-    _kpi(c1, '입고예정 반영 시 결품 해소', f'{resolved:,}건' if apply_in else '—', '보정 재고주수 ≥ 1주 (mock)')
-    _kpi(c2, '검토 대상', f'{len(rows):,}건', '결품 임박 상위')
+    _kpi(c1, '입고예정(D-7 이내) 반영 시 결품 해소', f'{resolved:,}건' if apply_in else '—', '보정 재고주수 ≥ 1주 (mock)')
+    _kpi(c2, '검토 대상', f'{len(sku_rows):,}건', '결품 임박 상위')
     if out:
         df = pd.DataFrame(out)
         styled = df.style.map(woc_color, subset=['현재고주수', '보정 재고주수']).format(
@@ -1359,7 +1461,7 @@ def render_inbound_tab():
              '🔌발주완료': '{:,}'.format, '🔌이동중': '{:,}'.format, '🔌항만입항': '{:,}'.format,
              '🔌입고예정계': '{:,}'.format, '보정 가용재고': '{:,}'.format})
         st.dataframe(styled, use_container_width=True, height=440, hide_index=True)
-    st.caption('🔌 입고예정 3종 데이터는 9/1 API/수기 입력 연동 후 실데이터로 대체됩니다.')
+    st.caption('🔌 입고예정 3종 + 입고예정일은 9/1 API/수기 입력 연동 후 실데이터로 대체. 현재는 단품별 결정적 mock(0~21일).')
 
 
 def render():
@@ -1408,11 +1510,4 @@ def render():
     with t[4]:
         render_reorder_request_tab()
     with t[5]:
-        render_channel_tab()
-    with t[6]:
-        render_inbound_tab()
-    with t[7]:
-        render_excluded_tab()
-    with t[8]:
-        render_reorder_tab()
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  온라인 재고관리 Agent v5.7')
+        render_channel_tab
