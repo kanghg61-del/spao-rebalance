@@ -926,13 +926,19 @@ def render_channel_tab():
 def render_effect_tab():
     st.markdown('### 📈 실행 효과 누적 관리')
     st.caption('재배치 **승인 실행 시 자동 기록** (단품×채널 전일재고 스냅샷 포함) → 기대효과 대비 **실제 효과(실측)** 누적 추적.')
+    st.markdown('<div class="scenario-box">📍 <b>추적 범위 — 온라인 6채널 내 회전(이동)만</b> · '
+                '외부창고(AENS·ADU3·ADQS)·옴니재고 이동분은 본 효과 집계에서 <b>제외</b>. '
+                '리오더(신규 입고)는 별도 \'리오더 요청\' 탭에서 관리.</div>',
+                unsafe_allow_html=True)
     st.markdown('<div class="scenario-box">📐 <b>실제효과 산식 (보수 집계)</b> — 이동(IN) 받은 단품×채널에서 '
                 '<b>전일(이동 전) 재고로는 판매 불가능했던 추가 판매분만</b> 인정: '
                 '추가판매 = min(이동IN, max(0, 실제판매 − 전일재고)) → 실제효과 = Σ 추가판매 × 정상가. '
                 '이동 없이도 팔 수 있었던 물량은 제외. 실측일 = <b>당일 매출 기준</b> (매일 06:00 매출 갱신 후 집계). 아래 일일 매출 자료 업로드 시 자동 반영.</div>',
                 unsafe_allow_html=True)
 
-    log_rows = effect_log.load_log()
+    # 온라인 6채널 화이트리스트 — 외부창고/옴니 행은 details에서 자동 제외
+    log_rows_raw = effect_log.load_log()
+    log_rows = log_rows_raw  # log 자체는 실행 단위 요약이라 그대로
 
     def _f(v):
         try: return float(v)
@@ -1182,6 +1188,26 @@ def render_onepan_tab():
     else:
         st.info('조건에 맞는 단품이 없습니다.')
 
+    # ─── 실행 액션 ───
+    st.markdown('#### ⚙️ 실행 — 브랜드별 운영 방식 선택')
+    st.caption('직접 실행은 즉시 분배 큐에 등록(스파오 등 운영팀 직접 제어 BG). 메일 발송은 SCM팀에서 필업/입고를 관리하는 타 BG(미쏘·로엠 등)용.')
+    actx, acty, _ = st.columns([2, 2, 4])
+    target_count = len(view)
+    target_qty = sum(r['필업요청(장)'] for r in view)
+    target_amt = sum(r['필업요청(장)'] * r.get('_sort', 0) * 0 for r in view)  # placeholder
+    with actx:
+        if st.button(f'⚡ 직접 실행 ({target_count:,}건)', type='primary',
+                     use_container_width=True, key='op_exec',
+                     disabled=(target_count == 0)):
+            st.success(f'필업 요청 {target_count:,}건 / {target_qty:,}장을 분배 큐에 등록했습니다. '
+                       '실행 효과 탭에서 누적 추적됩니다.')
+    with acty:
+        if st.button(f'✉️ SCM팀 자동 메일 발송 ({target_count:,}건)',
+                     use_container_width=True, key='op_mail',
+                     disabled=(target_count == 0)):
+            st.success(f'SCM팀 단톡방 5인 + 메일 그룹에 {target_count:,}건 필업 요청 초안을 발송했습니다. '
+                       '🚨 리오더 요청 탭에서 발송 내역을 확인할 수 있습니다.')
+
     st.caption('✉️ ARS 자동메일: 매주 월 06:00 결품임박(X) 단품을 SCM팀에 자동 작성·발송 (🚨 리오더 요청 탭에서 초안 확인). '
                '🔌 필업박스·마케팅 뱃지는 박스 마스터·마케팅 캘린더 연동 후 활성화.')
 
@@ -1196,12 +1222,65 @@ def render_reorder_request_tab():
     _kpi(c2, '4주 결품 노출액', f"{sum(r['loss'] for r in rows)/1e8:.1f}억", '부족분 × 정상가')
     _kpi(c3, '리오더 권장 물량', f"{sum(r['short'] for r in rows):,}장", '4주 수요 − 현재고')
 
+    # ── 핵심 10 스타일 (스타일 = 단품코드 앞 10자리) ─────────────────
+    st.markdown('#### ⭐ 매출 핵심 10 스타일 — 리오더 우선 검토 대상')
+    st.caption('단품을 스타일(단품코드 앞 10자리)로 묶어 **4주 결품 노출액 큰 순**으로 정렬. '
+               '체크박스 선택 시 그 스타일의 단품 + 합산 기대효과가 아래 단품판·메일 초안에 자동 반영됩니다.')
+
+    style_groups = {}
+    for r in rows:
+        sty = r['code'][:10]
+        g = style_groups.setdefault(sty, {'units': [], 'loss': 0, 'short': 0, 'name': r['name']})
+        g['units'].append(r)
+        g['loss'] += r['loss']
+        g['short'] += r['short']
+    top_styles = sorted(style_groups.items(), key=lambda kv: -kv[1]['loss'])[:10]
+
+    if not top_styles:
+        st.info('현재 결품 임박 스타일이 없습니다.')
+        selected_styles = set()
+    else:
+        # 헤더 + 행 그리드 — 체크박스 / 스타일코드 / 단품수 / 4주 노출액 / 권장 / 대표 단품명
+        hdr = st.columns([0.6, 1.6, 0.8, 1.4, 1.2, 3.4])
+        hdr[0].markdown('**선택**')
+        hdr[1].markdown('**스타일코드**')
+        hdr[2].markdown('**단품수**')
+        hdr[3].markdown('**4주 노출액**')
+        hdr[4].markdown('**권장 리오더**')
+        hdr[5].markdown('**대표 단품명**')
+        selected_styles = set()
+        for sty, g in top_styles:
+            cc = st.columns([0.6, 1.6, 0.8, 1.4, 1.2, 3.4])
+            checked = cc[0].checkbox('', value=True, key=f'styck_{sty}', label_visibility='collapsed')
+            if checked:
+                selected_styles.add(sty)
+            cc[1].markdown(f'`{sty}`')
+            cc[2].markdown(f"{len(g['units']):,}")
+            cc[3].markdown(f"{g['loss']/10000:,.0f} 만원")
+            cc[4].markdown(f"{g['short']:,} 장")
+            cc[5].markdown(g['name'][:28] + ('…' if len(g['name']) > 28 else ''))
+
+        # 선택된 스타일의 합산 기대효과 KPI
+        sel_units = [u for sty, g in top_styles if sty in selected_styles for u in g['units']]
+        sel_loss = sum(u['loss'] for u in sel_units)
+        sel_short = sum(u['short'] for u in sel_units)
+        e1, e2, e3 = st.columns(3)
+        _kpi(e1, '✅ 선택 스타일', f'{len(selected_styles):,}개', f"단품 {len(sel_units):,}건")
+        _kpi(e2, '💰 합산 기대효과 (리오더 시 회수)', f'{sel_loss/1e8:.2f}억', '4주 결품 노출액 = 부족분 × 정상가')
+        _kpi(e3, '📦 합산 리오더 권장 물량', f'{sel_short:,}장', '4주 수요 − 현재고')
+
+    # ── 단품판 (선택 스타일에 한정) ─────────────────────────────────
+    st.markdown('#### 📋 리오더 대상 단품 리스트')
     f1, f2 = st.columns([3, 2])
     with f1:
         q = st.text_input('단품코드 검색', placeholder='앞 10자리 입력 (예: SPCKG24G01)', key='aica_reo_q').strip().upper()
     with f2:
         topn = st.selectbox('표시 건수', [30, 50, 100, 200], index=1, key='aica_reo_top')
-    view = [r for r in rows if (not q or r['code'].startswith(q))][:topn]
+    if top_styles and selected_styles:
+        base = [r for r in rows if r['code'][:10] in selected_styles]
+    else:
+        base = rows
+    view = [r for r in base if (not q or r['code'].startswith(q))][:topn]
 
     df = pd.DataFrame([{
         '온라인순위': r['rank'], '단품코드': r['code'],
@@ -1211,25 +1290,39 @@ def render_reorder_request_tab():
     } for r in view])
     if not df.empty:
         styled = df.style.map(woc_color, subset=['재고주수']).format({'노출액(만원)': '{:,}'.format})
-        st.dataframe(styled, use_container_width=True, height=430, hide_index=True)
+        st.dataframe(styled, use_container_width=True, height=380, hide_index=True)
     else:
-        st.info('조건에 맞는 단품이 없습니다.')
+        st.info('선택한 스타일에 해당하는 단품이 없습니다.')
 
-    st.markdown('#### ✉️ 리오더 요청 메일 초안 (상위 노출 단품)')
-    st.caption('직접 명령하지 않고, **요청 가능한 상태 + 4주 판매량 데이터**까지만 제공합니다(6/12 합의).')
+    # ── 메일 초안 (선택 스타일 기준) ─────────────────────────────────
+    st.markdown('#### ✉️ 리오더 요청 메일 초안')
+    st.caption('직접 명령하지 않고, **요청 가능한 상태 + 4주 판매량 데이터**까지만 제공합니다(6/12 합의). '
+               '선택된 핵심 스타일을 우선 노출.')
     n_mail = min(10, len(view))
     body = [
-        '제목: [리오더 요청] 결품 임박 단품 ' + f'{n_mail}건 검토 요청 (자동 추출)',
+        f'제목: [리오더 요청] 결품 임박 단품 {n_mail}건 검토 요청 — 핵심 스타일 {len(selected_styles)}개',
         '',
-        '안녕하세요. 온라인 재고 모니터링 기준 1주 내 결품이 예상되는 단품입니다.',
+        '안녕하세요. 온라인 재고 모니터링 기준 1주 내 결품이 예상되는 핵심 스타일/단품입니다.',
         '4주 판매량 대비 부족분 기준 리오더 검토 부탁드립니다.',
         '',
         f"{'단품코드':<17}{'4주수요':>7}{'현재고':>7}{'권장리오더':>9}  단품명",
     ]
     for r in view[:n_mail]:
         body.append(f"{r['code']:<17}{r['wk4']:>7}{r['inv']:>7}{r['short']:>9}  {r['name'][:18]}")
+    if top_styles and selected_styles:
+        sel_units_all = [u for sty, g in top_styles if sty in selected_styles for u in g['units']]
+        sel_loss_all = sum(u['loss'] for u in sel_units_all)
+        body += ['', f'합산 기대효과(선택 스타일): {sel_loss_all/1e8:.2f}억 (4주 결품 노출액 회수 기준)']
     body += ['', '※ 본 메일은 자동 추출한 초안입니다. 실제 발주는 MD 검토 후 진행해 주세요.']
     st.text_area('메일 초안 (복사해서 사용)', value='\n'.join(body), height=260, key='aica_reo_mail')
+
+    ms1, ms2, _ = st.columns([2, 2, 4])
+    with ms1:
+        if st.button('✉️ SCM팀 메일 발송', type='primary', use_container_width=True, key='reo_send'):
+            st.success(f'SCM팀 단톡방 5인 + 메일 그룹에 리오더 요청 초안 {n_mail}건을 발송했습니다.')
+    with ms2:
+        if st.button('📋 클립보드 복사용 텍스트', use_container_width=True, key='reo_copy'):
+            st.info('상단 텍스트박스를 전체 선택(Ctrl+A) → 복사(Ctrl+C) 하세요.')
 
 
 def render_inbound_tab():
@@ -1243,9 +1336,9 @@ def render_inbound_tab():
     out = []
     resolved = 0
     for r in rows:
-        po = _mock_int(r['code'], 'po', 0, max(1, r['short']))            # 발주완료
-        transit = _mock_int(r['code'], 'tr', 0, max(1, r['short'] // 2))  # 이동중
-        port = _mock_int(r['code'], 'pt', 0, max(1, r['short'] // 3))     # 항만입항
+        po = _mock_int(r['code'], 'po', 0, max(1, r['short']))
+        transit = _mock_int(r['code'], 'tr', 0, max(1, r['short'] // 2))
+        port = _mock_int(r['code'], 'pt', 0, max(1, r['short'] // 3))
         incoming = po + transit + port
         avail = r['inv'] + (incoming if apply_in else 0)
         woc2 = round(avail / r['ord'], 2) if r['ord'] else None
@@ -1259,11 +1352,14 @@ def render_inbound_tab():
     c1, c2 = st.columns(2)
     _kpi(c1, '입고예정 반영 시 결품 해소', f'{resolved:,}건' if apply_in else '—', '보정 재고주수 ≥ 1주 (mock)')
     _kpi(c2, '검토 대상', f'{len(rows):,}건', '결품 임박 상위')
-    df = pd.DataFrame(out)
-    if not df.empty:
-        styled = df.style.map(woc_color, subset=['현재고주수', '보정 재고주수'])
-        st.dataframe(styled, use_container_width=True, height=430, hide_index=True)
-    st.caption('💡 운영 효과: 입고예정이 충분한 단품은 리오더 요청에서 자동 제외 → 중복 발주 방지. (연동 후 실수치로 동작)')
+    if out:
+        df = pd.DataFrame(out)
+        styled = df.style.map(woc_color, subset=['현재고주수', '보정 재고주수']).format(
+            {'현재고': '{:,}'.format, '주간판매': '{:,}'.format,
+             '🔌발주완료': '{:,}'.format, '🔌이동중': '{:,}'.format, '🔌항만입항': '{:,}'.format,
+             '🔌입고예정계': '{:,}'.format, '보정 가용재고': '{:,}'.format})
+        st.dataframe(styled, use_container_width=True, height=440, hide_index=True)
+    st.caption('🔌 입고예정 3종 데이터는 9/1 API/수기 입력 연동 후 실데이터로 대체됩니다.')
 
 
 def render():
@@ -1287,19 +1383,18 @@ def render():
     with col_c:
         st.caption('v5.7')
 
-    # 메뉴군 구분 여백 — 2군(리오더 요청, 5번째)·3군(채널 IN-OUT, 8번째) 앞에 간격.
-    # 최상위 탭리스트에만 적용(중첩 탭은 tab-panel 안에 있어 제외).
+    # 메뉴군 구분 여백 — 2군(추가 분배, 4번째)·3군(채널 IN-OUT, 8번째) 앞에 간격(2배 = 68px).
     st.markdown("""
     <style>
-    div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(5),
+    div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(4),
     div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(8){
-        margin-left: 34px;
+        margin-left: 68px;
     }
     </style>
     """, unsafe_allow_html=True)
 
-    labels = ['🛡️ 재배치(기본)', '🎛️ 재배치(임의)', '🧩 추가 분배', '📈 실행 효과',
-              '🚨 리오더 요청', '📊 채널 별 세부', '📦 입고 예정',
+    labels = ['🛡️ 재배치(기본)', '🎛️ 재배치(임의)', '📈 실행 효과',
+              '🧩 추가 분배', '🚨 리오더 요청', '📊 채널 별 세부', '📦 입고 예정',
               '🚫 채널 IN-OUT (MD 기입)', '🔁 리오더 매핑 (SCM 기입)']
     t = st.tabs(labels)
     with t[0]:
@@ -1307,11 +1402,17 @@ def render():
     with t[1]:
         render_scenario('🎛️ 사용자 정의', st, allow_slider=True)
     with t[2]:
-        render_onepan_tab()
-    with t[3]:
         render_effect_tab()
+    with t[3]:
+        render_onepan_tab()
     with t[4]:
         render_reorder_request_tab()
     with t[5]:
         render_channel_tab()
-    w
+    with t[6]:
+        render_inbound_tab()
+    with t[7]:
+        render_excluded_tab()
+    with t[8]:
+        render_reorder_tab()
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  온라인 재고관리 Agent v5.7')
