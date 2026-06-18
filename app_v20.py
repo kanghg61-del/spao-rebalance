@@ -22,6 +22,16 @@ CH_SHORT = {
 }
 EXT_CHANNELS = [c for c in CHANNELS if c in EXT_WAREHOUSE]  # 무신사·지그재그·네이버
 
+# 출고 매장코드 — SCM 분배 시 사용하는 내부창고 매장코드 (이랜드 인스토어)
+WAREHOUSE_CODE = {
+    '공홈': '0500',           # 천안 본사 직배송
+    '이랜드몰': '0500',        # 천안 본사 직배송
+    '무신사': '1109',          # 천안 외부창고 (AENS)
+    '지그재그': '1091',        # 인천 외부창고 (ADU3)
+    '네이버': '2301',          # CJ 풀필먼트 (ADQS)
+    '카카오선물하기': '0500',   # 천안 본사 직배송
+}
+
 SCENARIOS = {
     '🛡️ 기본': {
         'desc': '결품 기준 1주 미만 → 목표 2주 확보. 회전(온라인 6채널 잉여→결품)으로 보충. 이동 상한: 각 채널 현재고의 50%',
@@ -1180,6 +1190,7 @@ def render_onepan_tab():
             '단품코드': code,
             '스타일명': (sty_name_full[:24] + '…') if len(sty_name_full) > 24 else sty_name_full,
             '주력채널': CH_SHORT.get(topch, topch),
+            '출고매장코드': WAREHOUSE_CODE.get(topch, '0500') if topch != '-' else '-',
             '현재고': ti,
             '반응과 전체수량': bw_q,
             '반응과 전체금액(만원)': round(bw_amt / 10000),
@@ -1191,6 +1202,7 @@ def render_onepan_tab():
             '예상 회수매출(만원)': round(fillq * price / 10000),
             '_sort': fillq,
             '_price': price,
+            '_topch': topch,
         })
 
     k = st.columns(6)
@@ -1210,7 +1222,8 @@ def render_onepan_tab():
         g = style_grp.setdefault(sty, {'units': [], 'amt': 0, 'qty': 0,
                                        'inv': 0, 'ord': 0,
                                        'name': smap.get(sty, r['스타일명']),
-                                       'topch': r['주력채널']})
+                                       'topch': r['주력채널'],
+                                       'wh_code': r['출고매장코드']})
         g['units'].append(r)
         g['amt'] += r['필업요청(장)'] * r['_price']
         g['qty'] += r['필업요청(장)']
@@ -1219,6 +1232,8 @@ def render_onepan_tab():
     top10 = sorted(style_grp.items(), key=lambda kv: -kv[1]['amt'])[:10]
     if top10 and any(g['amt'] > 0 for _, g in top10):
         top_list = []
+        sum_inv = sum_ord = sum_qty = 0
+        sum_amt = 0
         for sty, g in top10:
             woc = (g['inv'] / g['ord']) if g['ord'] > 0 else None
             if woc is None: grade = '–'
@@ -1231,6 +1246,7 @@ def render_onepan_tab():
                 '스타일코드': sty,
                 '스타일명': (g['name'][:28] + '…') if len(g['name']) > 28 else g['name'],
                 '주력채널': g['topch'],
+                '출고매장코드': g['wh_code'],
                 '현재고': g['inv'],
                 '주판': g['ord'],
                 '재고주수': round(woc, 1) if woc is not None else None,
@@ -1239,9 +1255,23 @@ def render_onepan_tab():
                 '이동 후 재고주수': round(woc_after, 1) if woc_after is not None else None,
                 '예상 회수매출(만원)': round(g['amt'] / 10000),
             })
-        df_top = pd.DataFrame(top_list)
+            sum_inv += g['inv']; sum_ord += g['ord']; sum_qty += g['qty']; sum_amt += g['amt']
+        woc_sum = (sum_inv / sum_ord) if sum_ord > 0 else None
+        woc_sum_after = (sum_inv + sum_qty) / sum_ord if sum_ord > 0 else None
+        sum_row = {
+            '진단': '— 합계 —', '스타일코드': f'{len(top10)}개', '스타일명': '',
+            '주력채널': '-', '출고매장코드': '-',
+            '현재고': sum_inv, '주판': sum_ord,
+            '재고주수': round(woc_sum, 1) if woc_sum is not None else None,
+            '필업요청(장)': sum_qty,
+            '필업요청금액(만원)': round(sum_amt / 10000),
+            '이동 후 재고주수': round(woc_sum_after, 1) if woc_sum_after is not None else None,
+            '예상 회수매출(만원)': round(sum_amt / 10000),
+        }
+        df_top = pd.DataFrame([sum_row] + top_list)
         styled_top = (df_top.style.map(_grade_color, subset=['진단'])
                       .map(woc_color, subset=['재고주수', '이동 후 재고주수'])
+                      .apply(_hl_sum, axis=1)
                       .format({'현재고': '{:,}'.format, '주판': '{:,}'.format,
                                '재고주수': lambda v: '' if v is None else f'{v:.1f}',
                                '이동 후 재고주수': lambda v: '' if v is None else f'{v:.1f}',
@@ -1279,14 +1309,34 @@ def render_onepan_tab():
         view.sort(key=lambda r: (r['재고주수'] if r['재고주수'] is not None else 999))
     st.caption(f'총 {len(view):,}건' + (' · 상위 500건 표시' if len(view) > 500 else ''))
     view = view[:500]
-    cols_order = ['진단', '스타일코드', '단품코드', '스타일명', '주력채널',
+    cols_order = ['진단', '스타일코드', '단품코드', '스타일명', '주력채널', '출고매장코드',
                   '현재고', '반응과 전체수량', '반응과 전체금액(만원)',
                   '주판', '재고주수', '필업요청(장)', '필업요청금액(만원)',
                   '이동 후 재고주수', '예상 회수매출(만원)']
     if view:
-        df = pd.DataFrame([{kc: r[kc] for kc in cols_order} for r in view])
+        # 합계 행
+        v_inv = sum(r['현재고'] for r in view)
+        v_bw_q = sum(r['반응과 전체수량'] for r in view)
+        v_bw_amt = sum(r['반응과 전체금액(만원)'] for r in view)
+        v_ord = sum(r['주판'] for r in view)
+        v_fq = sum(r['필업요청(장)'] for r in view)
+        v_famt = sum(r['필업요청금액(만원)'] for r in view)
+        v_woc = (v_inv / v_ord) if v_ord > 0 else None
+        v_woc_after = (v_inv + v_fq) / v_ord if v_ord > 0 else None
+        sum_row = {
+            '진단': '— 합계 —', '스타일코드': '', '단품코드': f'{len(view)}건',
+            '스타일명': '', '주력채널': '-', '출고매장코드': '-',
+            '현재고': v_inv, '반응과 전체수량': v_bw_q, '반응과 전체금액(만원)': v_bw_amt,
+            '주판': v_ord,
+            '재고주수': round(v_woc, 1) if v_woc is not None else None,
+            '필업요청(장)': v_fq, '필업요청금액(만원)': v_famt,
+            '이동 후 재고주수': round(v_woc_after, 1) if v_woc_after is not None else None,
+            '예상 회수매출(만원)': v_famt,
+        }
+        df = pd.DataFrame([sum_row] + [{kc: r[kc] for kc in cols_order} for r in view])
         styled = (df.style.map(_grade_color, subset=['진단'])
                   .map(woc_color, subset=['재고주수', '이동 후 재고주수'])
+                  .apply(_hl_sum, axis=1)
                   .format({'현재고': '{:,}'.format, '주판': '{:,}'.format,
                            '반응과 전체수량': '{:,}'.format, '반응과 전체금액(만원)': '{:,}'.format,
                            '필업요청(장)': '{:,}'.format, '필업요청금액(만원)': '{:,}'.format,
@@ -1299,7 +1349,7 @@ def render_onepan_tab():
 
     # 실행 액션
     st.markdown('#### ⚙️ 실행 — 브랜드별 운영 방식 선택')
-    st.caption('직접 실행은 즉시 분배 큐 등록(스파오). 메일 발송은 SCM팀 관리 BG용(미쏘·로엠 등).')
+    st.caption('직접 실행은 즉시 분배 큐 등록(스파오). 메일 발송은 SCM팀 관리 BG용(미쏘·로엠 등) — 표는 엑셀에 그대로 붙여 분배 가능.')
     actx, acty, _ = st.columns([2, 2, 4])
     tc = len(view)
     tq = sum(r['필업요청(장)'] for r in view)
@@ -1307,8 +1357,40 @@ def render_onepan_tab():
         if st.button(f'⚡ 직접 실행 ({tc:,}건)', type='primary', use_container_width=True, key='op_exec', disabled=(tc == 0)):
             st.success(f'필업 요청 {tc:,}건 / {tq:,}장을 분배 큐에 등록했습니다.')
     with acty:
-        if st.button(f'✉️ SCM팀 자동 메일 발송 ({tc:,}건)', use_container_width=True, key='op_mail', disabled=(tc == 0)):
-            st.success(f'SCM팀 단톡방 5인 + 메일 그룹에 {tc:,}건 필업 요청 초안을 발송했습니다.')
+        scm_send = st.button(f'✉️ SCM팀 자동 메일 발송 ({tc:,}건)', use_container_width=True, key='op_mail', disabled=(tc == 0))
+
+    # SCM 메일 표 본문 — 엑셀 붙여넣기 가능 (TSV)
+    if tc > 0:
+        st.markdown('##### ✉️ SCM팀 메일 본문 — 엑셀 붙여넣기용 (TSV)')
+        st.caption('아래 표를 전체 선택(Ctrl+A) → 복사(Ctrl+C) → 엑셀에 붙여넣기 → 출고매장코드 단위 분배. 메일 발송 시 자동 첨부.')
+        headers = ['단품코드', '스타일코드', '스타일명', '주력채널', '출고매장코드',
+                   '현재고', '주판', '재고주수', '필업요청(장)', '필업요청금액(만원)', '예상 회수매출(만원)']
+        lines = ['\t'.join(headers)]
+        # 합계
+        lines.append('\t'.join(['— 합계 —', '', f'{tc}건', '-', '-',
+                                 f'{v_inv:,}' if 'v_inv' in dir() else str(sum(r['현재고'] for r in view)),
+                                 f'{v_ord:,}' if 'v_ord' in dir() else str(sum(r['주판'] for r in view)),
+                                 '', f'{tq:,}',
+                                 f"{sum(r['필업요청금액(만원)'] for r in view):,}",
+                                 f"{sum(r['예상 회수매출(만원)'] for r in view):,}"]))
+        for r in view[:200]:  # 상한 200건
+            lines.append('\t'.join([
+                r['단품코드'], r['스타일코드'], r['스타일명'].replace('\t', ' '),
+                r['주력채널'], r['출고매장코드'],
+                f"{r['현재고']:,}", f"{r['주판']:,}",
+                f"{r['재고주수']}" if r['재고주수'] is not None else '',
+                f"{r['필업요청(장)']:,}",
+                f"{r['필업요청금액(만원)']:,}",
+                f"{r['예상 회수매출(만원)']:,}",
+            ]))
+        if len(view) > 200:
+            lines.append(f'... 외 {len(view) - 200:,}건 (전체는 직접 실행 시 분배 큐 등록)')
+        tsv_body = '\n'.join(lines)
+        st.text_area('표 본문 (TSV)', value=tsv_body, height=240, key='op_mail_body')
+
+        if scm_send:
+            st.success(f'SCM팀 단톡방 5인 + 메일 그룹에 {tc:,}건 필업 요청 초안(표)을 발송했습니다.')
+
     st.caption('✉️ ARS 자동메일: 매주 월 06:00 결품임박(X) 단품을 SCM팀에 자동 작성·발송.')
 
 
@@ -1338,10 +1420,14 @@ def render_reorder_request_tab():
             'amt1w': amt1w, 'reord2': reord2, 'exp': exp,
         })
 
-    c1, c2, c3 = st.columns(3)
+    tot_reord = sum(r['reord2'] for r in enriched)
+    tot_exp = sum(r['exp'] for r in enriched)
+    tot_amt1w = sum(r['amt1w'] for r in enriched)
+    c1, c2, c3, c4 = st.columns(4)
     _kpi(c1, '결품 임박 단품', f'{len(enriched):,}건', '재고주수 < 1주')
-    _kpi(c2, '1주 결품 노출액', f"{sum(r['amt1w'] for r in enriched)/1e8:.2f}억", '1주 주판 × 정상가')
-    _kpi(c3, '리오더 권장 물량 (2주분)', f"{sum(r['reord2'] for r in enriched):,}장", '2주 수요 − 현재고')
+    _kpi(c2, '1주 결품 노출액', f'{tot_amt1w/1e8:.2f}억', '1주 주판 × 정상가')
+    _kpi(c3, '📦 리오더 권장 물량', f'{tot_exp/1e8:.2f}억', f'{tot_reord:,}장 · 2주 수요 − 현재고')
+    _kpi(c4, '💰 리오더 시 기대매출', f'{tot_exp/1e8:.2f}억', '권장리오더 × 정상가')
 
     # 핵심 10 스타일
     st.markdown('#### ⭐ 리오더 우선 검토 10 스타일')
@@ -1388,7 +1474,23 @@ def render_reorder_request_tab():
                 '이동 후 재고주수': f"{round(woc_after, 1)}주" if woc_after is not None else '',
                 '예상 회수매출(만원)': round(g['exp'] / 10000),
             })
-        df_top = pd.DataFrame(top_list)
+        # 합계 행 (맨 위)
+        sum_inv = sum(g['inv'] for _, g in top_styles)
+        sum_ord = sum(g['ord'] for _, g in top_styles)
+        sum_reord = sum(g['reord'] for _, g in top_styles)
+        sum_exp = sum(g['exp'] for _, g in top_styles)
+        sum_woc = round(sum_inv / sum_ord, 1) if sum_ord > 0 else None
+        sum_woc_after = round((sum_inv + sum_reord) / sum_ord, 1) if sum_ord > 0 else None
+        sum_row = {
+            '선택': False, '진단': '— 합계 —', '스타일코드': f'{len(top_styles)}개',
+            '스타일명': '', '주력채널': '-',
+            '현재고': sum_inv, '주판': sum_ord,
+            '재고주수': f"{sum_woc}주" if sum_woc is not None else '',
+            '필업요청(장)': sum_reord, '필업요청금액(만원)': round(sum_exp / 10000),
+            '이동 후 재고주수': f"{sum_woc_after}주" if sum_woc_after is not None else '',
+            '예상 회수매출(만원)': round(sum_exp / 10000),
+        }
+        df_top = pd.DataFrame([sum_row] + top_list)
         edited = st.data_editor(
             df_top,
             use_container_width=True,
@@ -1400,16 +1502,9 @@ def render_reorder_request_tab():
             },
             key='reo_top_editor',
         )
-        selected_styles = set(edited[edited['선택']]['스타일코드'].tolist())
-
-        sel_units = [u for sty, g in top_styles if sty in selected_styles for u in g['units']]
-        sel_amt1w = sum(u['amt1w'] for u in sel_units)
-        sel_reord = sum(u['reord2'] for u in sel_units)
-        sel_exp = sum(u['exp'] for u in sel_units)
-        e1, e2, e3 = st.columns(3)
-        _kpi(e1, '✅ 선택 스타일', f'{len(selected_styles):,}개', f'1주 주문액 {sel_amt1w/1e8:.2f}억')
-        _kpi(e2, '📦 합산 권장 리오더 (2주분)', f'{sel_reord:,}장', '2주 수요 − 현재고')
-        _kpi(e3, '💰 리오더 시 기대매출', f'{sel_exp/1e8:.2f}억', '권장리오더 × 정상가')
+        # 합계 행(스타일코드='N개')은 선택 대상 제외
+        valid_styles = {sty for sty, _ in top_styles}
+        selected_styles = set(edited[edited['선택']]['스타일코드'].tolist()) & valid_styles
 
     # 단품 리스트
     st.markdown('#### 📋 리오더 대상 단품 리스트')
@@ -1426,6 +1521,8 @@ def render_reorder_request_tab():
 
     if view:
         df_rows = []
+        v_inv = v_ord = v_reord = 0
+        v_exp = 0
         for r in view:
             woc_after = (r['inv'] + r['reord2']) / r['ord'] if r['ord'] > 0 else None
             df_rows.append({
@@ -1442,11 +1539,25 @@ def render_reorder_request_tab():
                 '이동 후 재고주수': f"{round(woc_after, 1)}주" if woc_after is not None else '',
                 '예상 회수매출(만원)': round(r['exp'] / 10000),
             })
-        df = pd.DataFrame(df_rows)
-        styled = df.style.map(_grade_color, subset=['진단']).map(woc_color, subset=['재고주수', '이동 후 재고주수']).format({
-            '현재고': '{:,}'.format, '주판': '{:,}'.format,
-            '필업요청(장)': '{:,}'.format, '필업요청금액(만원)': '{:,}'.format,
-            '예상 회수매출(만원)': '{:,}'.format})
+            v_inv += r['inv']; v_ord += r['ord']; v_reord += r['reord2']; v_exp += r['exp']
+        v_woc = round(v_inv / v_ord, 1) if v_ord > 0 else None
+        v_woc_after = round((v_inv + v_reord) / v_ord, 1) if v_ord > 0 else None
+        sum_row = {
+            '진단': '— 합계 —', '스타일코드': '', '단품코드': f'{len(view)}건', '스타일명': '', '주력채널': '-',
+            '현재고': v_inv, '주판': v_ord,
+            '재고주수': f"{v_woc}주" if v_woc is not None else '',
+            '필업요청(장)': v_reord, '필업요청금액(만원)': round(v_exp / 10000),
+            '이동 후 재고주수': f"{v_woc_after}주" if v_woc_after is not None else '',
+            '예상 회수매출(만원)': round(v_exp / 10000),
+        }
+        df = pd.DataFrame([sum_row] + df_rows)
+        styled = (df.style.map(_grade_color, subset=['진단'])
+                  .map(woc_color, subset=['재고주수', '이동 후 재고주수'])
+                  .apply(_hl_sum, axis=1)
+                  .format({
+                      '현재고': '{:,}'.format, '주판': '{:,}'.format,
+                      '필업요청(장)': '{:,}'.format, '필업요청금액(만원)': '{:,}'.format,
+                      '예상 회수매출(만원)': '{:,}'.format}))
         st.dataframe(styled, use_container_width=True, height=380, hide_index=True)
     else:
         st.info('선택한 스타일에 해당하는 단품이 없습니다.')
@@ -1585,7 +1696,6 @@ def render_unified_tab():
     st.markdown('<div class="scenario-box">온라인 6채널 통합 재고를 한 화면에서 — <b>내부창고 vs 외부창고(FASS·이플렉스·CJ·풀필먼트) 분리</b>. '
                 '6/12 스파오 미팅 ①② 요청 반영 — "단순 회전 도구 → 온라인 통합 재고 + 의사결정 허브" 확장 방향.</div>',
                 unsafe_allow_html=True)
-
     skus = load_data_v20()
     agg = {ch: {'inv': 0, 'ext': 0, 'inv_amt': 0, 'ext_amt': 0, 'ord_qty': 0, 'ord_amt': 0} for ch in CHANNELS}
     for d in skus.values():
@@ -1601,7 +1711,6 @@ def render_unified_tab():
             agg[ch]['ext_amt'] += ext * price
             agg[ch]['ord_qty'] += od
             agg[ch]['ord_amt'] += od * price
-
     tot_inv = sum(a['inv'] for a in agg.values())
     tot_ext = sum(a['ext'] for a in agg.values())
     tot_inv_amt = sum(a['inv_amt'] for a in agg.values())
@@ -1609,12 +1718,10 @@ def render_unified_tab():
     tot_int_amt = tot_inv_amt - tot_ext_amt
     tot_ord_qty = sum(a['ord_qty'] for a in agg.values())
     tot_ord_amt = sum(a['ord_amt'] for a in agg.values())
-
     c1, c2, c3 = st.columns(3)
     _kpi(c1, '🌐 온라인 총 재고', f'{tot_inv_amt/1e8:.2f}억', f'{tot_inv:,}장')
     _kpi(c2, '🏬 내부창고', f'{tot_int_amt/1e8:.2f}억', f'{tot_inv - tot_ext:,}장 · 반응과·천안·인천 등')
     _kpi(c3, '🏭 외부창고', f'{tot_ext_amt/1e8:.2f}억', f'{tot_ext:,}장 · FASS·이플렉스·CJ')
-
     rows = [{
         '채널': '— 합계 —',
         '총 재고금액(만원)': round(tot_inv_amt / 10000),
@@ -1644,7 +1751,6 @@ def render_unified_tab():
                        '주간 주문액(만원)': '{:,}'.format,
                        '재고보유주수': lambda v: '' if v is None else f'{v:.1f}'}))
     st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
-
     st.caption('💡 외부창고 = 무신사·지그재그·네이버 풀필먼트 보관분 (이동 가용 X, 표시만 — 한지웅 리더 6/17 확정). '
                '재고보유주수 = 총재고 ÷ 주판량. 신호등 색상 동일 기준 (🔴<1주 🟡1-4주 🟢≥4주).')
 
@@ -1669,8 +1775,6 @@ def render():
             st.rerun()
     with col_c:
         st.caption('v0.8')
-
-    # 메뉴군 — 2군(통합 재고뷰, 6번째)·3군(채널 IN-OUT, 9번째) 앞 간격
     st.markdown("""
     <style>
     div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(6),
@@ -1679,8 +1783,6 @@ def render():
     }
     </style>
     """, unsafe_allow_html=True)
-
-    # 탭: [기본/임의/실행효과/추가분배/리오더] | [통합재고뷰/채널세부/입고] | [IN-OUT/리오더매핑]
     labels = ['🛡️ 재배치(기본)', '🎛️ 재배치(임의)', '📈 실행 효과',
               '🧩 추가 분배', '🚨 리오더 요청',
               '🏬 통합 재고뷰', '📊 채널 별 세부', '📦 입고 예정',
