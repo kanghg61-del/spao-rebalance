@@ -757,26 +757,28 @@ def render_channel_tab():
         union_rate = union_urg / max(1, union_item) * 100
 
         if is_all:
-            c = st.columns(8)
+            c = st.columns(9)
             kcard(c[0], '품목 수', f'{n_item:,}', '주문 발생 SKU')
-            kcard(c[1], '총 재고량', f'{tot_inv:,}장', f'재고금액 {tot_amt/1e8:.0f}억')
-            kcard(c[2], '긴급 결품', f'{n_urgent:,}건', '재고주수 < 1주')
-            kcard(c[3], '결품률(합산)', f'{rate:.1f}%', '6채널 재고 합산')
-            kcard(c[4], '결품(채널)', f'{union_rate:.1f}%', '한 채널이라도 결품')
-            kcard(c[5], '추천 이동(IN)', f'{tot_in:,}장', '금주 충전')
-            kcard(c[6], '외부창고', f'{tot_ext:,}장', 'AENS·ADU3·ADQS')
-            kcard(c[7], '외부창고 비중', f'{ext_pct:.1f}%', '외부창고 / 총재고')
+            kcard(c[1], '총 재고액', f'{tot_amt/1e8:.2f}억', '재고수량 × 정상가')
+            kcard(c[2], '총 재고량', f'{tot_inv:,}장', '6채널 합계')
+            kcard(c[3], '긴급 결품', f'{n_urgent:,}건', '재고주수 < 1주')
+            kcard(c[4], '결품률(합산)', f'{rate:.1f}%', '6채널 재고 합산')
+            kcard(c[5], '결품(채널)', f'{union_rate:.1f}%', '한 채널이라도 결품')
+            kcard(c[6], '추천 이동(IN)', f'{tot_in:,}장', '금주 충전')
+            kcard(c[7], '외부창고', f'{tot_ext:,}장', 'AENS·ADU3·ADQS')
+            kcard(c[8], '외부창고 비중', f'{ext_pct:.1f}%', '외부창고 / 총재고')
             st.caption('ℹ️ 결품률(합산)은 6채널 재고를 합쳐 봐 낮게(7%대) 보입니다(풀링 효과). 운영 체감은 "한 채널이라도 결품"인 결품(채널)을 보세요.')
         else:
-            n = 6 if is_ext else 5
+            n = 7 if is_ext else 6
             c = st.columns(n)
             kcard(c[0], '품목 수', f'{n_item:,}', '주문 발생 SKU')
-            kcard(c[1], '총 재고량', f'{tot_inv:,}장', f'{channel_pick}')
-            kcard(c[2], '긴급 결품', f'{n_urgent:,}건', '재고주수 < 1주')
-            kcard(c[3], '결품률', f'{rate:.1f}%', f'{n_urgent:,}/{n_item:,}')
-            kcard(c[4], '추천 이동(IN)', f'{tot_in:,}장', '금주 충전')
+            kcard(c[1], '총 재고액', f'{tot_amt/1e8:.2f}억', '재고수량 × 정상가')
+            kcard(c[2], '총 재고량', f'{tot_inv:,}장', f'{channel_pick}')
+            kcard(c[3], '긴급 결품', f'{n_urgent:,}건', '재고주수 < 1주')
+            kcard(c[4], '결품률', f'{rate:.1f}%', f'{n_urgent:,}/{n_item:,}')
+            kcard(c[5], '추천 이동(IN)', f'{tot_in:,}장', '금주 충전')
             if is_ext:
-                kcard(c[5], '외부창고', f'{tot_ext:,}장', f'{wh_label} · 비중 {ext_pct:.1f}%')
+                kcard(c[6], '외부창고', f'{tot_ext:,}장', f'{wh_label} · 비중 {ext_pct:.1f}%')
             st.caption(f'ℹ️ {channel_pick} 결품률 {rate:.1f}% — 마이너 채널은 운영 SKU·SKU당 재고가 적어 구조적으로 높습니다(데이터 오류 아님).')
 
         bstat = {b: [0, 0] for b in BOK_LIST}
@@ -1195,7 +1197,7 @@ def render_onepan_tab():
     _kpi(k[2], '🟢 정상(S)', f'{nS:,}건', '≥ 4주')
     _kpi(k[3], '📦 필업 요청수량', f'{fill_q:,}장', '결품임박만 · 1주 목표')
     _kpi(k[4], '💰 필업 요청금액', f'{fill_amt/1e8:.2f}억', '필업 × 정상가')
-    _kpi(k[5], '🏬 반응과 보유', f'{bw_total_qty:,}장', f'{bw_total_amt/1e8:.2f}억')
+    _kpi(k[5], '🏬 반응과 보유', f'{bw_total_amt/1e8:.2f}억', f'{bw_total_qty:,}장')
 
     # 핵심 10 스타일
     st.markdown('#### ⭐ 추가 분배 핵심 10 스타일')
@@ -1578,9 +1580,9 @@ def render_unified_tab():
     tot_ord_amt = sum(a['ord_amt'] for a in agg.values())
 
     c1, c2, c3 = st.columns(3)
-    _kpi(c1, '🌐 온라인 총 재고', f'{tot_inv:,}장', f'{tot_inv_amt/1e8:.2f}억')
-    _kpi(c2, '🏬 내부창고', f'{tot_inv - tot_ext:,}장', f'{tot_int_amt/1e8:.2f}억 (반응과·천안·인천 등)')
-    _kpi(c3, '🏭 외부창고', f'{tot_ext:,}장', f'{tot_ext_amt/1e8:.2f}억 (FASS·이플렉스·CJ)')
+    _kpi(c1, '🌐 온라인 총 재고', f'{tot_inv_amt/1e8:.2f}억', f'{tot_inv:,}장')
+    _kpi(c2, '🏬 내부창고', f'{tot_int_amt/1e8:.2f}억', f'{tot_inv - tot_ext:,}장 · 반응과·천안·인천 등')
+    _kpi(c3, '🏭 외부창고', f'{tot_ext_amt/1e8:.2f}억', f'{tot_ext:,}장 · FASS·이플렉스·CJ')
 
     rows = [{
         '채널': '— 합계 —',
@@ -1671,7 +1673,4 @@ def render():
     with t[7]:
         render_inbound_tab()
     with t[8]:
-        render_excluded_tab()
-    with t[9]:
-        render_reorder_tab()
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  온라인 재고관리 Agent v0.8')
+        render
