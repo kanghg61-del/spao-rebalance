@@ -23,6 +23,85 @@ def _xlsx_bytes(sheets: dict) -> bytes:
             df.to_excel(writer, sheet_name=name[:31], index=False)
     return buf.getvalue()
 
+
+# ─── 메일링 명단 (회사 메일) ──────────────────────────────────
+DEFAULT_SCM_LIST = [
+    'PARK_JINSEONG03@eland.co.kr',
+    'Jang_HyeonSeong@eland.co.kr',
+    'JANG_HONGSEO01@eland.co.kr',
+    'HAN_JIWOONG03@eland.co.kr',
+]
+DEFAULT_PLAN_LIST = [
+    'KIM_SANGHYUK04@eland.co.kr', 'KIM_SUHO03@eland.co.kr',
+    'KIM_INYOUNG03@eland.co.kr', 'KIM_JAEWOOK03@eland.co.kr',
+    'KIM_JONGOH01@eland.co.kr', 'KIM_HYESOO02@eland.co.kr',
+    'NA_YELIN01@eland.co.kr', 'SEO_GAYEON@eland.co.kr',
+    'AN_SOYEON@eland.co.kr', 'YUN_BYEONGOK01@eland.co.kr',
+    'LEE_SEUNGYEON05@eland.co.kr', 'LEE_SIWON01@eland.co.kr',
+    'CHOI_JINYOUNG09@eland.co.kr', 'HWANG_SOOYONG01@eland.co.kr',
+]
+
+
+def _get_mlist(key, default):
+    """session_state 기반 명단 관리."""
+    if key not in st.session_state:
+        st.session_state[key] = list(default)
+    return st.session_state[key]
+
+
+def _edit_mlist(key, default, title, hint=''):
+    """명단 편집 expander."""
+    current = _get_mlist(key, default)
+    with st.expander(f'📋 {title} 명단 관리 (현재 {len(current)}명)'):
+        if hint:
+            st.caption(hint)
+        st.caption('줄당 1개 이메일. 추가·삭제·복원 가능. 저장 버튼 누르기 전까지는 미반영.')
+        edited = st.text_area(
+            '이메일 명단',
+            value='\n'.join(current),
+            height=200,
+            key=f'edit_{key}',
+            label_visibility='collapsed',
+        )
+        b1, b2, b3 = st.columns([1, 1, 4])
+        with b1:
+            if st.button('💾 저장', key=f'save_{key}', use_container_width=True):
+                new_list = [e.strip() for e in edited.split('\n') if e.strip() and '@' in e]
+                st.session_state[key] = new_list
+                st.success(f'✅ {len(new_list)}명 저장 완료')
+                st.rerun()
+        with b2:
+            if st.button('🔄 기본값', key=f'reset_{key}', use_container_width=True):
+                st.session_state[key] = list(default)
+                st.success(f'기본값 {len(default)}명 복원')
+                st.rerun()
+    return current
+
+
+def _xlsx_by_channel(df_all, df_sum, ch_short_map):
+    """채널별 시트로 분리된 xlsx (SCM 분배 편의).
+
+    채널 6개 + 전체 + 출고매장코드별 소계 = 최대 8 시트.
+    """
+    sheets = {'전체': df_all}
+    if '주력채널' in df_all.columns:
+        for ch in CHANNELS:
+            short = ch_short_map.get(ch, ch)
+            sub = df_all[df_all['주력채널'] == short]
+            if len(sub) > 0:
+                sheets[short] = sub.reset_index(drop=True)
+    if df_sum is not None and len(df_sum) > 0:
+        sheets['출고매장코드별 소계'] = df_sum
+    return _xlsx_bytes(sheets)
+
+
+def _mailto_link(emails: list[str], subject: str, body: str) -> str:
+    """mailto: 링크 생성 (메일 클라이언트 자동 열기)."""
+    import urllib.parse as _u
+    to = ','.join(emails)
+    qs = _u.urlencode({'subject': subject, 'body': body}, quote_via=_u.quote)
+    return f'mailto:{to}?{qs}'
+
 from rebalance_engine import calc_rebalance_group, calc_after_woc, calc_expected_revenue, calc_distribution
 import effect_log
 from mock_data import (
@@ -1395,21 +1474,16 @@ def render_onepan_tab():
         st.info('조건에 맞는 단품이 없습니다.')
 
     # 실행 액션
-    st.markdown('#### ⚙️ 실행 — 브랜드별 운영 방식 선택')
-    st.caption('직접 실행은 즉시 분배 큐 등록(스파오). 메일 발송은 SCM팀 관리 BG용(미쏘·로엠 등) — 표는 엑셀에 그대로 붙여 분배 가능.')
-    actx, acty, _ = st.columns([2, 2, 4])
+    st.markdown('#### ⚙️ 실행 — 직접 실행 / SCM팀 메일 / Excel 다운로드')
+    st.caption('직접 실행은 즉시 분배 큐 등록(스파오). SCM팀 메일 발송 시 Excel 자동 첨부. Excel은 채널별 시트로 분리되어 분배 작업 용이.')
     tc = len(view)
     tq = sum(r['필업요청(장)'] for r in view)
-    with actx:
-        if st.button(f'⚡ 직접 실행 ({tc:,}건)', type='primary', use_container_width=True, key='op_exec', disabled=(tc == 0)):
-            st.success(f'필업 요청 {tc:,}건 / {tq:,}장을 분배 큐에 등록했습니다.')
-    with acty:
-        scm_send = st.button(f'✉️ SCM팀 자동 메일 발송 ({tc:,}건)', use_container_width=True, key='op_mail', disabled=(tc == 0))
 
-    # ─── 정식 xlsx 다운로드 (스파오 6/19 P0 #3) ───
+    # xlsx 사전 생성 (메일 첨부 + 다운로드 공용)
+    xlsx_data = None
+    fname = ''
+    df_skus = None
     if tc > 0:
-        st.markdown('##### ⬇️ 정식 Excel 다운로드 — SCM팀 즉시 작업용')
-        st.caption('스파오 6/19 미팅 합의 — TSV(복사붙여넣기)보다 정식 xlsx 권장. 시트 2개 (단품 리스트 + 출고매장코드별 소계).')
         df_skus = pd.DataFrame([{
             '진단': r['진단'], '스타일코드': r['스타일코드'], '단품코드': r['단품코드'],
             '스타일명': r['스타일명'], '주력채널': r['주력채널'], '출고매장코드': r['출고매장코드'],
@@ -1428,13 +1502,63 @@ def render_onepan_tab():
                      .reset_index())
         from datetime import datetime as _dt
         fname = f'추가분배_{_dt.now().strftime("%Y%m%d_%H%M")}_{tc}건.xlsx'
+        xlsx_data = _xlsx_by_channel(df_skus, df_wh_sum, CH_SHORT)
+
+    # SCM 명단 (편집 가능)
+    scm_list = _get_mlist('scm_mail_list', DEFAULT_SCM_LIST)
+
+    # 액션 버튼 3개: 직접 실행 / SCM 메일 / Excel 다운로드
+    a1, a2, a3 = st.columns(3)
+    with a1:
+        if st.button(f'⚡ 직접 실행 ({tc:,}건)', type='primary', use_container_width=True, key='op_exec', disabled=(tc == 0)):
+            st.success(f'필업 요청 {tc:,}건 / {tq:,}장을 분배 큐에 등록했습니다.')
+    with a2:
+        scm_send = st.button(f'✉️ SCM팀 메일 발송 ({tc:,}건)',
+                              use_container_width=True, key='op_mail',
+                              disabled=(tc == 0 or len(scm_list) == 0))
+    with a3:
+        if xlsx_data is not None:
+            st.download_button(
+                f'⬇️ Excel 다운로드 ({tc:,}건)',
+                data=xlsx_data, file_name=fname,
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                use_container_width=True, key='op_xlsx',
+            )
+        else:
+            st.button('⬇️ Excel 다운로드 (0건)', use_container_width=True, disabled=True, key='op_xlsx_dis')
+
+    # SCM 메일 발송 처리 — mailto 링크 + xlsx 첨부 다운로드
+    if tc > 0 and scm_send:
+        from datetime import datetime as _dt2
+        subj = f'[필업 요청] 추가 분배 {tc:,}건 · {tq:,}장 — {_dt2.now().strftime("%Y-%m-%d")}'
+        body = '\n'.join([
+            '안녕하세요. SCM팀 담당자님.',
+            '',
+            f'AICA 분석 기준 필업 요청 {tc:,}건 / {tq:,}장 검토 부탁드립니다.',
+            '첨부된 Excel은 채널별 시트로 분리되어 있어 분배 작업이 용이합니다.',
+            '',
+            f'- 총 필업 요청수량: {tq:,}장',
+            f"- 총 필업 요청금액: {sum(r['필업요청금액(만원)'] for r in view):,}만원",
+            f"- 출고매장코드 종류: {df_skus['출고매장코드'].nunique()}개" if df_skus is not None else '',
+            '',
+            '※ Excel 파일은 자동 다운로드되며, 메일 클라이언트에 첨부 후 발송하시기 바랍니다.',
+            '',
+            '— CAIO실 AX 혁신팀',
+        ])
+        link = _mailto_link(scm_list, subj, body)
+        st.success(f'✉️ 메일 클라이언트 열림 — 받는 사람 {len(scm_list)}명 자동 입력 / Excel 첨부 후 발송')
+        st.markdown(f'[📧 메일 클라이언트 열기 (수신 {len(scm_list)}명)]({link})')
         st.download_button(
-            f'⬇️ {fname} 다운로드 ({tc:,}건)',
-            data=_xlsx_bytes({'단품 리스트': df_skus, '출고매장코드별 소계': df_wh_sum}),
-            file_name=fname,
+            '⬇️ 첨부용 Excel 자동 다운로드',
+            data=xlsx_data, file_name=fname,
             mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            type='primary', use_container_width=True, key='op_xlsx',
+            type='primary', key='op_mail_xlsx',
         )
+
+    # SCM팀 명단 관리
+    _edit_mlist('scm_mail_list', DEFAULT_SCM_LIST,
+                'SCM팀 받는 사람',
+                '추가 분배 메일 발송 시 자동 수신자. 기본 4명.')
 
     # SCM 메일 표 본문 — 엑셀 붙여넣기 가능 (TSV)
     if tc > 0:
@@ -1661,14 +1785,21 @@ def render_reorder_request_tab():
     else:
         st.info('선택한 스타일에 해당하는 단품이 없습니다.')
 
-    # 메일 초안
-    st.markdown('#### ✉️ 리오더 요청 메일 초안')
-    st.caption('직접 명령하지 않고, **요청 가능한 상태 + 1주 주문량 + 2주 권장 리오더**까지만 제공합니다(6/12 합의).')
+    # ─── xlsx 자동 첨부 사전 생성 + 메일 본문 (채널 명시) ───
+    plan_list = _get_mlist('plan_mail_list', DEFAULT_PLAN_LIST)
+    from datetime import datetime as _dt3
     n_mail = min(10, len(view))
+    ch_tag = f'[{sel_ch}]'  # 채널 명시
+    subj_line = f'{ch_tag} 리오더 요청 — 결품 임박 단품 {len(view):,}건 · 우선 검토 스타일 {len(selected_styles)}개 ({_dt3.now().strftime("%Y-%m-%d")})'
+
+    # 메일 초안
+    st.markdown('#### ✉️ 리오더 요청 메일 초안 — 기획실 발송')
+    st.caption(f'직접 명령하지 않고, **요청 가능한 상태 + 1주 주문량 + 2주 권장 리오더**까지만 제공합니다(6/12 합의). 현재 선택 채널: **{sel_ch}**')
     body = [
-        f'제목: [리오더 요청] 결품 임박 단품 {n_mail}건 검토 요청 — 우선 검토 스타일 {len(selected_styles)}개',
+        f'제목: {subj_line}',
         '',
-        '안녕하세요. 온라인 재고 모니터링 기준 1주 내 결품이 예상되는 우선 검토 단품입니다.',
+        f'안녕하세요. 기획실 담당자님.',
+        f'{ch_tag} 채널 기준 온라인 재고 모니터링 결과 1주 내 결품이 예상되는 우선 검토 단품을 공유드립니다.',
         '1주 주문량 기준 2주 안전재고 확보를 위한 리오더 검토 부탁드립니다.',
         '',
         f"{'단품코드':<17}{'주판':>5}{'현재고':>7}{'권장(2주)':>10}  스타일명",
@@ -1679,16 +1810,65 @@ def render_reorder_request_tab():
         sel_units_all = [u for sty, g in top_styles if sty in selected_styles for u in g['units']]
         sel_exp_all = sum(u['exp'] for u in sel_units_all)
         body += ['', f'선택 스타일 합산 기대매출: {sel_exp_all/1e8:.2f}억 (권장 리오더 × 정상가)']
-    body += ['', '※ 본 메일은 자동 추출한 초안입니다. 실제 발주는 MD 검토 후 진행해 주세요.']
+    body += ['', '※ 첨부된 Excel 파일은 채널별 시트로 분리되어 있어 검토에 용이합니다.',
+             '※ 본 메일은 자동 추출한 초안입니다. 실제 발주는 MD 검토 후 진행해 주세요.']
     st.text_area('메일 초안 (복사해서 사용)', value='\n'.join(body), height=260, key='aica_reo_mail')
 
-    ms1, ms2, _ = st.columns([2, 2, 4])
+    # 리오더 xlsx 사전 생성 (메일 첨부용)
+    reo_xlsx_data = None
+    reo_fname = ''
+    if view:
+        try:
+            df_reo = pd.DataFrame([{
+                '진단': r['grade'], '스타일코드': r['sty_code'], '단품코드': r['code'],
+                '스타일명': r['sty_name'], '주력채널': sel_ch,
+                '현재고': r['inv'], '주판': r['ord'],
+                '재고주수': f"{r['woc']}주",
+                '필업요청(장)': r['reord2'],
+                '필업요청금액(만원)': round(r['exp'] / 10000),
+                '예상 회수매출(만원)': round(r['exp'] / 10000),
+            } for r in view])
+            reo_fname = f'리오더요청_{sel_ch}_{_dt3.now().strftime("%Y%m%d_%H%M")}_{len(df_reo)}건.xlsx'
+            reo_xlsx_data = _xlsx_bytes({f'{sel_ch} 리오더 단품': df_reo})
+        except Exception:
+            pass
+
+    ms1, ms2, ms3 = st.columns(3)
     with ms1:
-        if st.button('✉️ SCM팀 메일 발송', type='primary', use_container_width=True, key='reo_send'):
-            st.success(f'SCM팀 단톡방 5인 + 메일 그룹에 리오더 요청 초안 {n_mail}건을 발송했습니다.')
+        plan_send = st.button(
+            f'✉️ 기획실 메일 발송 ({len(view):,}건)',
+            type='primary', use_container_width=True,
+            key='reo_send', disabled=(len(view) == 0 or len(plan_list) == 0),
+        )
     with ms2:
+        if reo_xlsx_data is not None:
+            st.download_button(
+                f'⬇️ Excel 다운로드 ({len(view):,}건)',
+                data=reo_xlsx_data, file_name=reo_fname,
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                use_container_width=True, key='reo_xlsx',
+            )
+        else:
+            st.button('⬇️ Excel 다운로드 (0건)', use_container_width=True, disabled=True, key='reo_xlsx_dis')
+    with ms3:
         if st.button('📋 클립보드 복사용 텍스트', use_container_width=True, key='reo_copy'):
             st.info('상단 텍스트박스를 전체 선택(Ctrl+A) → 복사(Ctrl+C) 하세요.')
+
+    if plan_send and reo_xlsx_data is not None:
+        link = _mailto_link(plan_list, subj_line, '\n'.join(body[2:]))
+        st.success(f'✉️ 메일 클라이언트 열림 — 받는 사람 {len(plan_list)}명 자동 입력 / Excel 첨부 후 발송')
+        st.markdown(f'[📧 메일 클라이언트 열기 (수신 {len(plan_list)}명)]({link})')
+        st.download_button(
+            '⬇️ 첨부용 Excel 자동 다운로드',
+            data=reo_xlsx_data, file_name=reo_fname,
+            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            type='primary', key='reo_mail_xlsx',
+        )
+
+    # 기획실 명단 관리
+    _edit_mlist('plan_mail_list', DEFAULT_PLAN_LIST,
+                '기획실 받는 사람',
+                '리오더 요청 메일 발송 시 자동 수신자. 기본 14명.')
 
 
 def render_inbound_tab():
@@ -1907,4 +2087,4 @@ def render():
         render_excluded_tab()
     with t[9]:
         render_reorder_tab()
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  온라인 재고관리 Agent v0.9 (스파오 6/19 합의 반영 — 회전 30% · 리오더 채널 분리 · xlsx 다운로드)')
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  온라인 재고관리 Agent v0.9 (스파오 6/19 합의 반영)')
