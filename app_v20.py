@@ -1768,20 +1768,7 @@ def render_reorder_request_tab():
                       '필업요청(장)': '{:,}'.format, '필업요청금액(만원)': '{:,}'.format,
                       '예상 회수매출(만원)': '{:,}'.format}))
         st.dataframe(styled, use_container_width=True, height=380, hide_index=True)
-        # ─── xlsx 다운로드 (스파오 6/19 P0 #3) ───
-        try:
-            df_export = pd.DataFrame(df_rows)
-            from datetime import datetime as _dt
-            fname = f'리오더요청_{sel_ch}_{_dt.now().strftime("%Y%m%d_%H%M")}_{len(df_export)}건.xlsx'
-            st.download_button(
-                f'⬇️ {fname} 다운로드',
-                data=_xlsx_bytes({'리오더 대상 단품': df_export}),
-                file_name=fname,
-                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                type='primary', use_container_width=True, key='reo_xlsx',
-            )
-        except Exception:
-            pass
+        # xlsx 다운로드는 아래 메일 발송 영역의 액션 버튼으로 통합 (key='reo_xlsx')
     else:
         st.info('선택한 스타일에 해당하는 단품이 없습니다.')
 
