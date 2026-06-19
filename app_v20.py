@@ -5,8 +5,23 @@ v4.4 화면 — 누판율·주판율 데이터바 · 출고율 기준 완전 제
       · 체크박스 단품 선택 승인 · 사용자 정의 기준 명칭
 (페이지 설정·비밀번호 게이트·공통 CSS는 app.py 담당)
 """
+import io
 import streamlit as st
 import pandas as pd
+
+
+def _xlsx_bytes(sheets: dict) -> bytes:
+    """여러 시트 dict {sheet_name: DataFrame} → xlsx bytes.
+
+    SCM팀 즉시 작업용 정식 엑셀 다운로드 (스파오 6/19 미팅 합의).
+    """
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine='openpyxl') as writer:
+        for name, df in sheets.items():
+            if df is None or len(df) == 0:
+                continue
+            df.to_excel(writer, sheet_name=name[:31], index=False)
+    return buf.getvalue()
 
 from rebalance_engine import calc_rebalance_group, calc_after_woc, calc_expected_revenue, calc_distribution
 import effect_log
@@ -39,14 +54,15 @@ WAREHOUSE_CODE_EXT = {
 
 SCENARIOS = {
     '🛡️ 기본': {
-        'desc': '결품 기준 1주 미만 → 목표 2주 확보. 회전(온라인 6채널 잉여→결품)으로 보충. 이동 상한: 각 채널 현재고의 50%',
+        'desc': '결품 기준 1주 미만 → 목표 2주 확보. 회전(온라인 6채널 잉여→결품)으로 보충. '
+                '이동 상한: 각 채널 현재고의 30% (스파오 6/19 미팅 합의 — 보수 운영)',
         'shortage_th': 1.0, 'target_woc': 2.0,
-        'ship_th': 0.90, 'min_move': 0, 'min_recv': 0, 'move_cap_pct': 0.50,
+        'ship_th': 0.90, 'min_move': 0, 'min_recv': 0, 'move_cap_pct': 0.30,
     },
     '🎛️ 사용자 정의': {
-        'desc': '상단 슬라이더로 직접 조정 (이동 상한 % 포함)',
+        'desc': '상단 슬라이더로 직접 조정 (이동 상한 % 포함). 기본값 30%',
         'shortage_th': 1.0, 'target_woc': 2.0,
-        'ship_th': 0.90, 'min_move': 0, 'min_recv': 0, 'move_cap_pct': 0.50,
+        'ship_th': 0.90, 'min_move': 0, 'min_recv': 0, 'move_cap_pct': 0.30,
     },
 }
 
@@ -1117,6 +1133,32 @@ def imminent_rows():
     return rows
 
 
+@st.cache_data(show_spinner=False)
+def imminent_rows_by_channel(channel: str):
+    """채널별 결품 임박 단품 — 스파오 6/19 미팅 P0 #1 (채널별 분리).
+
+    channel='전체' 시 imminent_rows() 동일 (6채널 합산 기준).
+    채널 지정 시 그 채널의 재고/주판으로 재계산하여 결품 임박 추출.
+    """
+    if channel == '전체':
+        return imminent_rows()
+    skus = load_data_v20()
+    rows = []
+    for c, d in skus.items():
+        ti = d['inv'].get(channel, 0)
+        to = d['orders'].get(channel, 0)
+        if to > 0 and ti / to < 1.0:
+            wk4 = to * 4
+            short = max(0, wk4 - ti)
+            rows.append({
+                'code': c, 'name': d['name'], 'rank': d.get('rank_online', 9999),
+                'inv': ti, 'ord': to, 'woc': round(ti / to, 2),
+                'wk4': wk4, 'short': short, 'loss': short * d['price'], 'price': d['price'],
+            })
+    rows.sort(key=lambda r: -r['loss'])
+    return rows
+
+
 
 def _grade_color(s):
     if not isinstance(s, str):
@@ -1364,10 +1406,40 @@ def render_onepan_tab():
     with acty:
         scm_send = st.button(f'✉️ SCM팀 자동 메일 발송 ({tc:,}건)', use_container_width=True, key='op_mail', disabled=(tc == 0))
 
+    # ─── 정식 xlsx 다운로드 (스파오 6/19 P0 #3) ───
+    if tc > 0:
+        st.markdown('##### ⬇️ 정식 Excel 다운로드 — SCM팀 즉시 작업용')
+        st.caption('스파오 6/19 미팅 합의 — TSV(복사붙여넣기)보다 정식 xlsx 권장. 시트 2개 (단품 리스트 + 출고매장코드별 소계).')
+        df_skus = pd.DataFrame([{
+            '진단': r['진단'], '스타일코드': r['스타일코드'], '단품코드': r['단품코드'],
+            '스타일명': r['스타일명'], '주력채널': r['주력채널'], '출고매장코드': r['출고매장코드'],
+            '현재고': r['현재고'], '반응과 전체수량': r['반응과 전체수량'],
+            '반응과 전체금액(만원)': r['반응과 전체금액(만원)'],
+            '주판': r['주판'], '재고주수': r['재고주수'],
+            '필업요청(장)': r['필업요청(장)'], '필업요청금액(만원)': r['필업요청금액(만원)'],
+            '이동 후 재고주수': r['이동 후 재고주수'],
+            '예상 회수매출(만원)': r['예상 회수매출(만원)'],
+        } for r in view])
+        df_wh_sum = (df_skus.groupby('출고매장코드')
+                     .agg(단품수=('단품코드', 'count'),
+                          필업요청수량=('필업요청(장)', 'sum'),
+                          필업요청금액=('필업요청금액(만원)', 'sum'),
+                          예상회수매출=('예상 회수매출(만원)', 'sum'))
+                     .reset_index())
+        from datetime import datetime as _dt
+        fname = f'추가분배_{_dt.now().strftime("%Y%m%d_%H%M")}_{tc}건.xlsx'
+        st.download_button(
+            f'⬇️ {fname} 다운로드 ({tc:,}건)',
+            data=_xlsx_bytes({'단품 리스트': df_skus, '출고매장코드별 소계': df_wh_sum}),
+            file_name=fname,
+            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            type='primary', use_container_width=True, key='op_xlsx',
+        )
+
     # SCM 메일 표 본문 — 엑셀 붙여넣기 가능 (TSV)
     if tc > 0:
-        st.markdown('##### ✉️ SCM팀 메일 본문 — 엑셀 붙여넣기용 (TSV)')
-        st.caption('아래 표를 전체 선택(Ctrl+A) → 복사(Ctrl+C) → 엑셀에 붙여넣기 → 출고매장코드 단위 분배. 메일 발송 시 자동 첨부.')
+        st.markdown('##### ✉️ SCM팀 메일 본문 — TSV (복사 붙여넣기용)')
+        st.caption('TSV는 메일 본문 첨부용 — 정식 작업은 위 xlsx 사용 권장. 출고매장코드 단위 분배.')
         headers = ['단품코드', '스타일코드', '스타일명', '주력채널', '출고매장코드',
                    '현재고', '주판', '재고주수', '필업요청(장)', '필업요청금액(만원)', '예상 회수매출(만원)']
         lines = ['\t'.join(headers)]
@@ -1401,11 +1473,19 @@ def render_onepan_tab():
 
 def render_reorder_request_tab():
     st.markdown('### 🚨 리오더 요청')
-    st.caption('결품 임박(온라인 합산 재고주수 < 1주) 단품 자동 추출. 회전(재배치)으로 못 메우는 잠재 결품을 '
+    st.caption('결품 임박(재고주수 < 1주) 단품 자동 추출. 회전(재배치)으로 못 메우는 잠재 결품을 '
                '리오더로 연결 — ARS 베스트 + AICA **워스트(잠재 결품)** 동시 관리.')
 
+    # ─── 채널 선택 (스파오 6/19 P0 #1) ───
+    st.markdown('#### 📍 채널 선택')
+    st.caption('스파오 6/19 미팅 합의 — 채널별로 분리 표시. "전체" 선택 시 6채널 합산 기준.')
+    ch_opts = ['전체'] + list(CHANNELS)
+    sel_ch = st.radio('채널', ch_opts, horizontal=True, key='reo_ch', label_visibility='collapsed')
+
     smap = _load_style_map()
-    base = imminent_rows()
+    base = imminent_rows_by_channel(sel_ch)
+    if sel_ch != '전체':
+        st.caption(f'📍 **{sel_ch}** 채널의 결품 임박 단품 ({len(base):,}건) — 전체 합산이 아닌 해당 채널의 재고·주판 기준')
     enriched = []
     for r in base:
         woc = r['woc']
@@ -1564,6 +1644,20 @@ def render_reorder_request_tab():
                       '필업요청(장)': '{:,}'.format, '필업요청금액(만원)': '{:,}'.format,
                       '예상 회수매출(만원)': '{:,}'.format}))
         st.dataframe(styled, use_container_width=True, height=380, hide_index=True)
+        # ─── xlsx 다운로드 (스파오 6/19 P0 #3) ───
+        try:
+            df_export = pd.DataFrame(df_rows)
+            from datetime import datetime as _dt
+            fname = f'리오더요청_{sel_ch}_{_dt.now().strftime("%Y%m%d_%H%M")}_{len(df_export)}건.xlsx'
+            st.download_button(
+                f'⬇️ {fname} 다운로드',
+                data=_xlsx_bytes({'리오더 대상 단품': df_export}),
+                file_name=fname,
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                type='primary', use_container_width=True, key='reo_xlsx',
+            )
+        except Exception:
+            pass
     else:
         st.info('선택한 스타일에 해당하는 단품이 없습니다.')
 
@@ -1761,7 +1855,7 @@ def render_unified_tab():
 
 
 def render():
-    st.markdown('<div class="title-bar">온라인 재고관리 Agent — 운영 대시보드<span class="ver-badge">v0.8</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-bar">온라인 재고관리 Agent — 운영 대시보드<span class="ver-badge">v0.9</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
@@ -1779,7 +1873,7 @@ def render():
         if st.button('🔄 새로고침', use_container_width=True):
             st.rerun()
     with col_c:
-        st.caption('v0.8')
+        st.caption('v0.9')
     st.markdown("""
     <style>
     div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(6),
@@ -1813,4 +1907,4 @@ def render():
         render_excluded_tab()
     with t[9]:
         render_reorder_tab()
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  온라인 재고관리 Agent v0.8')
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  온라인 재고관리 Agent v0.9 (스파오 6/19 합의 반영 — 회전 30% · 리오더 채널 분리 · xlsx 다운로드)')
