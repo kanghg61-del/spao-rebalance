@@ -517,16 +517,24 @@ def render_scenario(scenario_key, container, allow_slider=False):
                 sty_name = smap.get(sty, d.get('name', ''))
                 in_pairs = [(ch, moves[ch]) for ch in CHANNELS if moves.get(ch, 0) > 0]
                 in_str = ' / '.join([f'{CH_SHORT.get(ch, ch)}+{q:,}' for ch, q in in_pairs])
+                # 받는 채널 매장코드 (회전 작업 편의)
+                in_wh_str = ' / '.join([f'{CH_SHORT.get(ch, ch)}:{WAREHOUSE_CODE.get(ch, "-")}' for ch, _ in in_pairs])
                 for out_ch in CHANNELS:
                     out_qty = -moves.get(out_ch, 0)
                     if out_qty > 0:
                         price = d.get('price', 0)
+                        inv_my = d['inv'].get(out_ch, 0)
+                        ord_my = d['orders'].get(out_ch, 0)
+                        # OUT 후 재고주수 = (현재고 - OUT) / 주판
+                        woc_after = round((inv_my - out_qty) / ord_my, 1) if ord_my > 0 else None
                         row = {
                             '단품코드': code, '스타일코드': sty, '스타일명': sty_name,
-                            '내 채널 현재고': d['inv'].get(out_ch, 0),
-                            '내 채널 주판': d['orders'].get(out_ch, 0),
+                            '내 채널 현재고': inv_my,
+                            '내 채널 주판': ord_my,
                             'OUT 수량(장)': int(out_qty),
+                            'OUT 후 재고주수': (f'{woc_after}주' if woc_after is not None else ''),
                             '받는 채널 분배': in_str,
+                            '받는 채널 매장코드': in_wh_str,
                             '내 채널 매장코드': WAREHOUSE_CODE.get(out_ch, '-'),
                             '단품 정상가(원)': price,
                             '회수매출(만원)': round(out_qty * price / 10000),
