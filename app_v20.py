@@ -568,6 +568,127 @@ def render_excluded_tab():
             st.rerun()
 
 
+def render_export_tab():
+    """채널 MD용 회전 결과 엑셀 다운로드 (SAP 연동 전 수기 실행용).
+
+    스파오 6/19 미팅 결과 — 견적 추가 받기 전 테스트 운영. 각 채널 MD가 자기
+    채널에서 어디 채널로 재고를 빼야 하는지 자체 시트에서 확인 후 수기 실행.
+    """
+    st.markdown('### ⬇️ 회전 결과 엑셀 다운로드 (MD 수기 실행용)')
+    st.markdown(
+        '<div class="scenario-box">SAP 자동 연동 전(견적 협의 중) **임시 운영 방식** — 채널별 시트로 분리한 엑셀을 '
+        'MD가 다운받아 본인 채널에서 빠지는 단품·수량을 확인 후 수기 실행. '
+        '시트 = 6개 채널 + 전체 회전 매트릭스 + 출고매장코드별 요약.</div>',
+        unsafe_allow_html=True)
+
+    smap = _load_style_map()
+    preset = SCENARIOS['🛡️ 기본']
+    params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'],
+                  preset['min_move'], preset['min_recv'], _ch_excl_key(), preset['move_cap_pct'])
+    try:
+        results = calc_results_v20(params_key)
+    except Exception as e:
+        st.error(f'회전 계산 실패: {e}')
+        return
+
+    out_rows = {ch: [] for ch in CHANNELS}
+    all_rows = []
+    n_move = 0
+    tot_qty = 0
+    for r in results:
+        moves = r.get('moves', {})
+        if not moves or not any(v != 0 for v in moves.values()):
+            continue
+        d = r['data']
+        code = r['code']
+        sty = code[:10]
+        sty_name = smap.get(sty, d.get('name', ''))
+        in_pairs = [(ch, moves[ch]) for ch in CHANNELS if moves.get(ch, 0) > 0]
+        if not in_pairs:
+            continue
+        in_str = ' / '.join([f'{CH_SHORT.get(ch, ch)}+{q:,}' for ch, q in in_pairs])
+        # 각 OUT 채널마다 행 생성
+        for out_ch in CHANNELS:
+            out_qty = -moves.get(out_ch, 0)
+            if out_qty > 0:
+                price = d.get('price', 0)
+                row = {
+                    '단품코드': code,
+                    '스타일코드': sty,
+                    '스타일명': sty_name,
+                    '내 채널 현재고': d['inv'].get(out_ch, 0),
+                    '내 채널 주판': d['orders'].get(out_ch, 0),
+                    'OUT 수량(장)': int(out_qty),
+                    '받는 채널 분배': in_str,
+                    '내 채널 매장코드': WAREHOUSE_CODE.get(out_ch, '-'),
+                    '단품 정상가(원)': price,
+                    '회수매출(만원)': round(out_qty * price / 10000),
+                }
+                out_rows[out_ch].append(row)
+                tot_qty += int(out_qty)
+                n_move += 1
+                all_rows.append({**row, 'OUT 채널': out_ch})
+
+    # KPI
+    c1, c2, c3 = st.columns(3)
+    _kpi(c1, '🔄 회전 발생 단품×채널', f'{n_move:,}건', '시나리오 🛡️ 기본 · 회전 30%')
+    _kpi(c2, '📦 총 OUT 수량', f'{tot_qty:,}장', '6채널 합산')
+    _kpi(c3, '🏪 활성 OUT 채널', f'{sum(1 for ch in CHANNELS if len(out_rows[ch]) > 0):,}개', '회전 발생 채널')
+
+    # 시트 구성 (6채널 + 전체 + 매장코드 요약)
+    sheets = {}
+    for ch in CHANNELS:
+        if out_rows[ch]:
+            df = pd.DataFrame(out_rows[ch]).sort_values('OUT 수량(장)', ascending=False).reset_index(drop=True)
+            sheets[CH_SHORT.get(ch, ch)] = df
+    if all_rows:
+        df_all = pd.DataFrame(all_rows)[
+            ['OUT 채널', '단품코드', '스타일코드', '스타일명',
+             '내 채널 현재고', '내 채널 주판', 'OUT 수량(장)',
+             '받는 채널 분배', '내 채널 매장코드', '단품 정상가(원)', '회수매출(만원)']
+        ]
+        sheets['전체 회전 매트릭스'] = df_all
+        df_wh = (df_all.groupby('내 채널 매장코드')
+                 .agg(단품수=('단품코드', 'count'),
+                      OUT수량=('OUT 수량(장)', 'sum'),
+                      회수매출=('회수매출(만원)', 'sum'))
+                 .reset_index().sort_values('OUT수량', ascending=False))
+        sheets['출고매장코드별 요약'] = df_wh
+
+    from datetime import datetime as _dt
+    fname = f'회전결과_{_dt.now().strftime("%Y%m%d_%H%M")}_{tot_qty}장.xlsx'
+    if sheets:
+        st.download_button(
+            f'⬇️ {fname} 다운로드 — 채널별 시트 {len(sheets)}개',
+            data=_xlsx_bytes(sheets),
+            file_name=fname,
+            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            type='primary', use_container_width=True, key='exp_xlsx',
+        )
+
+        # 채널별 미리보기
+        st.markdown('#### 📋 채널별 회전 결과 미리보기 (상위 30건)')
+        st.caption('각 채널 MD는 본인 채널 탭 + 다운로드한 엑셀의 해당 시트를 확인 후 수기 실행.')
+        ch_tabs = st.tabs(['🌐 전체'] + [CH_SHORT.get(ch, ch) for ch in CHANNELS])
+        with ch_tabs[0]:
+            if 'all_rows' in dir() and all_rows:
+                st.dataframe(pd.DataFrame(all_rows).head(50), use_container_width=True, hide_index=True, height=420)
+            else:
+                st.info('회전 결과가 없습니다.')
+        for i, ch in enumerate(CHANNELS, start=1):
+            with ch_tabs[i]:
+                if out_rows[ch]:
+                    df_ch = pd.DataFrame(out_rows[ch]).sort_values('OUT 수량(장)', ascending=False).head(30)
+                    st.dataframe(df_ch, use_container_width=True, hide_index=True, height=420)
+                    st.caption(f'{ch} 채널 → {len(out_rows[ch]):,}건 / OUT 합계 {sum(r["OUT 수량(장)"] for r in out_rows[ch]):,}장')
+                else:
+                    st.info(f'{ch} 채널에서는 회전 OUT이 발생하지 않았습니다.')
+    else:
+        st.info('현재 시나리오에서 회전이 발생하지 않았습니다. 재배치(기본) 탭에서 시나리오를 먼저 확인하세요.')
+
+    st.caption('🛡️ 시나리오 = 기본 (회전 30% 보수). 임의 조정이 필요하면 재배치(임의) 탭의 슬라이더 활용. '
+               'SAP 자동 연동 후에는 본 탭의 다운로드 단계가 자동화됩니다.')
+
 
 def render_reorder_tab():
     st.markdown('### 🔁 리오더 매핑 관리')
@@ -1947,7 +2068,6 @@ def render_inbound_tab():
             {'현재고': '{:,}'.format, '주간판매': '{:,}'.format,
              '🔌발주완료': '{:,}'.format, '🔌이동중': '{:,}'.format, '🔌항만입항': '{:,}'.format,
              '🔌입고예정계': '{:,}'.format, '보정 가용재고': '{:,}'.format})
-        st.dataframe(styled, use_container_width=True, height=440, hide_index=True)
     st.caption('🔌 입고예정 3종 + 입고예정일은 9/1 API/수기 입력 연동 후 실데이터로 대체. 현재는 단품별 결정적 mock(0~21일).')
 
 
@@ -2052,7 +2172,7 @@ def render():
     labels = ['🛡️ 재배치(기본)', '🎛️ 재배치(임의)', '📈 실행 효과',
               '🧩 추가 분배', '🚨 리오더 요청',
               '🏬 통합 재고뷰', '📊 채널 별 세부', '📦 입고 예정',
-              '🚫 채널 IN-OUT (MD 기입)', '🔁 리오더 매핑 (SCM 기입)']
+              '⬇️ 엑셀 다운로드', '🔁 리오더 매핑 (SCM 기입)']
     t = st.tabs(labels)
     with t[0]:
         render_scenario('🛡️ 기본', st, allow_slider=False)
@@ -2071,7 +2191,7 @@ def render():
     with t[7]:
         render_inbound_tab()
     with t[8]:
-        render_excluded_tab()
+        render_export_tab()
     with t[9]:
         render_reorder_tab()
     st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  온라인 재고관리 Agent v0.9 (스파오 6/19 합의 반영)')
