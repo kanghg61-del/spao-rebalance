@@ -24,10 +24,32 @@ def _xlsx_bytes(sheets: dict) -> bytes:
     return buf.getvalue()
 
 
-def _xlsx_bytes_with_bars(sheets: dict, bar_columns: list) -> bytes:
-    """xlsx 생성 + 지정 컬럼에 데이터 바 조건부 서식 적용 (MD 직관성 ↑)."""
+def _xlsx_bytes_with_bars(sheets: dict, bar_columns: list = None,
+                           red_bar_columns: list = None,
+                           woc_columns: list = None) -> bytes:
+    """xlsx 생성 + 조건부 서식 (파란 데이터 바·빨간 데이터 바·WOC 신호등).
+
+    bar_columns: 파란 데이터 바 (#638EC6) — 큰 값 강조
+    red_bar_columns: 빨간 데이터 바 (#FF6B6B) — 회수매출 등 강조
+    woc_columns: 'N주' 텍스트 셀 → 대시보드 신호등 (대시보드 woc_color 기준)
+                 <1주 빨강(FFC7CE) / 1~4주 노랑(FFEB9C) / ≥4주 초록(C6EFCE)
+    """
     from openpyxl.formatting.rule import DataBarRule
+    from openpyxl.styles import PatternFill, Font
     from openpyxl.utils import get_column_letter
+
+    bar_columns = bar_columns or []
+    red_bar_columns = red_bar_columns or []
+    woc_columns = woc_columns or []
+
+    # 대시보드 신호등 매핑 — 옅은 톤 (엑셀 가독성)
+    fill_red = PatternFill('solid', fgColor='FFC7CE')
+    fill_yellow = PatternFill('solid', fgColor='FFEB9C')
+    fill_green = PatternFill('solid', fgColor='C6EFCE')
+    font_red = Font(color='9C0006', bold=True)
+    font_yellow = Font(color='9C5700', bold=True)
+    font_green = Font(color='006100', bold=True)
+
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='openpyxl') as writer:
         for name, df in sheets.items():
@@ -37,17 +59,49 @@ def _xlsx_bytes_with_bars(sheets: dict, bar_columns: list) -> bytes:
             df.to_excel(writer, sheet_name=sheet_name, index=False)
             ws = writer.book[sheet_name]
             n_rows = len(df)
+
+            # 파란 데이터 바
             for col_name in bar_columns:
                 if col_name in df.columns:
                     col_idx = list(df.columns).index(col_name) + 1
                     col_letter = get_column_letter(col_idx)
                     rng = f'{col_letter}2:{col_letter}{n_rows + 1}'
-                    rule = DataBarRule(
+                    ws.conditional_formatting.add(rng, DataBarRule(
                         start_type='min', end_type='max',
-                        color='638EC6', showValue=True,
-                    )
-                    ws.conditional_formatting.add(rng, rule)
-            # 컬럼 너비 자동 조정 (대략)
+                        color='638EC6', showValue=True))
+
+            # 빨간 데이터 바 (회수매출 등)
+            for col_name in red_bar_columns:
+                if col_name in df.columns:
+                    col_idx = list(df.columns).index(col_name) + 1
+                    col_letter = get_column_letter(col_idx)
+                    rng = f'{col_letter}2:{col_letter}{n_rows + 1}'
+                    ws.conditional_formatting.add(rng, DataBarRule(
+                        start_type='min', end_type='max',
+                        color='FF6B6B', showValue=True))
+
+            # WOC 신호등 (셀별 직접 fill 적용 — 텍스트 "N주" 파싱)
+            for col_name in woc_columns:
+                if col_name in df.columns:
+                    col_idx = list(df.columns).index(col_name) + 1
+                    for row_idx in range(2, n_rows + 2):
+                        cell = ws.cell(row=row_idx, column=col_idx)
+                        val = str(cell.value or '').strip()
+                        try:
+                            num = float(val.replace('주', '').strip())
+                        except (ValueError, AttributeError):
+                            continue
+                        if num < 1:
+                            cell.fill = fill_red
+                            cell.font = font_red
+                        elif num < 4:
+                            cell.fill = fill_yellow
+                            cell.font = font_yellow
+                        else:
+                            cell.fill = fill_green
+                            cell.font = font_green
+
+            # 컬럼 너비 자동 조정
             for col_idx, col_name in enumerate(df.columns, start=1):
                 col_letter = get_column_letter(col_idx)
                 max_len = max(len(str(col_name)), 8)
@@ -590,11 +644,14 @@ def render_scenario(scenario_key, container, allow_slider=False):
             tot_qty = sum(r['OUT 수량(장)'] for r in all_rows) if all_rows else 0
             fname = f'회전결과_{scenario_key.replace(" ", "")}_{_dt.now().strftime("%Y%m%d_%H%M")}_{tot_qty}장.xlsx'
             if sheets:
-                # 데이터 바 적용 컬럼 (사용자 6/19 요청)
+                # 조건부 서식 (사용자 6/19 요청)
                 bar_cols = ['내 채널 현재고', '내 채널 주판', 'OUT 수량(장)']
+                red_bar_cols = ['회수매출(만원)']
+                woc_cols = ['OUT 후 재고주수']
                 st.download_button(
                     f'⬇️ Excel 다운로드 (회전 수기 실행용 · {sel_count:,}건)',
-                    data=_xlsx_bytes_with_bars(sheets, bar_cols), file_name=fname,
+                    data=_xlsx_bytes_with_bars(sheets, bar_cols, red_bar_cols, woc_cols),
+                    file_name=fname,
                     mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                     use_container_width=True, key=f'exp_xlsx_{scenario_key}',
                 )
@@ -2243,8 +2300,6 @@ def render():
     st.markdown('<div class="title-bar">온라인 재고관리 Agent — 운영 대시보드<span class="ver-badge">v0.9</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
-    if reorder_info['file']:
-        reorder_txt = f"리오더 병합: {reorder_info['merged']:,}건 ({reorder_info['file']})"
     if reorder_info['file']:
         reorder_txt = f"리오더 병합: {reorder_info['merged']:,}건 ({reorder_info['file']})"
     else:
