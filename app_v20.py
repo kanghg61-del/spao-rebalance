@@ -503,10 +503,62 @@ def render_scenario(scenario_key, container, allow_slider=False):
             exec_id = effect_log.log_execution(scenario_key, len(sel_items), sel_qty, sel_rev, details=details)
             _approve_dialog(scenario_key, sel_count, sel_qty, sel_amt, sel_rev, ch_in, ch_out, exec_id)
     with col_b2:
-        if st.button('✋ Override 화면', use_container_width=True, key=f'override_{scenario_key}'):
-            st.info('실 배포 시 단품별 수정 다이얼로그 (현재 PoC mock)')
+        # SAP 자동 연동 전 임시 — MD가 수기 실행할 수 있도록 회전 결과 엑셀 다운로드
+        # (스파오 6/19 합의 — 이노플 견적 협의 중)
+        try:
+            smap = _load_style_map()
+            out_rows = {ch: [] for ch in CHANNELS}
+            all_rows = []
+            for it in sel_items:
+                d = it['data']
+                code = it['code']
+                moves = it.get('moves', {})
+                sty = code[:10]
+                sty_name = smap.get(sty, d.get('name', ''))
+                in_pairs = [(ch, moves[ch]) for ch in CHANNELS if moves.get(ch, 0) > 0]
+                in_str = ' / '.join([f'{CH_SHORT.get(ch, ch)}+{q:,}' for ch, q in in_pairs])
+                for out_ch in CHANNELS:
+                    out_qty = -moves.get(out_ch, 0)
+                    if out_qty > 0:
+                        price = d.get('price', 0)
+                        row = {
+                            '단품코드': code, '스타일코드': sty, '스타일명': sty_name,
+                            '내 채널 현재고': d['inv'].get(out_ch, 0),
+                            '내 채널 주판': d['orders'].get(out_ch, 0),
+                            'OUT 수량(장)': int(out_qty),
+                            '받는 채널 분배': in_str,
+                            '내 채널 매장코드': WAREHOUSE_CODE.get(out_ch, '-'),
+                            '단품 정상가(원)': price,
+                            '회수매출(만원)': round(out_qty * price / 10000),
+                        }
+                        out_rows[out_ch].append(row)
+                        all_rows.append({**row, 'OUT 채널': out_ch})
+            sheets = {}
+            for ch in CHANNELS:
+                if out_rows[ch]:
+                    sheets[CH_SHORT.get(ch, ch)] = (
+                        pd.DataFrame(out_rows[ch])
+                        .sort_values('OUT 수량(장)', ascending=False)
+                        .reset_index(drop=True)
+                    )
+            if all_rows:
+                sheets['전체 회전 매트릭스'] = pd.DataFrame(all_rows)
+            from datetime import datetime as _dt
+            tot_qty = sum(r['OUT 수량(장)'] for r in all_rows) if all_rows else 0
+            fname = f'회전결과_{scenario_key.replace(" ", "")}_{_dt.now().strftime("%Y%m%d_%H%M")}_{tot_qty}장.xlsx'
+            if sheets:
+                st.download_button(
+                    f'⬇️ Excel 다운로드 (회전 수기 실행용 · {sel_count:,}건)',
+                    data=_xlsx_bytes(sheets), file_name=fname,
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    use_container_width=True, key=f'exp_xlsx_{scenario_key}',
+                )
+            else:
+                st.button('⬇️ Excel 다운로드 (0건)', use_container_width=True, disabled=True, key=f'exp_xlsx_dis_{scenario_key}')
+        except Exception as e:
+            st.button(f'⬇️ Excel 다운로드 (에러)', use_container_width=True, disabled=True, key=f'exp_xlsx_err_{scenario_key}')
     with col_b3:
-        container.caption('실 배포: 승인 → SAP BAPI 자동 호출 → audit log 기록')
+        container.caption('스파오 6/19 합의 — SAP 자동 연동 전 임시 운영: 위 ⬇️ Excel(채널별 시트)로 MD 수기 실행.')
 
 
 def render_excluded_tab():
@@ -2128,6 +2180,7 @@ def render_unified_tab():
             '재고보유주수': round(woc, 1) if woc is not None else None,
         })
     df = pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
     styled = (df.style
               .map(woc_color, subset=['재고보유주수'])
               .apply(_hl_sum_unified, axis=1)
@@ -2172,7 +2225,7 @@ def render():
     labels = ['🛡️ 재배치(기본)', '🎛️ 재배치(임의)', '📈 실행 효과',
               '🧩 추가 분배', '🚨 리오더 요청',
               '🏬 통합 재고뷰', '📊 채널 별 세부', '📦 입고 예정',
-              '⬇️ 엑셀 다운로드', '🔁 리오더 매핑 (SCM 기입)']
+              '🚫 채널 IN-OUT (MD 기입)', '🔁 리오더 매핑 (SCM 기입)']
     t = st.tabs(labels)
     with t[0]:
         render_scenario('🛡️ 기본', st, allow_slider=False)
@@ -2191,7 +2244,7 @@ def render():
     with t[7]:
         render_inbound_tab()
     with t[8]:
-        render_export_tab()
+        render_excluded_tab()
     with t[9]:
         render_reorder_tab()
     st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  온라인 재고관리 Agent v0.9 (스파오 6/19 합의 반영)')
