@@ -24,6 +24,41 @@ def _xlsx_bytes(sheets: dict) -> bytes:
     return buf.getvalue()
 
 
+def _xlsx_bytes_with_bars(sheets: dict, bar_columns: list) -> bytes:
+    """xlsx 생성 + 지정 컬럼에 데이터 바 조건부 서식 적용 (MD 직관성 ↑)."""
+    from openpyxl.formatting.rule import DataBarRule
+    from openpyxl.utils import get_column_letter
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine='openpyxl') as writer:
+        for name, df in sheets.items():
+            if df is None or len(df) == 0:
+                continue
+            sheet_name = name[:31]
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+            ws = writer.book[sheet_name]
+            n_rows = len(df)
+            for col_name in bar_columns:
+                if col_name in df.columns:
+                    col_idx = list(df.columns).index(col_name) + 1
+                    col_letter = get_column_letter(col_idx)
+                    rng = f'{col_letter}2:{col_letter}{n_rows + 1}'
+                    rule = DataBarRule(
+                        start_type='min', end_type='max',
+                        color='638EC6', showValue=True,
+                    )
+                    ws.conditional_formatting.add(rng, rule)
+            # 컬럼 너비 자동 조정 (대략)
+            for col_idx, col_name in enumerate(df.columns, start=1):
+                col_letter = get_column_letter(col_idx)
+                max_len = max(len(str(col_name)), 8)
+                try:
+                    max_len = max(max_len, df[col_name].astype(str).str.len().max())
+                except Exception:
+                    pass
+                ws.column_dimensions[col_letter].width = min(max_len + 2, 30)
+    return buf.getvalue()
+
+
 # ─── 메일링 명단 (회사 메일) ──────────────────────────────────
 DEFAULT_SCM_LIST = [
     'PARK_JINSEONG03@eland.co.kr',
@@ -517,8 +552,8 @@ def render_scenario(scenario_key, container, allow_slider=False):
                 sty_name = smap.get(sty, d.get('name', ''))
                 in_pairs = [(ch, moves[ch]) for ch in CHANNELS if moves.get(ch, 0) > 0]
                 in_str = ' / '.join([f'{CH_SHORT.get(ch, ch)}+{q:,}' for ch, q in in_pairs])
-                # 받는 채널 매장코드 (회전 작업 편의)
-                in_wh_str = ' / '.join([f'{CH_SHORT.get(ch, ch)}:{WAREHOUSE_CODE.get(ch, "-")}' for ch, _ in in_pairs])
+                # 받는 채널 매장코드 (회전 작업 편의 — 영문 4자리만, 사용자 요청 6/19)
+                in_wh_str = ' / '.join([WAREHOUSE_CODE.get(ch, '-') for ch, _ in in_pairs])
                 for out_ch in CHANNELS:
                     out_qty = -moves.get(out_ch, 0)
                     if out_qty > 0:
@@ -555,9 +590,11 @@ def render_scenario(scenario_key, container, allow_slider=False):
             tot_qty = sum(r['OUT 수량(장)'] for r in all_rows) if all_rows else 0
             fname = f'회전결과_{scenario_key.replace(" ", "")}_{_dt.now().strftime("%Y%m%d_%H%M")}_{tot_qty}장.xlsx'
             if sheets:
+                # 데이터 바 적용 컬럼 (사용자 6/19 요청)
+                bar_cols = ['내 채널 현재고', '내 채널 주판', 'OUT 수량(장)']
                 st.download_button(
                     f'⬇️ Excel 다운로드 (회전 수기 실행용 · {sel_count:,}건)',
-                    data=_xlsx_bytes(sheets), file_name=fname,
+                    data=_xlsx_bytes_with_bars(sheets, bar_cols), file_name=fname,
                     mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                     use_container_width=True, key=f'exp_xlsx_{scenario_key}',
                 )
@@ -2206,6 +2243,8 @@ def render():
     st.markdown('<div class="title-bar">온라인 재고관리 Agent — 운영 대시보드<span class="ver-badge">v0.9</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
+    if reorder_info['file']:
+        reorder_txt = f"리오더 병합: {reorder_info['merged']:,}건 ({reorder_info['file']})"
     if reorder_info['file']:
         reorder_txt = f"리오더 병합: {reorder_info['merged']:,}건 ({reorder_info['file']})"
     else:
