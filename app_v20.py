@@ -620,33 +620,37 @@ def render_scenario(scenario_key, container, allow_slider=False):
                 in_str = ' / '.join([f'{CH_SHORT.get(ch, ch)}+{q:,}' for ch, q in in_pairs])
                 # 받는 채널 매장코드 (회전 작업 편의 — 영문 4자리만, 사용자 요청 6/19)
                 in_wh_str = ' / '.join([WAREHOUSE_CODE.get(ch, '-') for ch, _ in in_pairs])
-                for out_ch in CHANNELS:
-                    out_qty = -moves.get(out_ch, 0)
-                    if out_qty > 0:
-                        price = d.get('price', 0)
-                        inv_my = d['inv'].get(out_ch, 0)
-                        ord_my = d['orders'].get(out_ch, 0)
-                        # 같은 채널 IN 수량 (양방향 회전 대비 — 보통 0)
-                        in_qty_my = max(0, moves.get(out_ch, 0))
-                        # 현 재고주수 / 이동 후 재고주수 (OUT·IN 모두 반영)
-                        woc_cur = round(inv_my / ord_my, 1) if ord_my > 0 else None
-                        woc_after = round((inv_my + in_qty_my - out_qty) / ord_my, 1) if ord_my > 0 else None
-                        row = {
-                            '단품코드': code, '스타일코드': sty, '스타일명': sty_name,
-                            '내 채널 현재고': inv_my,
-                            '내 채널 주판': ord_my,
-                            '현 재고주수': (f'{woc_cur}주' if woc_cur is not None else ''),
-                            'OUT 수량(장)': int(out_qty),
-                            'IN 수량(장)': int(in_qty_my),
-                            '이동 후 재고주수': (f'{woc_after}주' if woc_after is not None else ''),
-                            '받는 채널 분배': in_str,
-                            '받는 채널 매장코드': in_wh_str,
-                            '내 채널 매장코드': WAREHOUSE_CODE.get(out_ch, '-'),
-                            '단품 정상가(원)': price,
-                            '회수매출(만원)': round(out_qty * price / 10000),
-                        }
-                        out_rows[out_ch].append(row)
-                        all_rows.append({**row, 'OUT 채널': out_ch})
+                # v0.9.8 — 채널 시트에 OUT·IN 모두 표시 (단품 누락 방지)
+                # ch_move != 0인 모든 채널을 그 채널의 시트에 포함
+                for ch in CHANNELS:
+                    ch_move = moves.get(ch, 0)
+                    if ch_move == 0:
+                        continue
+                    out_qty = max(0, -ch_move)
+                    in_qty = max(0, ch_move)
+                    price = d.get('price', 0)
+                    inv_my = d['inv'].get(ch, 0)
+                    ord_my = d['orders'].get(ch, 0)
+                    woc_cur = round(inv_my / ord_my, 1) if ord_my > 0 else None
+                    woc_after = round((inv_my + in_qty - out_qty) / ord_my, 1) if ord_my > 0 else None
+                    # 회수매출은 OUT일 때만 (해당 채널이 빠지는 효과)
+                    recovery = round(out_qty * price / 10000) if out_qty > 0 else 0
+                    row = {
+                        '단품코드': code, '스타일코드': sty, '스타일명': sty_name,
+                        '내 채널 현재고': inv_my,
+                        '내 채널 주판': ord_my,
+                        '현 재고주수': (f'{woc_cur}주' if woc_cur is not None else ''),
+                        'OUT 수량(장)': int(out_qty),
+                        'IN 수량(장)': int(in_qty),
+                        '이동 후 재고주수': (f'{woc_after}주' if woc_after is not None else ''),
+                        '받는 채널 분배': in_str,
+                        '받는 채널 매장코드': in_wh_str,
+                        '내 채널 매장코드': WAREHOUSE_CODE.get(ch, '-'),
+                        '단품 정상가(원)': price,
+                        '회수매출(만원)': recovery,
+                    }
+                    out_rows[ch].append(row)
+                    all_rows.append({**row, '채널': ch})
             sheets = {}
             for ch in CHANNELS:
                 if out_rows[ch]:
