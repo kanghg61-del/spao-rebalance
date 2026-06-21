@@ -26,7 +26,8 @@ def _xlsx_bytes(sheets: dict) -> bytes:
 
 def _xlsx_bytes_with_bars(sheets: dict, bar_columns: list = None,
                            red_bar_columns: list = None,
-                           woc_columns: list = None) -> bytes:
+                           woc_columns: list = None,
+                           bold_columns: list = None) -> bytes:
     """xlsx 생성 + 조건부 서식 (파란 데이터 바·빨간 데이터 바·WOC 신호등).
 
     bar_columns: 파란 데이터 바 (#638EC6) — 큰 값 강조
@@ -41,6 +42,7 @@ def _xlsx_bytes_with_bars(sheets: dict, bar_columns: list = None,
     bar_columns = bar_columns or []
     red_bar_columns = red_bar_columns or []
     woc_columns = woc_columns or []
+    bold_columns = bold_columns or []
 
     # 대시보드 신호등 매핑 — 옅은 톤 (엑셀 가독성)
     fill_red = PatternFill('solid', fgColor='FFC7CE')
@@ -100,6 +102,16 @@ def _xlsx_bytes_with_bars(sheets: dict, bar_columns: list = None,
                         else:
                             cell.fill = fill_green
                             cell.font = font_green
+
+            # 굵게 처리 (사용자 6/19 요청 — 실행 중요도 강조)
+            for col_name in bold_columns:
+                if col_name in df.columns:
+                    col_idx = list(df.columns).index(col_name) + 1
+                    for row_idx in range(2, n_rows + 2):
+                        cell = ws.cell(row=row_idx, column=col_idx)
+                        existing_color = cell.font.color if cell.font else None
+                        existing_size = cell.font.size if cell.font else 11
+                        cell.font = Font(bold=True, size=existing_size, color=existing_color)
 
             # 컬럼 너비 자동 조정
             for col_idx, col_name in enumerate(df.columns, start=1):
@@ -614,14 +626,19 @@ def render_scenario(scenario_key, container, allow_slider=False):
                         price = d.get('price', 0)
                         inv_my = d['inv'].get(out_ch, 0)
                         ord_my = d['orders'].get(out_ch, 0)
-                        # OUT 후 재고주수 = (현재고 - OUT) / 주판
-                        woc_after = round((inv_my - out_qty) / ord_my, 1) if ord_my > 0 else None
+                        # 같은 채널 IN 수량 (양방향 회전 대비 — 보통 0)
+                        in_qty_my = max(0, moves.get(out_ch, 0))
+                        # 현 재고주수 / 이동 후 재고주수 (OUT·IN 모두 반영)
+                        woc_cur = round(inv_my / ord_my, 1) if ord_my > 0 else None
+                        woc_after = round((inv_my + in_qty_my - out_qty) / ord_my, 1) if ord_my > 0 else None
                         row = {
                             '단품코드': code, '스타일코드': sty, '스타일명': sty_name,
                             '내 채널 현재고': inv_my,
                             '내 채널 주판': ord_my,
+                            '현 재고주수': (f'{woc_cur}주' if woc_cur is not None else ''),
                             'OUT 수량(장)': int(out_qty),
-                            'OUT 후 재고주수': (f'{woc_after}주' if woc_after is not None else ''),
+                            'IN 수량(장)': int(in_qty_my),
+                            '이동 후 재고주수': (f'{woc_after}주' if woc_after is not None else ''),
                             '받는 채널 분배': in_str,
                             '받는 채널 매장코드': in_wh_str,
                             '내 채널 매장코드': WAREHOUSE_CODE.get(out_ch, '-'),
@@ -647,10 +664,11 @@ def render_scenario(scenario_key, container, allow_slider=False):
                 # 조건부 서식 (사용자 6/19 요청)
                 bar_cols = ['내 채널 현재고', '내 채널 주판', 'OUT 수량(장)']
                 red_bar_cols = ['회수매출(만원)']
-                woc_cols = ['OUT 후 재고주수']
+                woc_cols = ['현 재고주수', '이동 후 재고주수']
+                bold_cols = ['OUT 수량(장)']
                 st.download_button(
                     f'⬇️ Excel 다운로드 (회전 수기 실행용 · {sel_count:,}건)',
-                    data=_xlsx_bytes_with_bars(sheets, bar_cols, red_bar_cols, woc_cols),
+                    data=_xlsx_bytes_with_bars(sheets, bar_cols, red_bar_cols, woc_cols, bold_cols),
                     file_name=fname,
                     mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                     use_container_width=True, key=f'exp_xlsx_{scenario_key}',
