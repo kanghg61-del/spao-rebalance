@@ -2756,24 +2756,35 @@ def render():
               '🏬 통합 재고뷰', '📊 채널 별 세부', '📦 입고 예정',
               '🚫 채널 IN-OUT (MD 기입)', '🔁 리오더 매핑 (SCM 기입)']
     t = st.tabs(labels)
+
+    def _safe(name, fn):
+        """탭 렌더 안전망 — 에러 시 어떤 탭/어떤 에러인지 표시 (다른 탭 영향 차단)."""
+        import traceback as _tb
+        try:
+            fn()
+        except Exception as e:
+            st.error(f'⚠️ **[{name}] 탭 렌더 실패** — `{type(e).__name__}: {e}`')
+            with st.expander('🔎 디버그 traceback'):
+                st.code(_tb.format_exc())
+
     with t[0]:
-        render_scenario('🛡️ 기본', st, allow_slider=False)
+        _safe('재배치(기본)', lambda: render_scenario('🛡️ 기본', st, allow_slider=False))
     with t[1]:
-        render_scenario('🎛️ 임의', st, allow_slider=True)
+        _safe('재배치(임의)', lambda: render_scenario('🎛️ 임의', st, allow_slider=True))
     with t[2]:
-        render_effect_tab()
+        _safe('실행 효과', render_effect_tab)
     with t[3]:
-        render_onepan_tab()
+        _safe('추가 분배', render_onepan_tab)
     with t[4]:
-        render_reorder_request_tab()
+        _safe('리오더 요청', render_reorder_request_tab)
     with t[5]:
-        render_unified_tab()
+        _safe('통합 재고뷰', render_unified_tab)
     with t[6]:
-        render_channel_tab()
+        _safe('채널 별 세부', render_channel_tab)
     with t[7]:
-        render_inbound_tab()
+        _safe('입고 예정', render_inbound_tab)
     with t[8]:
-        render_excluded_tab()
+        _safe('채널 IN-OUT', render_excluded_tab)
     with t[9]:
-        render_reorder_tab()
+        _safe('리오더 매핑', render_reorder_tab)
     st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  온라인 재고관리 Agent v0.9 (스파오 6/19 합의 반영)')
