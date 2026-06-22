@@ -2772,6 +2772,26 @@ def _trigger_data_refresh():
     st.session_state['data_seed_ts'] = _dt.now().strftime('%Y-%m-%d %H:%M:%S')
 
 
+def _spao_img_url(sty_code, accent='#4a90ff'):
+    '''SPAO 상품 이미지 URL (현재 mock — 7월 본연동 시 SPAO 공홈 실 이미지로 교체).
+    accent: 카드별 강조색. SVG inline data URI 사용 (외부 의존성 0).'''
+    import base64 as _b64
+    bg = '#0f1d3a'
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="120" height="150" viewBox="0 0 120 150">'
+        f'<rect width="120" height="150" fill="{bg}" rx="6"/>'
+        f'<rect x="14" y="14" width="92" height="100" fill="{accent}" opacity="0.18" rx="4"/>'
+        f'<text x="60" y="65" text-anchor="middle" fill="{accent}" '
+        f'font-family="Arial" font-size="11" font-weight="700">{sty_code}</text>'
+        f'<text x="60" y="82" text-anchor="middle" fill="#9ab" '
+        f'font-family="Arial" font-size="8">SPAO mock</text>'
+        f'<text x="60" y="135" text-anchor="middle" fill="#666" '
+        f'font-family="Arial" font-size="8">7월 실 이미지 연동</text>'
+        f'</svg>'
+    )
+    return 'data:image/svg+xml;base64,' + _b64.b64encode(svg.encode()).decode()
+
+
 def _compute_summary_kpis(skus, seed):
     """AI 요약 KPI 계산 — 전일 주문 수/액 + 현 재고 + 보유일수 + 회전/분배 추천."""
     from collections import defaultdict
@@ -2812,16 +2832,22 @@ def _compute_summary_kpis(skus, seed):
     results = _apply_data_variance(results, seed)
     rotation_qty = sum(sum(v for v in r['moves'].values() if v > 0) for r in results)
     rotation_amt = sum(r['revenue'] for r in results)
-    # 채널별 회전 IN/OUT 추천
+    # 채널별 회전 IN/OUT + 회전 대표 단품(채널이 가장 많이 IN 받는 단품)
     ch_in_qty = defaultdict(int)
     ch_in_amt = defaultdict(int)
     ch_out_qty = defaultdict(int)
+    ch_top_in_sku = {}  # ch -> (sty_code, in_qty, name)
     for r in results:
         price = r['data'].get('price', 0)
+        sty = r['code'][:10]
+        nm = smap.get(sty, r['data'].get('name', ''))
         for c, v in r['moves'].items():
             if v > 0:
                 ch_in_qty[c] += v
                 ch_in_amt[c] += v * price
+                prev = ch_top_in_sku.get(c)
+                if (not prev) or v > prev[1]:
+                    ch_top_in_sku[c] = (sty, v, nm)
             elif v < 0:
                 ch_out_qty[c] += -v
     # 분배 (반응과) — calc_distribution 호출 (잔여 결품 보충 추정)
@@ -2854,6 +2880,7 @@ def _compute_summary_kpis(skus, seed):
         'ch_inv': ch_inv, 'ch_orders': ch_orders, 'ch_lead': ch_lead,
         'rotation_qty': rotation_qty, 'rotation_amt': rotation_amt,
         'ch_in_qty': ch_in_qty, 'ch_in_amt': ch_in_amt, 'ch_out_qty': ch_out_qty,
+        'ch_top_in_sku': ch_top_in_sku,
         'dist_qty': dist_qty_total, 'dist_amt': dist_amt_total,
         'ch_dist_qty': ch_dist_qty, 'ch_dist_amt': ch_dist_amt,
     }
@@ -2865,10 +2892,10 @@ def render_ai_summary_tab():
     st.markdown(
         '<div style="background:linear-gradient(135deg,#1a0d2e 0%,#0f1d3a 50%,#0a2138 100%);'
         'padding:18px 22px;border-radius:12px;border:1px solid #5a3fb8;margin-bottom:14px">'
-        '<div style="color:#c4a8ff;font-size:11px;letter-spacing:2px;font-weight:700">AICA · DAILY BRIEF</div>'
-        '<div style="color:#fff;font-size:26px;font-weight:800;margin-top:4px">'
+        '<div style="color:#c4a8ff;font-size:13px;letter-spacing:2px;font-weight:700">AICA · DAILY BRIEF</div>'
+        '<div style="color:#fff;font-size:34px;font-weight:800;margin-top:6px">'
         '🤖 오늘의 일일 요약 보고</div>'
-        f'<div style="color:#9fb3d9;font-size:12px;margin-top:4px">'
+        f'<div style="color:#9fb3d9;font-size:14px;margin-top:6px">'
         f'📅 {_dt.now().strftime("%Y-%m-%d %A")} · 전일 주문·현 재고·회전·반응과 분배 한눈에</div>'
         '</div>',
         unsafe_allow_html=True,
@@ -2906,32 +2933,32 @@ def render_ai_summary_tab():
     sc1, sc2 = st.columns(2)
     with sc1:
         st.markdown(
-            f'<div style="background:#0d2540;border:1px solid #4a90ff;border-radius:10px;'
-            f'padding:14px 18px"><div style="color:#9fb3d9;font-size:11px;font-weight:700;'
+            f'<div style="background:#0d2540;border:1px solid #4a90ff;border-radius:12px;'
+            f'padding:20px 24px"><div style="color:#9fb3d9;font-size:14px;font-weight:700;'
             f'letter-spacing:1px">🔄 회전(6채널 횡연결)으로 당겨야 할 양</div>'
-            f'<div style="color:#fff;font-size:22px;font-weight:800;margin-top:6px">'
-            f'{K["rotation_qty"]:,}장 · '
-            f'<span style="color:#4a90ff">{K["rotation_amt"]/100000000:.2f}억</span></div>'
-            f'<div style="color:#9ab;font-size:11px;margin-top:4px">'
+            f'<div style="color:#fff;font-size:34px;font-weight:800;margin-top:10px">'
+            f'{K["rotation_qty"]:,}<span style="font-size:18px">장</span> · '
+            f'<span style="color:#4a90ff">{K["rotation_amt"]/100000000:.2f}<span style="font-size:18px">억</span></span></div>'
+            f'<div style="color:#9ab;font-size:12px;margin-top:6px">'
             f'결품해소 회수매출 기준 (대시보드 KPI와 동일 산식)</div></div>',
             unsafe_allow_html=True,
         )
     with sc2:
         st.markdown(
-            f'<div style="background:#0d3320;border:1px solid #7cd99c;border-radius:10px;'
-            f'padding:14px 18px"><div style="color:#9fb3d9;font-size:11px;font-weight:700;'
+            f'<div style="background:#0d3320;border:1px solid #7cd99c;border-radius:12px;'
+            f'padding:20px 24px"><div style="color:#9fb3d9;font-size:14px;font-weight:700;'
             f'letter-spacing:1px">📦 반응과에서 당겨야 할 양 (회전 후 잔여 결품)</div>'
-            f'<div style="color:#fff;font-size:22px;font-weight:800;margin-top:6px">'
-            f'{K["dist_qty"]:,}장 · '
-            f'<span style="color:#7cd99c">{K["dist_amt"]/100000000:.2f}억</span></div>'
-            f'<div style="color:#9ab;font-size:11px;margin-top:4px">'
+            f'<div style="color:#fff;font-size:34px;font-weight:800;margin-top:10px">'
+            f'{K["dist_qty"]:,}<span style="font-size:18px">장</span> · '
+            f'<span style="color:#7cd99c">{K["dist_amt"]/100000000:.2f}<span style="font-size:18px">억</span></span></div>'
+            f'<div style="color:#9ab;font-size:12px;margin-top:6px">'
             f'반응과 가용재고 → 채널 결품 보충 추정</div></div>',
             unsafe_allow_html=True,
         )
 
     st.markdown('---')
 
-    # 채널 6 카드 — 리딩 스타일 + 회전 IN/OUT + 분배
+    # 채널 6 카드 — 리딩/회전 대표 단품 이미지 + 회전 IN/OUT + 분배 (폰트 확대)
     st.markdown('### 📊 채널별 리딩 + 회전·분배 당겨야 할 양')
     smap = _load_style_map()
     for row in [CHANNELS[:3], CHANNELS[3:]]:
@@ -2939,36 +2966,76 @@ def render_ai_summary_tab():
         for col, ch in zip(cols, row):
             with col:
                 lead = K['ch_lead'].get(ch)
-                if lead:
-                    lead_sty, lead_qty, lead_nm, lead_price = lead
-                    lead_str = (f'<b style="color:#fff">{lead_sty}</b> '
-                                f'<span style="color:#9ab">{(lead_nm or "")[:14]}</span><br>'
-                                f'<span style="color:#ffb84d">{lead_qty:,}장/주</span>')
-                else:
-                    lead_str = '<span style="color:#666">데이터 없음</span>'
+                top_in = K.get('ch_top_in_sku', {}).get(ch)
                 in_q = K['ch_in_qty'].get(ch, 0)
                 in_a = K['ch_in_amt'].get(ch, 0)
                 out_q = K['ch_out_qty'].get(ch, 0)
                 d_q = K['ch_dist_qty'].get(ch, 0)
                 d_a = K['ch_dist_amt'].get(ch, 0)
                 short_str = CH_SHORT.get(ch, ch)
+                # 리딩 스타일
+                if lead:
+                    lead_sty, lead_qty, lead_nm, lead_price = lead
+                    lead_img = _spao_img_url(lead_sty, '#ffb84d')
+                    lead_html = (
+                        f'<div style="display:flex;gap:10px;align-items:center">'
+                        f'<img src="{lead_img}" width="80" height="100" '
+                        f'style="border-radius:6px;border:1px solid #2e3b50;flex-shrink:0"/>'
+                        f'<div style="flex:1">'
+                        f'<div style="color:#fff;font-size:14px;font-weight:700">{lead_sty}</div>'
+                        f'<div style="color:#9ab;font-size:11px;margin-top:2px">{(lead_nm or "")[:18]}</div>'
+                        f'<div style="color:#ffb84d;font-size:18px;font-weight:800;margin-top:6px">'
+                        f'{lead_qty:,}<span style="font-size:11px;font-weight:600">장/주</span></div>'
+                        f'</div></div>'
+                    )
+                else:
+                    lead_html = '<div style="color:#666;font-size:13px">데이터 없음</div>'
+                # 회전 대표 단품
+                if top_in:
+                    top_sty, top_in_qty, top_nm = top_in
+                    top_img = _spao_img_url(top_sty, '#7cd99c')
+                    top_html = (
+                        f'<div style="display:flex;gap:10px;align-items:center">'
+                        f'<img src="{top_img}" width="80" height="100" '
+                        f'style="border-radius:6px;border:1px solid #2e3b50;flex-shrink:0"/>'
+                        f'<div style="flex:1">'
+                        f'<div style="color:#fff;font-size:14px;font-weight:700">{top_sty}</div>'
+                        f'<div style="color:#9ab;font-size:11px;margin-top:2px">{(top_nm or "")[:18]}</div>'
+                        f'<div style="color:#7cd99c;font-size:18px;font-weight:800;margin-top:6px">'
+                        f'IN {top_in_qty:,}<span style="font-size:11px;font-weight:600">장</span></div>'
+                        f'</div></div>'
+                    )
+                else:
+                    top_html = '<div style="color:#7cd99c;font-size:13px">🟢 결품 없음 · 회전 불필요</div>'
                 col.markdown(
                     f'<div style="background:linear-gradient(180deg,#0f1d3a,#0a1428);'
                     f'border:1px solid #2e3b50;border-left:4px solid #4a90ff;'
-                    f'border-radius:10px;padding:14px;min-height:230px">'
-                    f'<div style="color:#4a90ff;font-size:15px;font-weight:700">'
-                    f'{short_str} <span style="color:#9ab;font-size:11px">· {ch}</span></div>'
-                    f'<div style="color:#9ab;font-size:10px;margin-top:8px">🏆 리딩 스타일 (주판 1위)</div>'
-                    f'<div style="font-size:12px;margin-top:2px">{lead_str}</div>'
-                    f'<div style="color:#9ab;font-size:10px;margin-top:10px">🔄 회전 (IN/OUT)</div>'
-                    f'<div style="font-size:13px;margin-top:2px">'
-                    f'IN <b style="color:#7cd99c">{in_q:,}장</b> · '
-                    f'<span style="color:#7cd99c">{in_a/10000:,.0f}만원</span><br>'
-                    f'OUT <b style="color:#ff6b6b">{out_q:,}장</b></div>'
-                    f'<div style="color:#9ab;font-size:10px;margin-top:10px">📦 분배 (반응과→)</div>'
-                    f'<div style="font-size:13px;margin-top:2px">'
-                    f'<b style="color:#ffb84d">{d_q:,}장</b> · '
-                    f'<span style="color:#ffb84d">{d_a/10000:,.0f}만원</span></div>'
+                    f'border-radius:12px;padding:18px;min-height:520px;'
+                    f'box-shadow:0 0 20px rgba(74,144,255,.1)">'
+                    f'<div style="color:#4a90ff;font-size:22px;font-weight:800">'
+                    f'{short_str}<span style="color:#9ab;font-size:13px;font-weight:500"> · {ch}</span></div>'
+                    f'<div style="color:#9ab;font-size:12px;font-weight:700;margin-top:14px;'
+                    f'letter-spacing:1px">🏆 리딩 스타일 (주판 1위)</div>'
+                    f'<div style="margin-top:6px">{lead_html}</div>'
+                    f'<div style="color:#7cd99c;font-size:12px;font-weight:700;margin-top:14px;'
+                    f'letter-spacing:1px">🔄 회전 대표 단품 (IN 최대)</div>'
+                    f'<div style="margin-top:6px">{top_html}</div>'
+                    f'<div style="display:flex;gap:10px;margin-top:14px">'
+                    f'  <div style="flex:1;background:#0d3320;border-radius:8px;padding:10px;text-align:center">'
+                    f'    <div style="color:#9ab;font-size:11px">🔄 회전 IN</div>'
+                    f'    <div style="color:#7cd99c;font-size:18px;font-weight:800;margin-top:2px">{in_q:,}장</div>'
+                    f'    <div style="color:#7cd99c;font-size:12px">{in_a/10000:,.0f}만원</div>'
+                    f'  </div>'
+                    f'  <div style="flex:1;background:#3a1a1a;border-radius:8px;padding:10px;text-align:center">'
+                    f'    <div style="color:#9ab;font-size:11px">🔄 회전 OUT</div>'
+                    f'    <div style="color:#ff6b6b;font-size:18px;font-weight:800;margin-top:2px">{out_q:,}장</div>'
+                    f'  </div>'
+                    f'</div>'
+                    f'<div style="background:#2e2410;border-radius:8px;padding:10px;text-align:center;margin-top:10px">'
+                    f'  <div style="color:#9ab;font-size:11px">📦 분배 (반응과→)</div>'
+                    f'  <div style="color:#ffb84d;font-size:18px;font-weight:800;margin-top:2px">{d_q:,}장</div>'
+                    f'  <div style="color:#ffb84d;font-size:12px">{d_a/10000:,.0f}만원</div>'
+                    f'</div>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
@@ -2996,9 +3063,9 @@ def render_ai_summary_tab():
     st.markdown(
         f'<div style="background:#1a1f2e;border-left:4px solid #c4a8ff;border-radius:8px;'
         f'padding:14px 18px;margin-top:6px">'
-        f'<div style="color:#c4a8ff;font-size:11px;font-weight:700;letter-spacing:1.5px">'
+        f'<div style="color:#c4a8ff;font-size:13px;font-weight:700;letter-spacing:1.5px">'
         f'💡 AICA 인사이트</div>'
-        f'<div style="color:#fff;font-size:14px;margin-top:8px;line-height:1.6">{insight_html}</div>'
+        f'<div style="color:#fff;font-size:18px;margin-top:10px;line-height:1.7">{insight_html}</div>'
         f'</div>',
         unsafe_allow_html=True,
     )
