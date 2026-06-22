@@ -440,6 +440,15 @@ def render_scenario(scenario_key, container, allow_slider=False):
         results = calc_results_v20(params_key)
     results = _apply_exclusion(results)
     results = _apply_overrides(results)
+    # v0.9 — AI 일일 요약에서 '새로고침' 클릭 시 데이터 ±2% 변동 (mock 시각효과)
+    results = _apply_data_variance(results, _get_data_seed())
+    # 갱신 시각 표시 (AI 일일 요약의 '새로고침' 이벤트 추적)
+    _seed = _get_data_seed()
+    _last = st.session_state.get('data_seed_ts', '최초 로드 (정적 데이터)')
+    if _seed:
+        container.caption(f'📡 마지막 데이터 갱신: <b>{_last}</b> · 데이터 ±2% 변동 적용됨 (mock)', unsafe_allow_html=True)
+    else:
+        container.caption(f'📡 데이터 상태: {_last} · 🤖 AI 일일 요약 탭의 [🔄 새로고침]으로 갱신')
 
     total_units = sum(sum(r['data']['inv'].get(c, 0) for c in CHANNELS) for r in results)
     total_units_amt = sum(sum(r['data']['inv'].get(c, 0) for c in CHANNELS) * r['data']['price'] for r in results)
@@ -2728,6 +2737,275 @@ def _v10_chat_answer(q, results, moves_items):
             '- 📊 "공홈" / "무신" → 채널 회전 상위 5건')
 
 
+def _get_data_seed():
+    """현재 데이터 변동 시드 (실행 버튼 클릭 시 갱신). 없으면 0 (정적)."""
+    return st.session_state.get('data_seed', 0)
+
+
+def _apply_data_variance(results, seed):
+    """mock 시각효과 — seed 기반 ±2% 변동 (단품 단위 일관성).
+    7월 본연동 시 이 함수를 제거하고 진짜 데이터 갱신으로 교체."""
+    if not seed:
+        return results
+    import random as _rnd
+    rnd = _rnd.Random(seed)
+    out = []
+    for r in results:
+        r2 = dict(r)
+        factor = 1.0 + (rnd.random() - 0.5) * 0.04  # ±2%
+        r2['revenue'] = int(r['revenue'] * factor)
+        r2['moves'] = {k: int(round(v * factor)) for k, v in r['moves'].items()}
+        out.append(r2)
+    return out
+
+
+def _trigger_data_refresh():
+    """실행 버튼 클릭 시 호출 — seed 갱신 + 갱신 시각 + 이전 KPI 저장."""
+    import time as _t
+    from datetime import datetime as _dt
+    prev_seed = st.session_state.get('data_seed', 0)
+    if prev_seed:
+        # 이전 결과 보존 (델타 계산용)
+        st.session_state['data_seed_prev'] = prev_seed
+        st.session_state['data_seed_prev_ts'] = st.session_state.get('data_seed_ts', '')
+    st.session_state['data_seed'] = int(_t.time())
+    st.session_state['data_seed_ts'] = _dt.now().strftime('%Y-%m-%d %H:%M:%S')
+
+
+def _compute_summary_kpis(skus, seed):
+    """AI 요약 KPI 계산 — 전일 주문 수/액 + 현 재고 + 보유일수 + 회전/분배 추천."""
+    from collections import defaultdict
+    total_orders_qty = 0
+    total_orders_amt = 0
+    total_inv = 0
+    ch_inv = defaultdict(int)
+    ch_orders = defaultdict(int)
+    ch_lead = {}  # ch -> (sty, qty, name, price)
+    smap = _load_style_map()
+    for code, d in skus.items():
+        price = d.get('price', 0)
+        for c in CHANNELS:
+            o = d['orders'].get(c, 0)
+            i = d['inv'].get(c, 0)
+            total_orders_qty += o
+            total_orders_amt += o * price
+            total_inv += i
+            ch_orders[c] += o
+            ch_inv[c] += i
+            if o > 0:
+                prev = ch_lead.get(c)
+                if (not prev) or o > prev[1]:
+                    sty = code[:10]
+                    nm = smap.get(sty, d.get('name', ''))
+                    ch_lead[c] = (sty, o, nm, price)
+    # 일평균 (주판 ÷ 7)
+    daily_qty = total_orders_qty // 7
+    daily_amt = total_orders_amt // 7
+    woc_days = (total_inv / daily_qty) if daily_qty > 0 else 0
+    # 회전 결과 (기본 시나리오)
+    preset = SCENARIOS['🛡️ 기본']
+    params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'],
+                  preset['min_move'], preset['min_recv'],
+                  _ch_excl_key(), preset['move_cap_pct'])
+    results = calc_results_v20(params_key)
+    results = _apply_exclusion(results)
+    results = _apply_data_variance(results, seed)
+    rotation_qty = sum(sum(v for v in r['moves'].values() if v > 0) for r in results)
+    rotation_amt = sum(r['revenue'] for r in results)
+    # 채널별 회전 IN/OUT 추천
+    ch_in_qty = defaultdict(int)
+    ch_in_amt = defaultdict(int)
+    ch_out_qty = defaultdict(int)
+    for r in results:
+        price = r['data'].get('price', 0)
+        for c, v in r['moves'].items():
+            if v > 0:
+                ch_in_qty[c] += v
+                ch_in_amt[c] += v * price
+            elif v < 0:
+                ch_out_qty[c] += -v
+    # 분배 (반응과) — calc_distribution 호출 (잔여 결품 보충 추정)
+    dist_qty_total = 0
+    dist_amt_total = 0
+    ch_dist_qty = defaultdict(int)
+    ch_dist_amt = defaultdict(int)
+    for r in results:
+        code = r['code']
+        d = skus.get(code)
+        if not d:
+            continue
+        moves = r['moves']
+        try:
+            dist, used = calc_distribution(d, moves, CHANNELS,
+                                           dist_target=preset['target_woc'],
+                                           bw_name='반응과')
+        except Exception:
+            continue
+        price = d.get('price', 0)
+        for c, q in dist.items():
+            if q > 0:
+                ch_dist_qty[c] += q
+                ch_dist_amt[c] += q * price
+                dist_qty_total += q
+                dist_amt_total += q * price
+    return {
+        'daily_qty': daily_qty, 'daily_amt': daily_amt,
+        'total_inv': total_inv, 'woc_days': woc_days,
+        'ch_inv': ch_inv, 'ch_orders': ch_orders, 'ch_lead': ch_lead,
+        'rotation_qty': rotation_qty, 'rotation_amt': rotation_amt,
+        'ch_in_qty': ch_in_qty, 'ch_in_amt': ch_in_amt, 'ch_out_qty': ch_out_qty,
+        'dist_qty': dist_qty_total, 'dist_amt': dist_amt_total,
+        'ch_dist_qty': ch_dist_qty, 'ch_dist_amt': ch_dist_amt,
+    }
+
+
+def render_ai_summary_tab():
+    """🤖 AICA 일일 요약 — 첫 화면. 전일·재고·채널 리딩·회전/분배 추천."""
+    from datetime import datetime as _dt
+    st.markdown(
+        '<div style="background:linear-gradient(135deg,#1a0d2e 0%,#0f1d3a 50%,#0a2138 100%);'
+        'padding:18px 22px;border-radius:12px;border:1px solid #5a3fb8;margin-bottom:14px">'
+        '<div style="color:#c4a8ff;font-size:11px;letter-spacing:2px;font-weight:700">AICA · DAILY BRIEF</div>'
+        '<div style="color:#fff;font-size:26px;font-weight:800;margin-top:4px">'
+        '🤖 오늘의 일일 요약 보고</div>'
+        f'<div style="color:#9fb3d9;font-size:12px;margin-top:4px">'
+        f'📅 {_dt.now().strftime("%Y-%m-%d %A")} · 전일 주문·현 재고·회전·반응과 분배 한눈에</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # 갱신 시각 + 새로고침 버튼
+    seed = _get_data_seed()
+    last_update = st.session_state.get('data_seed_ts', '최초 로드 (정적 데이터)')
+    cc1, cc2 = st.columns([4, 1])
+    with cc1:
+        st.caption(f'📡 마지막 데이터 갱신: {last_update}  ·  '
+                   f'7월 본연동 전 mock 데이터 — 새로고침 시 ±2% 변동 시뮬')
+    with cc2:
+        if st.button('🔄 데이터 새로고침', use_container_width=True, type='primary', key='ai_refresh'):
+            _trigger_data_refresh()
+            st.rerun()
+
+    try:
+        skus = load_data_v20()
+        K = _compute_summary_kpis(skus, seed)
+    except Exception as e:
+        st.error(f'데이터 로드 실패: {e}')
+        return
+
+    # 4 KPI 카드
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric('📦 전일 주문 수', f'{K["daily_qty"]:,}장', '주판 ÷ 7')
+    k2.metric('💰 전일 주문액', f'{K["daily_amt"]/100000000:.2f}억', '정가 기준')
+    k3.metric('🏬 현 6채널 재고', f'{K["total_inv"]:,}장')
+    k4.metric('📅 재고보유일수', f'{K["woc_days"]:.1f}일', '현재고 ÷ 일평균')
+
+    st.markdown('---')
+
+    # 회전 + 분배 종합 카드 (2개)
+    sc1, sc2 = st.columns(2)
+    with sc1:
+        st.markdown(
+            f'<div style="background:#0d2540;border:1px solid #4a90ff;border-radius:10px;'
+            f'padding:14px 18px"><div style="color:#9fb3d9;font-size:11px;font-weight:700;'
+            f'letter-spacing:1px">🔄 회전(6채널 횡연결)으로 당겨야 할 양</div>'
+            f'<div style="color:#fff;font-size:22px;font-weight:800;margin-top:6px">'
+            f'{K["rotation_qty"]:,}장 · '
+            f'<span style="color:#4a90ff">{K["rotation_amt"]/100000000:.2f}억</span></div>'
+            f'<div style="color:#9ab;font-size:11px;margin-top:4px">'
+            f'결품해소 회수매출 기준 (대시보드 KPI와 동일 산식)</div></div>',
+            unsafe_allow_html=True,
+        )
+    with sc2:
+        st.markdown(
+            f'<div style="background:#0d3320;border:1px solid #7cd99c;border-radius:10px;'
+            f'padding:14px 18px"><div style="color:#9fb3d9;font-size:11px;font-weight:700;'
+            f'letter-spacing:1px">📦 반응과에서 당겨야 할 양 (회전 후 잔여 결품)</div>'
+            f'<div style="color:#fff;font-size:22px;font-weight:800;margin-top:6px">'
+            f'{K["dist_qty"]:,}장 · '
+            f'<span style="color:#7cd99c">{K["dist_amt"]/100000000:.2f}억</span></div>'
+            f'<div style="color:#9ab;font-size:11px;margin-top:4px">'
+            f'반응과 가용재고 → 채널 결품 보충 추정</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('---')
+
+    # 채널 6 카드 — 리딩 스타일 + 회전 IN/OUT + 분배
+    st.markdown('### 📊 채널별 리딩 + 회전·분배 당겨야 할 양')
+    smap = _load_style_map()
+    for row in [CHANNELS[:3], CHANNELS[3:]]:
+        cols = st.columns(3)
+        for col, ch in zip(cols, row):
+            with col:
+                lead = K['ch_lead'].get(ch)
+                if lead:
+                    lead_sty, lead_qty, lead_nm, lead_price = lead
+                    lead_str = (f'<b style="color:#fff">{lead_sty}</b> '
+                                f'<span style="color:#9ab">{(lead_nm or "")[:14]}</span><br>'
+                                f'<span style="color:#ffb84d">{lead_qty:,}장/주</span>')
+                else:
+                    lead_str = '<span style="color:#666">데이터 없음</span>'
+                in_q = K['ch_in_qty'].get(ch, 0)
+                in_a = K['ch_in_amt'].get(ch, 0)
+                out_q = K['ch_out_qty'].get(ch, 0)
+                d_q = K['ch_dist_qty'].get(ch, 0)
+                d_a = K['ch_dist_amt'].get(ch, 0)
+                short_str = CH_SHORT.get(ch, ch)
+                col.markdown(
+                    f'<div style="background:linear-gradient(180deg,#0f1d3a,#0a1428);'
+                    f'border:1px solid #2e3b50;border-left:4px solid #4a90ff;'
+                    f'border-radius:10px;padding:14px;min-height:230px">'
+                    f'<div style="color:#4a90ff;font-size:15px;font-weight:700">'
+                    f'{short_str} <span style="color:#9ab;font-size:11px">· {ch}</span></div>'
+                    f'<div style="color:#9ab;font-size:10px;margin-top:8px">🏆 리딩 스타일 (주판 1위)</div>'
+                    f'<div style="font-size:12px;margin-top:2px">{lead_str}</div>'
+                    f'<div style="color:#9ab;font-size:10px;margin-top:10px">🔄 회전 (IN/OUT)</div>'
+                    f'<div style="font-size:13px;margin-top:2px">'
+                    f'IN <b style="color:#7cd99c">{in_q:,}장</b> · '
+                    f'<span style="color:#7cd99c">{in_a/10000:,.0f}만원</span><br>'
+                    f'OUT <b style="color:#ff6b6b">{out_q:,}장</b></div>'
+                    f'<div style="color:#9ab;font-size:10px;margin-top:10px">📦 분배 (반응과→)</div>'
+                    f'<div style="font-size:13px;margin-top:2px">'
+                    f'<b style="color:#ffb84d">{d_q:,}장</b> · '
+                    f'<span style="color:#ffb84d">{d_a/10000:,.0f}만원</span></div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+    st.markdown('---')
+
+    # AI 인사이트 한 줄
+    insight_lines = []
+    top_in_ch = max(K['ch_in_qty'].items(), key=lambda x: x[1], default=(None, 0))
+    top_out_ch = max(K['ch_out_qty'].items(), key=lambda x: x[1], default=(None, 0))
+    if top_in_ch[0] and top_out_ch[0]:
+        insight_lines.append(
+            f'🎯 오늘의 핵심 회전: <b>{CH_SHORT.get(top_out_ch[0])}</b>'
+            f'({top_out_ch[1]:,}장 OUT) → <b>{CH_SHORT.get(top_in_ch[0])}</b>'
+            f'({top_in_ch[1]:,}장 IN)')
+    if K['rotation_amt'] > 0:
+        insight_lines.append(
+            f'💰 회전 즉시 실행 시 <b style="color:#ffb84d">'
+            f'{K["rotation_amt"]/100000000:.2f}억</b> 회수 가능')
+    if K['dist_qty'] > 0:
+        insight_lines.append(
+            f'📦 반응과 분배 추가 시 <b style="color:#7cd99c">'
+            f'{K["dist_amt"]/100000000:.2f}억</b> 추가 회수')
+    insight_html = '<br>'.join(insight_lines) if insight_lines else '오늘은 결품 신호가 없습니다 · 안정 운영 중'
+    st.markdown(
+        f'<div style="background:#1a1f2e;border-left:4px solid #c4a8ff;border-radius:8px;'
+        f'padding:14px 18px;margin-top:6px">'
+        f'<div style="color:#c4a8ff;font-size:11px;font-weight:700;letter-spacing:1.5px">'
+        f'💡 AICA 인사이트</div>'
+        f'<div style="color:#fff;font-size:14px;margin-top:8px;line-height:1.6">{insight_html}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption('📌 옆 탭 → <b>재배치(기본)</b>에서 회전 분배판 상세 확인 + 승인. '
+               '<b>추가 분배</b>에서 반응과 분배 상세 + SCM 메일 발송.')
+
+
 def render():
     st.markdown('<div class="title-bar">온라인 재고관리 Agent — 운영 대시보드<span class="ver-badge">v0.9</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
@@ -2755,7 +3033,7 @@ def render():
     }
     </style>
     """, unsafe_allow_html=True)
-    labels = ['🛡️ 재배치(기본)', '🎛️ 재배치(임의)', '📈 실행 효과',
+    labels = ['🤖 AI 일일 요약', '🛡️ 재배치(기본)', '🎛️ 재배치(임의)', '📈 실행 효과',
               '🧩 추가 분배', '🚨 리오더 요청',
               '🏬 통합 재고뷰', '📊 채널 별 세부', '📦 입고 예정',
               '🚫 채널 IN-OUT (MD 기입)', '🔁 리오더 매핑 (SCM 기입)']
@@ -2772,19 +3050,25 @@ def render():
                 st.code(_tb.format_exc())
 
     with t[0]:
-        _safe('재배치(기본)', lambda: render_scenario('🛡️ 기본', st, allow_slider=False))
+        _safe('AI 일일 요약', render_ai_summary_tab)
     with t[1]:
-        _safe('재배치(임의)', lambda: render_scenario('🎛️ 임의', st, allow_slider=True))
+        _safe('재배치(기본)', lambda: render_scenario('🛡️ 기본', st, allow_slider=False))
     with t[2]:
-        _safe('실행 효과', render_effect_tab)
+        _safe('재배치(임의)', lambda: render_scenario('🎛️ 임의', st, allow_slider=True))
     with t[3]:
-        _safe('추가 분배', render_onepan_tab)
+        _safe('실행 효과', render_effect_tab)
     with t[4]:
-        _safe('리오더 요청', render_reorder_request_tab)
+        _safe('추가 분배', render_onepan_tab)
     with t[5]:
-        _safe('통합 재고뷰', render_unified_tab)
+        _safe('리오더 요청', render_reorder_request_tab)
     with t[6]:
-        _safe('채널 별 세부', render_channel_tab)
+        _safe('통합 재고뷰', render_unified_tab)
     with t[7]:
+        _safe('채널 별 세부', render_channel_tab)
+    with t[8]:
         _safe('입고 예정', render_inbound_tab)
-   
+    with t[9]:
+        _safe('채널 IN-OUT', render_excluded_tab)
+    with t[10]:
+        _safe('리오더 매핑', render_reorder_tab)
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  온라인 재고관리 Agent v0.9 (스파오 6/19 합의 반영)')
