@@ -97,12 +97,9 @@ def _render_sidebar():
 
 
 def _render_hero():
-    name = '훈구'
-    h = datetime.now().hour
-    greet = '좋은 아침입니다' if h < 12 else ('오후 업무 중이시군요' if h < 18 else '늦은 시간까지 수고 많으십니다')
     st.markdown(
-        f'<div class="aica-hero"><h1>{greet}, {name} 팀장님 👋</h1>'
-        f'<p>오늘 SPAO 온라인 재고에 대해 어떤 일을 도와드릴까요?</p></div>',
+        '<div class="aica-hero"><h1>오늘은 어떤 일을 도와드릴까요?</h1>'
+        '<p>SPAO 온라인 재고 AI Agent — 자연어로 요청하시거나 아래 에이전트를 선택하세요</p></div>',
         unsafe_allow_html=True)
 
 
