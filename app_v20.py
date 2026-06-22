@@ -633,8 +633,13 @@ def render_scenario(scenario_key, container, allow_slider=False):
                     ord_my = d['orders'].get(ch, 0)
                     woc_cur = round(inv_my / ord_my, 1) if ord_my > 0 else None
                     woc_after = round((inv_my + in_qty - out_qty) / ord_my, 1) if ord_my > 0 else None
-                    # 회수매출은 OUT일 때만 (해당 채널이 빠지는 효과)
-                    recovery = round(out_qty * price / 10000) if out_qty > 0 else 0
+                    # v0.9.9 — 회수매출 2개 컬럼 분리 (옵션 B)
+                    # 1) OUT 매출가치(만원) = OUT 수량 × 정상가 (회수된 재고의 단순 가치)
+                    out_value = round(out_qty * price / 10000) if out_qty > 0 else 0
+                    # 2) 결품해소 회수(만원) = 대시보드 KPI와 동일 산식 — 이 채널의 결품 해소분
+                    old_short_ch = max(0, ord_my - inv_my)
+                    new_short_ch = max(0, ord_my - (inv_my + in_qty - out_qty))
+                    relief = round((old_short_ch - new_short_ch) * price / 10000)
                     row = {
                         '단품코드': code, '스타일코드': sty, '스타일명': sty_name,
                         '내 채널 현재고': inv_my,
@@ -647,7 +652,8 @@ def render_scenario(scenario_key, container, allow_slider=False):
                         '받는 채널 매장코드': in_wh_str,
                         '내 채널 매장코드': WAREHOUSE_CODE.get(ch, '-'),
                         '단품 정상가(원)': price,
-                        '회수매출(만원)': recovery,
+                        'OUT 매출가치(만원)': out_value,
+                        '결품해소 회수(만원)': relief,
                     }
                     out_rows[ch].append(row)
                     all_rows.append({**row, '채널': ch})
@@ -667,9 +673,9 @@ def render_scenario(scenario_key, container, allow_slider=False):
             if sheets:
                 # 조건부 서식 (사용자 6/19 요청)
                 bar_cols = ['내 채널 현재고', '내 채널 주판', 'OUT 수량(장)']
-                red_bar_cols = ['회수매출(만원)']
+                red_bar_cols = ['OUT 매출가치(만원)', '결품해소 회수(만원)']
                 woc_cols = ['현 재고주수', '이동 후 재고주수']
-                bold_cols = ['OUT 수량(장)']
+                bold_cols = ['OUT 수량(장)', '결품해소 회수(만원)']
                 st.download_button(
                     f'⬇️ Excel 다운로드 (회전 수기 실행용 · {sel_count:,}건)',
                     data=_xlsx_bytes_with_bars(sheets, bar_cols, red_bar_cols, woc_cols, bold_cols),
@@ -2354,7 +2360,7 @@ def render():
     with t[0]:
         render_scenario('🛡️ 기본', st, allow_slider=False)
     with t[1]:
-        render_scenario('🎛️ 사용자 정의', st, allow_slider=True)
+        render_scenario('🎛️ 임의', st, allow_slider=True)
     with t[2]:
         render_effect_tab()
     with t[3]:
