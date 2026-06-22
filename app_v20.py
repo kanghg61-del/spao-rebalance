@@ -239,7 +239,7 @@ SCENARIOS = {
         'shortage_th': 1.0, 'target_woc': 2.0,
         'ship_th': 0.90, 'min_move': 0, 'min_recv': 0, 'move_cap_pct': 0.30,
     },
-    '🎛️ 사용자 정의': {
+    '🎛️ 임의': {
         'desc': '상단 슬라이더로 직접 조정 (이동 상한 % 포함). 기본값 30%',
         'shortage_th': 1.0, 'target_woc': 2.0,
         'ship_th': 0.90, 'min_move': 0, 'min_recv': 0, 'move_cap_pct': 0.30,
