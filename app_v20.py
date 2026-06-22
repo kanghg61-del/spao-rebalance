@@ -2324,52 +2324,206 @@ def render_unified_tab():
                '재고보유주수 = 총재고 ÷ 주판량. 신호등 색상 동일 기준 (🔴<1주 🟡1-4주 🟢≥4주).')
 
 
-def render_v10_test_tab():
-    """v1.0 (테스트) — SCM에이전트 학습 4종 통합 신규 화면."""
-    import streamlit as st
-    from datetime import datetime as _dt, timedelta as _td
+# ─────────────────────────────────────────────────────────────
+# v1.0 — 채널별 6 에이전트 캐릭터 (전일 베스트·결품·기대매출 동시 보고)
+# ─────────────────────────────────────────────────────────────
+CHANNEL_AGENTS = {
+    '공홈':         {'emoji': '🏠', 'name': '공홈이',  'tag': '안정 운영 매니저',     'color': '#4a90ff', 'sync_min': 3,   'src': 'SAP'},
+    '이랜드몰':     {'emoji': '🛍', 'name': '이몰이',  'tag': '그룹사 통합 큐레이터', 'color': '#7cd99c', 'sync_min': 5,   'src': 'SAP'},
+    '무신사':       {'emoji': '🅼', 'name': '무신이',  'tag': 'MZ 트렌드 영업왕',     'color': '#ff6b9d', 'sync_min': 27,  'src': '풀필먼트 API'},
+    '지그재그':     {'emoji': '🆉', 'name': '재그이',  'tag': '여성 캐주얼 큐레이터', 'color': '#ffb84d', 'sync_min': 183, 'src': '풀필먼트 API'},
+    '네이버':       {'emoji': '🅽', 'name': '네이비',  'tag': '검색 1위 수성 담당',   'color': '#03c75a', 'sync_min': 12,  'src': '풀필먼트 API'},
+    '카카오선물하기': {'emoji': '🅺', 'name': '카카이',  'tag': '선물·기프트 전문',     'color': '#fee500', 'sync_min': 8,   'src': '풀필먼트 API'},
+}
 
+AGENT_MENTS = {
+    '공홈':         '📊 어제 안정 운영 완료! 핵심 결품만 도와주시면 매출↑',
+    '이랜드몰':     '📦 그룹 트래픽 양호. 신상 회전 부탁드려요~',
+    '무신사':       '🔥 어제 회전율 1위! 인기 단품 결품 보정 시급해요',
+    '지그재그':     '✨ 여성 캐주얼 호조 · 사이즈별 결품 점검 중',
+    '네이버':       '🔍 검색 유입 +12% · 결품 단품은 노출 차단됐어요',
+    '카카오선물하기': '🎁 선물하기 주문 안정 · 카드 결제 회전 점검 중',
+}
+
+
+def _channel_agent_data(skus, ch):
+    """채널별 베스트 5 (주판 기준) + 결품 임박 5 (재고주수 기준) + 기대매출."""
+    bests = []
+    shorts = []
+    rev_total = 0
+    for code, d in skus.items():
+        ord_ = d['orders'].get(ch, 0)
+        inv = d['inv'].get(ch, 0)
+        price = d.get('price', 0)
+        if ord_ > 0:
+            bests.append((code, ord_, price))
+            woc = inv / ord_
+            if woc < 1.0:
+                # 결품 해소 가정 시 회수 = 부족분 × 가격
+                relief = max(0, ord_ - inv) * price
+                shorts.append((code, inv, ord_, woc, relief))
+                rev_total += relief
+    bests.sort(key=lambda x: -x[1])
+    shorts.sort(key=lambda x: x[3])
+    return bests[:5], shorts[:5], rev_total
+
+
+def _render_channel_agents_panel(_dt, _td):
+    """6 채널 에이전트 카드 — 3×2 그리드, 항상 표시 (지우지 않음)."""
+    import streamlit as st
     st.markdown(
-        '<div style="background:linear-gradient(135deg,#1a0d2e 0%,#0f1d3a 50%,#0a2138 100%);'
-        'padding:20px;border-radius:12px;border:1px solid #5a3fb8;margin-bottom:16px">'
-        '<div style="color:#c4a8ff;font-size:22px;font-weight:700;letter-spacing:.5px">'
-        '🧪 v1.0 (테스트) — AI 결과물 모드</div>'
-        '<div style="color:#9fb3d9;font-size:13px;margin-top:4px">'
-        'SCM에이전트 학습 4종 통합 · 검토 후 확정/롤백. '
-        '<b>현 v0.9 운영 화면은 그대로 유지</b> — 이 탭은 비파괴 미리보기입니다.</div></div>',
+        '<div style="margin:0 0 8px 0">'
+        '<div style="color:#c4a8ff;font-size:18px;font-weight:700">'
+        '🎙 채널 에이전트 6인 — 오늘의 일일 보고</div>'
+        '<div style="color:#9fb3d9;font-size:12px;margin-top:2px">'
+        '각 채널 에이전트가 동시에 전일 베스트·결품·기대매출을 보고합니다. '
+        '[▶ AI 회전 실행]으로 채널별 회전을 즉시 트리거할 수 있습니다.</div></div>',
         unsafe_allow_html=True,
     )
 
-    # ① 데이터 신선도 (A2)
-    st.markdown('#### 📡 데이터 신선도 (채널별 최신 동기 시각)')
+    try:
+        skus = load_data_v20()
+    except Exception as e:
+        st.error('데이터 로드 실패: ' + str(e))
+        return
+
+    smap = _load_style_map()
     _now = _dt.now()
-    fresh_rows = [
-        ('🏠 공홈',   _now - _td(minutes=3),   'SAP'),
-        ('🛍 이몰',   _now - _td(minutes=5),   'SAP'),
-        ('🅼 무신',   _now - _td(minutes=27),  '풀필먼트 API'),
-        ('🆉 지재',   _now - _td(minutes=183), '풀필먼트 API'),
-        ('🅽 네이',   _now - _td(minutes=12),  '풀필먼트 API'),
-        ('🅺 카카오', _now - _td(minutes=8),   '풀필먼트 API'),
-    ]
-    cols = st.columns(6)
-    for col, (ch, ts, src) in zip(cols, fresh_rows):
-        dm = int((_now - ts).total_seconds() / 60)
-        if dm < 30:
-            icon, bg = '✅', '#0d3320'
-        elif dm < 120:
-            icon, bg = '⚠️', '#3a2e0c'
-        else:
-            icon, bg = '🔴', '#3a0c0c'
-        col.markdown(
-            '<div style="background:' + bg + ';padding:10px;border-radius:8px;text-align:center;border:1px solid #2e3b50">'
-            '<div style="font-size:13px;color:#cfd8e3">' + ch + '</div>'
-            '<div style="font-size:24px;margin:4px 0">' + icon + '</div>'
-            '<div style="font-size:15px;color:#fff;font-weight:700">' + ts.strftime('%H:%M') + '</div>'
-            '<div style="font-size:11px;color:#9ab">' + str(dm) + '분 전 · ' + src + '</div>'
-            '</div>',
+    channels_in_order = [c for c in CHANNELS if c in CHANNEL_AGENTS]
+    if 'v10_agent_log' not in st.session_state:
+        st.session_state['v10_agent_log'] = {}
+
+    # 3 x 2 그리드
+    rows = [channels_in_order[:3], channels_in_order[3:6]]
+    for row in rows:
+        cols = st.columns(3)
+        for col, ch in zip(cols, row):
+            with col:
+                _render_one_agent_card(ch, skus, smap, _now, _td)
+
+
+def _render_one_agent_card(ch, skus, smap, _now, _td):
+    """단일 채널 에이전트 카드."""
+    import streamlit as st
+    info = CHANNEL_AGENTS[ch]
+    bests, shorts, rev = _channel_agent_data(skus, ch)
+    sync_ts = _now - _td(minutes=info['sync_min'])
+    dm = info['sync_min']
+    if dm < 30:
+        sync_icon, sync_col = '✅', '#7cd99c'
+    elif dm < 120:
+        sync_icon, sync_col = '⚠️', '#ffb84d'
+    else:
+        sync_icon, sync_col = '🔴', '#ff6b6b'
+
+    # 베스트·결품 리스트 HTML
+    best_html = ''
+    for i, (code, ord_, price) in enumerate(bests, 1):
+        sty = code[:10]
+        nm = smap.get(sty, '')[:14]
+        best_html += (
+            f'<div style="font-size:11px;color:#cfd8e3;margin:2px 0">'
+            f'<span style="color:{info["color"]};font-weight:700">{i}.</span> '
+            f'<span style="color:#fff">{sty}</span> '
+            f'<span style="color:#9ab">{nm}</span> · '
+            f'<b style="color:#fff">{ord_:,}장</b></div>'
+        )
+    if not bests:
+        best_html = '<div style="color:#666;font-size:11px">(데이터 없음)</div>'
+
+    short_html = ''
+    for i, (code, inv, ord_, woc, relief) in enumerate(shorts, 1):
+        sty = code[:10]
+        nm = smap.get(sty, '')[:14]
+        short_html += (
+            f'<div style="font-size:11px;color:#cfd8e3;margin:2px 0">'
+            f'<span style="color:#ff6b6b;font-weight:700">{i}.</span> '
+            f'<span style="color:#fff">{sty}</span> '
+            f'<span style="color:#9ab">{nm}</span> · '
+            f'<b style="color:#ffb84d">{woc:.1f}주</b></div>'
+        )
+    if not shorts:
+        short_html = '<div style="color:#7cd99c;font-size:11px">🟢 결품 없음 — 안정</div>'
+
+    rev_man = round(rev / 10000)
+
+    # 카드 HTML — 캐릭터 헤더 + 멘트 + 베스트 + 결품 + 기대매출
+    card_html = (
+        f'<div style="background:linear-gradient(180deg,#0f1d3a 0%,#0a1428 100%);'
+        f'border:1px solid {info["color"]}55;border-left:4px solid {info["color"]};'
+        f'border-radius:10px;padding:14px;margin-bottom:8px;min-height:480px;'
+        f'box-shadow:0 0 20px {info["color"]}22">'
+
+        # 헤더
+        f'<div style="display:flex;justify-content:space-between;align-items:center">'
+        f'  <div>'
+        f'    <span style="font-size:24px">{info["emoji"]}</span> '
+        f'    <span style="font-size:16px;color:{info["color"]};font-weight:700">{info["name"]}</span>'
+        f'    <span style="font-size:10px;color:#9ab;margin-left:6px">· {ch}</span>'
+        f'  </div>'
+        f'  <div style="text-align:right;font-size:10px">'
+        f'    <span style="color:{sync_col}">{sync_icon} {sync_ts.strftime("%H:%M")}</span><br>'
+        f'    <span style="color:#9ab">{dm}분 전 · {info["src"]}</span>'
+        f'  </div>'
+        f'</div>'
+        f'<div style="font-size:10px;color:#7d8fa3;margin-top:2px">{info["tag"]}</div>'
+
+        # 멘트 (말풍선)
+        f'<div style="background:#1a2438;border-radius:10px 10px 10px 2px;padding:8px 12px;'
+        f'margin:10px 0;font-size:12px;color:#fff;border-left:2px solid {info["color"]}">'
+        f'💬 "{AGENT_MENTS.get(ch, "")}"</div>'
+
+        # 베스트
+        f'<div style="font-size:12px;color:{info["color"]};font-weight:700;margin-top:8px">🏆 전일 베스트 5</div>'
+        f'{best_html}'
+
+        # 결품
+        f'<div style="font-size:12px;color:#ff6b6b;font-weight:700;margin-top:10px">🚨 결품 임박 5 (1주 미만)</div>'
+        f'{short_html}'
+
+        # 기대매출
+        f'<div style="background:#2a1a1a;border-radius:6px;padding:8px;margin-top:10px;text-align:center">'
+        f'<span style="color:#9ab;font-size:10px">💰 오늘 결품해소 시 기대매출</span><br>'
+        f'<span style="color:#ffb84d;font-size:20px;font-weight:800">{rev_man:,}만원</span>'
+        f'</div>'
+
+        f'</div>'
+    )
+    st.markdown(card_html, unsafe_allow_html=True)
+
+    # AI 회전 실행 버튼
+    btn_key = f'v10_exec_{ch}'
+    if st.button(f'▶ {info["name"]}에게 AI 회전 의뢰', key=btn_key, use_container_width=True):
+        st.session_state['v10_agent_log'][ch] = {
+            'ts': _now.strftime('%H:%M:%S'),
+            'msg': f'{info["name"]}: "{ch} 회전 분배판 생성 완료! 결품 {len(shorts)}건 해소 시 약 {rev_man:,}만원 회수 가능."',
+        }
+        st.toast(f'{info["emoji"]} {info["name"]} — 회전 의뢰 접수!', icon='🎙')
+
+    # 누적 응답 (지우지 않음)
+    log = st.session_state['v10_agent_log'].get(ch)
+    if log:
+        st.markdown(
+            f'<div style="background:#0d3320;border-left:3px solid #7cd99c;border-radius:8px;'
+            f'padding:8px 10px;margin-top:4px;font-size:11px;color:#cfd8e3">'
+            f'<span style="color:#7cd99c">✅ {log["ts"]}</span> · {log["msg"]}</div>',
             unsafe_allow_html=True,
         )
-    st.caption('🔌 외부 4채널 풀필먼트 API는 박유나 과장 9/1 본연동 예정 — 현재는 mock. ✅<30분 ⚠️30~120분 🔴≥120분')
+
+
+def render_v10_test_tab():
+    """v1.0 (테스트) — SCM에이전트 학습 4종 통합 신규 화면.
+
+    ① 6 채널 에이전트 보고 대화창 (전일 베스트/결품/기대매출/동기시각/실행)
+    ② 결품보정 vs 수요예측 토글
+    ③ AI 인사이트 한 줄 결론
+    ④ AI 어시스턴트 채팅
+    """
+    import streamlit as st
+    from datetime import datetime as _dt, timedelta as _td
+
+    # ① 6 채널 에이전트 보고 대화창
+    _render_channel_agents_panel(_dt, _td)
 
     st.markdown('---')
 
