@@ -2324,19 +2324,264 @@ def render_unified_tab():
                '재고보유주수 = 총재고 ÷ 주판량. 신호등 색상 동일 기준 (🔴<1주 🟡1-4주 🟢≥4주).')
 
 
+def render_v10_test_tab():
+    """v1.0 (테스트) — SCM에이전트 학습 4종 통합 신규 화면."""
+    import streamlit as st
+    from datetime import datetime as _dt, timedelta as _td
+
+    st.markdown(
+        '<div style="background:linear-gradient(135deg,#1a0d2e 0%,#0f1d3a 50%,#0a2138 100%);'
+        'padding:20px;border-radius:12px;border:1px solid #5a3fb8;margin-bottom:16px">'
+        '<div style="color:#c4a8ff;font-size:22px;font-weight:700;letter-spacing:.5px">'
+        '🧪 v1.0 (테스트) — AI 결과물 모드</div>'
+        '<div style="color:#9fb3d9;font-size:13px;margin-top:4px">'
+        'SCM에이전트 학습 4종 통합 · 검토 후 확정/롤백. '
+        '<b>현 v0.9 운영 화면은 그대로 유지</b> — 이 탭은 비파괴 미리보기입니다.</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    # ① 데이터 신선도 (A2)
+    st.markdown('#### 📡 데이터 신선도 (채널별 최신 동기 시각)')
+    _now = _dt.now()
+    fresh_rows = [
+        ('🏠 공홈',   _now - _td(minutes=3),   'SAP'),
+        ('🛍 이몰',   _now - _td(minutes=5),   'SAP'),
+        ('🅼 무신',   _now - _td(minutes=27),  '풀필먼트 API'),
+        ('🆉 지재',   _now - _td(minutes=183), '풀필먼트 API'),
+        ('🅽 네이',   _now - _td(minutes=12),  '풀필먼트 API'),
+        ('🅺 카카오', _now - _td(minutes=8),   '풀필먼트 API'),
+    ]
+    cols = st.columns(6)
+    for col, (ch, ts, src) in zip(cols, fresh_rows):
+        dm = int((_now - ts).total_seconds() / 60)
+        if dm < 30:
+            icon, bg = '✅', '#0d3320'
+        elif dm < 120:
+            icon, bg = '⚠️', '#3a2e0c'
+        else:
+            icon, bg = '🔴', '#3a0c0c'
+        col.markdown(
+            '<div style="background:' + bg + ';padding:10px;border-radius:8px;text-align:center;border:1px solid #2e3b50">'
+            '<div style="font-size:13px;color:#cfd8e3">' + ch + '</div>'
+            '<div style="font-size:24px;margin:4px 0">' + icon + '</div>'
+            '<div style="font-size:15px;color:#fff;font-weight:700">' + ts.strftime('%H:%M') + '</div>'
+            '<div style="font-size:11px;color:#9ab">' + str(dm) + '분 전 · ' + src + '</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    st.caption('🔌 외부 4채널 풀필먼트 API는 박유나 과장 9/1 본연동 예정 — 현재는 mock. ✅<30분 ⚠️30~120분 🔴≥120분')
+
+    st.markdown('---')
+
+    # ② 결품보정 토글 (B2)
+    cL, cR = st.columns([2, 3])
+    with cL:
+        st.markdown('#### ⚙️ 수요 트랙')
+        mode = st.radio('수요 트랙',
+                        ['수요예측 (관측 판매)', '결품보정 (잠재수요 +20%)'],
+                        horizontal=False, label_visibility='collapsed', key='v10_mode')
+    with cR:
+        st.markdown('#### 💡 모드 설명')
+        if mode.startswith('결품'):
+            st.success('🎯 **결품보정 모드** — 결품으로 눌린 잠재수요를 +20% 복원해 회전 강도 강화.')
+        else:
+            st.info('📊 **수요예측 모드** — 관측 판매를 그대로 추종 (현 v0.9 기본 동일).')
+
+    boost = 1.20 if mode.startswith('결품') else 1.0
+    preset = SCENARIOS['🛡️ 기본']
+    params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'],
+                  preset['min_move'], preset['min_recv'], _ch_excl_key(), preset['move_cap_pct'])
+    try:
+        results = calc_results_v20(params_key)
+        results = _apply_exclusion(results)
+        results = _apply_overrides(results)
+    except Exception as e:
+        st.error('계산 실패: ' + str(e))
+        return
+
+    if boost > 1.0:
+        for r in results:
+            r['revenue'] = int(r['revenue'] * boost)
+
+    moves_items = [r for r in results if any(v != 0 for v in r['moves'].values())]
+    moves_items.sort(key=lambda r: -r['revenue'])
+
+    total_rev = sum(r['revenue'] for r in moves_items)
+    total_qty = sum(sum(v for v in r['moves'].values() if v > 0) for r in moves_items)
+
+    k1, k2, k3 = st.columns(3)
+    k1.metric('🔄 회전 발생 단품', f'{len(moves_items):,}건')
+    k2.metric('📦 총 이동량', f'{total_qty:,}장')
+    k3.metric('💰 회수매출 (결품해소)', f'{total_rev/100000000:.2f}억',
+              (f'+{(boost-1)*100:.0f}% 보정' if boost > 1 else None))
+
+    st.markdown('---')
+
+    # ③ AI 인사이트 한 줄 (A4)
+    st.markdown('#### 💡 AI 인사이트 (한 줄 결론 · 상위 10건)')
+    smap = _load_style_map()
+    for r in moves_items[:10]:
+        d = r['data']
+        code = r['code']
+        sty = code[:10]
+        sty_name = smap.get(sty, d.get('name', ''))
+        moves = r['moves']
+        out_ch = next((c for c, v in moves.items() if v < 0), None)
+        in_pairs = [(c, v) for c, v in moves.items() if v > 0]
+        if not out_ch or not in_pairs:
+            continue
+        out_qty = -moves[out_ch]
+        in_str = ' / '.join([f'{CH_SHORT.get(c, c)}+{v}' for c, v in in_pairs])
+        inv_out = d['inv'].get(out_ch, 0)
+        ord_out = d['orders'].get(out_ch, 0)
+        woc_out = (inv_out / ord_out) if ord_out > 0 else 0
+        in_woc_min = 999.0
+        for c, _ in in_pairs:
+            o = d['orders'].get(c, 0)
+            i = d['inv'].get(c, 0)
+            if o > 0:
+                in_woc_min = min(in_woc_min, i / o)
+        rev_man = round(r['revenue'] / 10000)
+        urgency = '🔴 긴급' if in_woc_min < 1 else ('🟡 주의' if in_woc_min < 4 else '🟢 안정')
+        st.markdown(
+            '<div style="background:#1a1f2e;padding:12px;border-radius:8px;'
+            'border-left:4px solid #4a90ff;margin-bottom:6px">'
+            + urgency + ' <b style="color:#c4a8ff">' + sty + '</b> · '
+            + '<span style="color:#9ab">' + str(sty_name) + '</span><br>'
+            + '<span style="color:#fff">💡 ' + CH_SHORT.get(out_ch, out_ch)
+            + f'({woc_out:.1f}주) → ' + in_str + f' <b>{out_qty}장</b> 회전</span> · '
+            + f'<span style="color:#7cd99c">받는 채널 결품 {in_woc_min:.1f}주 해소</span> · '
+            + f'<span style="color:#ffb84d">회수 <b>{rev_man:,}만원</b></span>'
+            + '</div>',
+            unsafe_allow_html=True,
+        )
+    st.caption('💡 인사이트 = 규칙 기반 자동 생성 (현재). 7월 본연동 시 Gemini/Claude LLM 호출로 교체 예정.')
+
+    st.markdown('---')
+
+    # ④ AI 어시스턴트 (B3)
+    st.markdown('#### 🤖 AI 어시스턴트 (자연어 질의)')
+    st.caption('예: "오늘 회전 추천" · "공홈 결품" · "회수매출" · "무신사"')
+
+    if 'v10_chat' not in st.session_state:
+        st.session_state['v10_chat'] = [
+            {'role': 'AICA', 'text': '안녕하세요. AICA 입니다. 오늘 SPAO 온라인 재고에 대해 무엇이 궁금하신가요?'},
+        ]
+
+    for msg in st.session_state['v10_chat'][-12:]:
+        if msg['role'] == '사용자':
+            st.markdown(
+                '<div style="text-align:right;margin:6px 0">'
+                '<span style="background:#3a4a6b;padding:8px 14px;border-radius:14px;'
+                'color:#fff;display:inline-block;max-width:75%">' + msg['text'] + '</span></div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div style="margin:6px 0">'
+                '<span style="background:#1f2937;padding:8px 14px;border-radius:14px;'
+                'color:#e5e7eb;display:inline-block;max-width:85%;border-left:3px solid #4a90ff">'
+                '🤖 <b style="color:#c4a8ff">AICA</b> · ' + msg['text'] + '</span></div>',
+                unsafe_allow_html=True,
+            )
+
+    user_q = st.chat_input('AICA에게 물어보기 (Enter 전송)')
+    if user_q:
+        st.session_state['v10_chat'].append({'role': '사용자', 'text': user_q})
+        ans = _v10_chat_answer(user_q, results, moves_items)
+        st.session_state['v10_chat'].append({'role': 'AICA', 'text': ans})
+        st.rerun()
+
+    if st.button('🧹 대화 초기화', key='v10_chat_clear'):
+        st.session_state['v10_chat'] = [
+            {'role': 'AICA', 'text': '대화를 초기화했습니다. 무엇을 도와드릴까요?'},
+        ]
+        st.rerun()
+
+
+def _v10_chat_answer(q, results, moves_items):
+    """v1.0 AI 어시스턴트 — 규칙 기반 응답 (7월 LLM 본연동 전 mock)."""
+    if any(k in q for k in ['회전', '추천', '오늘', '분배판']):
+        n = len(moves_items)
+        rev = sum(r['revenue'] for r in moves_items)
+        qty = sum(sum(v for v in r['moves'].values() if v > 0) for r in moves_items)
+        top_str = ''
+        if moves_items:
+            top = moves_items[0]
+            m = top['moves']
+            out_ch = next((c for c, v in m.items() if v < 0), None)
+            ins = [(c, v) for c, v in m.items() if v > 0]
+            if out_ch and ins:
+                in_s = ' / '.join([f'{CH_SHORT.get(c, c)}+{v}' for c, v in ins])
+                top_str = f'\n\n📌 최상위 회전: {top["code"][:10]} · {CH_SHORT.get(out_ch, out_ch)}→{in_s} **{-m[out_ch]}장** (회수 {round(top["revenue"]/10000):,}만원)'
+        return (f'오늘 회전 추천 **{n}건**, 총 이동 {qty:,}장, '
+                f'예상 회수매출 **{rev/100000000:.2f}억**입니다.{top_str}')
+    if '결품' in q:
+        ch_match = None
+        for ch in CHANNELS:
+            short = CH_SHORT.get(ch, ch)
+            if ch in q or short in q:
+                ch_match = ch
+                break
+        if ch_match:
+            shorts = []
+            for r in results:
+                inv = r['data']['inv'].get(ch_match, 0)
+                o = r['data']['orders'].get(ch_match, 0)
+                if o > 0 and inv / o < 1:
+                    shorts.append((r['code'], inv, o, inv / o))
+            shorts.sort(key=lambda x: x[3])
+            top5 = shorts[:5]
+            if not top5:
+                return f'{CH_SHORT.get(ch_match, ch_match)} 채널 결품 단품 없음 (모두 ≥1주).'
+            lines = [f'- {c[:10]} · 재고 {i:,} · 주판 {o:,} · **{w:.1f}주** 🔴' for c, i, o, w in top5]
+            return f'**{CH_SHORT.get(ch_match, ch_match)}** 결품 상위 5건:\n\n' + '\n'.join(lines)
+        cnt = 0
+        for r in results:
+            for ch in CHANNELS:
+                inv = r['data']['inv'].get(ch, 0)
+                o = r['data']['orders'].get(ch, 0)
+                if o > 0 and inv / o < 1:
+                    cnt += 1
+                    break
+        return f'전체 결품 (1주 미만) 단품 **{cnt:,}건**. 채널 알려주시면 상위 5건 보여드릴게요. (예: "무신 결품")'
+    if any(k in q for k in ['회수', '매출', '효과', '금액']):
+        rev = sum(r['revenue'] for r in moves_items)
+        return f'현 회전 시나리오 예상 **결품해소 회수매출 {rev/100000000:.2f}억** · 연환산 {rev*52/100000000:.0f}억'
+    for ch in CHANNELS:
+        short = CH_SHORT.get(ch, ch)
+        if ch in q or short in q:
+            ch_items = []
+            for r in moves_items:
+                m = r['moves']
+                if m.get(ch, 0) != 0:
+                    ch_items.append((r['code'], m.get(ch, 0), r['revenue']))
+            ch_items.sort(key=lambda x: -abs(x[1]))
+            top5 = ch_items[:5]
+            if not top5:
+                return f'{CH_SHORT.get(ch, ch)} 채널 회전 발생 없음.'
+            lines = [f'- {c[:10]} · {"OUT" if v < 0 else "IN"} **{abs(v)}장** · 회수 {round(rev/10000):,}만원'
+                     for c, v, rev in top5]
+            return f'**{CH_SHORT.get(ch, ch)}** 회전 상위 5건:\n\n' + '\n'.join(lines)
+    return ('도움말:\n'
+            '- 🔄 "오늘 회전 추천" / "분배판" → 회전 요약\n'
+            '- 🚨 "공홈 결품" / "무신 결품" → 채널별 결품 상위 5건\n'
+            '- 💰 "회수매출" / "효과" → 예상 회수매출\n'
+            '- 📊 "공홈" / "무신" → 채널 회전 상위 5건')
+
+
 def render():
     st.markdown('<div class="title-bar">온라인 재고관리 Agent — 운영 대시보드<span class="ver-badge">v0.9</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info['file']:
-        reorder_txt = f"리오더 병합: {reorder_info['merged']:,}건 ({reorder_info['file']})"
+        reorder_txt = f"  ·  리오더 매핑 <b>{reorder_info['file']}</b> ({reorder_info['rows']}건)"
     else:
-        reorder_txt = '리오더 매핑 파일 없음 (reorder_mapping.csv 추가 시 자동 병합)'
-    col_a, col_b, col_c = st.columns([4, 1, 1])
+        reorder_txt = ''
+    col_a, col_b, col_c = st.columns([6, 1, 1])
     with col_a:
         st.caption(
-            f'마지막 갱신: **{last.strftime("%Y-%m-%d %H:%M")}**   |   '
-            f'다음 갱신: 매일 06:00 (Airflow · EHUB 06:00 & 샵링크 06:30 배치 후)   |   '
+            f'<b>마지막 데이터 갱신</b>: {last}'
             f'{reorder_txt}'
         )
     with col_b:
@@ -2350,12 +2595,18 @@ def render():
     div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(9){
         margin-left: 68px;
     }
+    div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(11){
+        margin-left: 68px;
+        background: linear-gradient(135deg,#5a3fb8 0%,#3f7fb8 100%);
+        border-radius: 8px;
+    }
     </style>
     """, unsafe_allow_html=True)
     labels = ['🛡️ 재배치(기본)', '🎛️ 재배치(임의)', '📈 실행 효과',
               '🧩 추가 분배', '🚨 리오더 요청',
               '🏬 통합 재고뷰', '📊 채널 별 세부', '📦 입고 예정',
-              '🚫 채널 IN-OUT (MD 기입)', '🔁 리오더 매핑 (SCM 기입)']
+              '🚫 채널 IN-OUT (MD 기입)', '🔁 리오더 매핑 (SCM 기입)',
+              '🧪 v1.0 (테스트)']
     t = st.tabs(labels)
     with t[0]:
         render_scenario('🛡️ 기본', st, allow_slider=False)
@@ -2377,4 +2628,6 @@ def render():
         render_excluded_tab()
     with t[9]:
         render_reorder_tab()
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  온라인 재고관리 Agent v0.9 (스파오 6/19 합의 반영)')
+    with t[10]:
+        render_v10_test_tab()
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  온라인 재고관리 Agent v0.9 (스파오 6/19 합의 반영)  ·  🧪 v1.0 테스트 탭 (SCM에이전트 학습 4종)')
