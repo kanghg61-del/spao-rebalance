@@ -477,7 +477,8 @@ def render_scenario(scenario_key, container, allow_slider=False):
     else:
         filtered.sort(key=lambda r: r['code'])
 
-    container.markdown(f'**단품 × 채널 매트릭스 — {len(filtered):,}건**')
+    # 매트릭스 헤더 + 승인/Excel 버튼 자리 (placeholder — 표 아래 sel_count 계산 후 채움)
+    actions_ph = container.empty()
 
     MAX_ROWS = 2000
     if len(filtered) > MAX_ROWS:
@@ -587,7 +588,11 @@ def render_scenario(scenario_key, container, allow_slider=False):
     sel_qty = sum(sum(v for v in it['moves'].values() if v > 0) for it in sel_items)
     sel_rev = sum(it['revenue'] for it in sel_items)
 
-    col_b1, col_b2, col_b3 = container.columns([2, 2, 4])
+    # 표 위 placeholder 채우기 — [헤더 텍스트 | 승인 버튼 | Excel 다운로드 버튼]
+    with actions_ph.container():
+        col_h, col_b1, col_b2 = st.columns([3, 2, 2])
+    with col_h:
+        st.markdown(f'**단품 × 채널 매트릭스 — {len(filtered):,}건**')
     with col_b1:
         if st.button(f'✅ 선택 {sel_count}건 승인(회전)', use_container_width=True, type='primary', key=f'approve_{scenario_key}'):
             details = []
@@ -687,8 +692,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
                 st.button('⬇️ Excel 다운로드 (0건)', use_container_width=True, disabled=True, key=f'exp_xlsx_dis_{scenario_key}')
         except Exception as e:
             st.button(f'⬇️ Excel 다운로드 (에러)', use_container_width=True, disabled=True, key=f'exp_xlsx_err_{scenario_key}')
-    with col_b3:
-        container.caption('스파오 6/19 합의 — SAP 자동 연동 전 임시 운영: 위 ⬇️ Excel(채널별 시트)로 MD 수기 실행.')
+    container.caption('💡 스파오 6/19 합의 — SAP 자동 연동 전 임시 운영: 위 ⬇️ Excel(채널별 시트)로 MD 수기 실행.')
 
 
 def render_excluded_tab():
@@ -2783,8 +2787,4 @@ def render():
         _safe('채널 별 세부', render_channel_tab)
     with t[7]:
         _safe('입고 예정', render_inbound_tab)
-    with t[8]:
-        _safe('채널 IN-OUT', render_excluded_tab)
-    with t[9]:
-        _safe('리오더 매핑', render_reorder_tab)
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  온라인 재고관리 Agent v0.9 (스파오 6/19 합의 반영)')
+   
