@@ -2574,8 +2574,8 @@ def render():
     st.markdown('<div class="title-bar">온라인 재고관리 Agent — 운영 대시보드<span class="ver-badge">v0.9</span></div>', unsafe_allow_html=True)
     last = get_last_update_time()
     reorder_info = get_reorder_info()
-    if reorder_info['file']:
-        reorder_txt = f"  ·  리오더 매핑 <b>{reorder_info['file']}</b> ({reorder_info['rows']}건)"
+    if reorder_info.get('file'):
+        reorder_txt = f"  ·  리오더 매핑 <b>{reorder_info['file']}</b> ({reorder_info.get('mapping_rows', 0)}건)"
     else:
         reorder_txt = ''
     col_a, col_b, col_c = st.columns([6, 1, 1])
@@ -2630,4 +2630,4 @@ def render():
         render_reorder_tab()
     with t[10]:
         render_v10_test_tab()
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  온라인 재고관리 Agent v0.9 (스파오 6/19 합의 반영)  ·  🧪 v1.0 테스트 탭 (SCM에이전트 학습 4종)')
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  온라인 재고관리 Agent v0.9  ·  🧪 v1.0 테스트 탭 (SCM에이전트 학습 4종)')
