@@ -96,18 +96,20 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+_default_mode = st.session_state.get('app_mode', 'studio')
 ver = st.radio(
-    '대시보드 버전 선택 — 🟢 v0.9는 안정 운영본, 🧪 v1.0은 SCM에이전트 학습 적용 테스트, 🤖 AICA 2.0은 별도 미팅 반영본',
-    ['🤖 AICA 2.0 (테스트)', '🟢 v0.9 (안정)', '🧪 v1.0 (테스트)'],
-    index=1,
+    '모드 선택 — 🤖 AICA Studio는 AI 결과물(7월 초 시연용), 🟢 v0.9는 안정 운영본',
+    ['🤖 AICA Studio', '🟢 v0.9 (운영 모드)'],
+    index=0 if _default_mode == 'studio' else 1,
     horizontal=True,
     key='app_version',
 )
+_new_mode = 'studio' if ver.startswith('🤖') else 'ops'
+if _new_mode != st.session_state.get('app_mode'):
+    st.session_state['app_mode'] = _new_mode
+    st.rerun()
 
-if ver.startswith('🤖'):
-    import app_aica20
-    app_aica20.render()
-elif ver.startswith('🧪'):
+if st.session_state.get('app_mode', 'studio') == 'studio':
     import app_v10
     app_v10.render()
 else:
