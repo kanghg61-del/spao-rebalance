@@ -2595,18 +2595,12 @@ def render():
     div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(9){
         margin-left: 68px;
     }
-    div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(11){
-        margin-left: 68px;
-        background: linear-gradient(135deg,#5a3fb8 0%,#3f7fb8 100%);
-        border-radius: 8px;
-    }
     </style>
     """, unsafe_allow_html=True)
     labels = ['🛡️ 재배치(기본)', '🎛️ 재배치(임의)', '📈 실행 효과',
               '🧩 추가 분배', '🚨 리오더 요청',
               '🏬 통합 재고뷰', '📊 채널 별 세부', '📦 입고 예정',
-              '🚫 채널 IN-OUT (MD 기입)', '🔁 리오더 매핑 (SCM 기입)',
-              '🧪 v1.0 (테스트)']
+              '🚫 채널 IN-OUT (MD 기입)', '🔁 리오더 매핑 (SCM 기입)']
     t = st.tabs(labels)
     with t[0]:
         render_scenario('🛡️ 기본', st, allow_slider=False)
@@ -2628,6 +2622,4 @@ def render():
         render_excluded_tab()
     with t[9]:
         render_reorder_tab()
-    with t[10]:
-        render_v10_test_tab()
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  온라인 재고관리 Agent v0.9  ·  🧪 v1.0 테스트 탭 (SCM에이전트 학습 4종)')
+    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  온라인 재고관리 Agent v0.9 (스파오 6/19 합의 반영)')
