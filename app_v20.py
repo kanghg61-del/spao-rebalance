@@ -417,8 +417,67 @@ def _approve_dialog(scenario_key, sel_count, sel_qty, sel_amt, sel_rev, ch_in, c
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True,
                      height=min(38 + 35 * len(rows), 260))
     st.caption('⚠️ 실제 재고 이동 여부는 익일 06:00 재고 갱신 후 "현 재고보유주수" 변화 및 📈 실행 효과 탭 실측으로 확인하세요.')
-    if st.button('확인', type='primary', use_container_width=True, key=f'dlg_ok_{scenario_key}'):
+
+    st.caption('⚠️ 실제 재고 이동 여부는 익일 06:00 재고 갱신 후 "현 재고보유주수" 변화 및 📈 실행 효과 탭 실측으로 확인하세요.')
+
+    # 메일 자동 발송 — kang_hoonkoo@eland.co.kr (다이얼로그 표시와 동시에 자동 mailto 호출)
+    from datetime import datetime as _dt
+    _now_str = _dt.now().strftime('%Y-%m-%d %H:%M')
+    _subj = '[REBA] ' + str(scenario_key) + ' 회전 승인 결과 — #' + str(exec_id) + ' (' + _now_str + ')'
+    _ch_lines = []
+    for c in CHANNELS:
+        _in_q = ch_in.get(c, 0)
+        _out_q = ch_out.get(c, 0)
+        if _in_q or _out_q:
+            _ch_lines.append('- ' + CH_SHORT.get(c, c) + ': IN +' + format(_in_q, ',') +
+                             ' / OUT -' + format(_out_q, ',') +
+                             ' (순증감 ' + format(_in_q - _out_q, '+,') + ')')
+    _nl = chr(10)
+    _ch_summary = _nl.join(_ch_lines) if _ch_lines else '(채널 이동 없음)'
+    _body_lines = [
+        '온라인 재고관리 Agent — 회전 승인 결과 보고',
+        '================================================',
+        '',
+        '시나리오: ' + str(scenario_key),
+        '실행 ID: #' + str(exec_id),
+        '승인 일시: ' + _now_str,
+        '',
+        '━━━━━━━ 요약 KPI ━━━━━━━',
+        '승인 단품: ' + format(sel_count, ',') + '건',
+        '총 이동량: ' + format(sel_qty, ',') + '장',
+        '총 이동 금액: ' + format(sel_amt / 100000000, '.2f') + '억',
+        '기대 회수 매출: ' + format(sel_rev / 100000000, '.2f') + '억',
+        '',
+        '━━━━━━━ 채널별 IN/OUT 요약 ━━━━━━━',
+        _ch_summary,
+        '',
+        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+        '※ 본 메일은 온라인 재고관리 Agent의 자동 발송 mock입니다.',
+        '   실 SAP 연동 시 BAPI_GOODS_MVT_CREATE 호출 → 전표 생성 → audit log.',
+        '   상세 확인: spao-rebal.streamlit.app → 📈 실행 효과 탭',
+        '',
+        '— AICA · 온라인 재고관리 Agent',
+    ]
+    _body = _nl.join(_body_lines)
+    _mailto_url = _mailto_link(['kang_hoonkoo@eland.co.kr'], _subj, _body)
+    # 다이얼로그 진입 시 자동 mailto 호출 (sessions 키로 1회 방지)
+    _trig_key = 'mailto_sent_' + str(exec_id)
+    if not st.session_state.get(_trig_key):
+        st.session_state[_trig_key] = True
+        try:
+            import streamlit.components.v1 as _components
+            _components.html(
+                '<script>window.open("' + _mailto_url + '", "_blank");</script>',
+                height=0,
+            )
+        except Exception:
+            pass
+    st.caption('📧 회전 결과 메일이 kang_hoonkoo@eland.co.kr로 자동 발송 요청되었습니다. '
+               '메일 클라이언트가 열리지 않을 경우 팝업 차단 해제 후 다시 시도해주세요.')
+
+    if st.button('확인 (다이얼로그 닫기)', type='primary', use_container_width=True, key='dlg_ok_' + str(scenario_key)):
         st.rerun()
+
 
 
 def _chan_recovery_bar(items):
@@ -3080,6 +3139,9 @@ def render_ai_summary_tab():
     ch_daily_amt = {c: 0.0 for c in CHANNELS}
     style_qty = {}; style_name = {}; style_price = {}
     short_cnt = 0
+    total_inv_qty = 0
+    total_inv_amt = 0
+    total_orders_qty = 0
     for code, d in skus.items():
         price = d.get('price', 0)
         sty = code[:10]
@@ -3088,6 +3150,9 @@ def render_ai_summary_tab():
             amt = o * price
             ch_daily_amt[c] += amt / 7
             daily_amt_total += amt / 7
+            total_inv_qty += i
+            total_inv_amt += i * price
+            total_orders_qty += o
             if o > 0 and i / o < 1:
                 short_cnt += 1
         tot_o = sum(d['orders'].get(c, 0) for c in CHANNELS)
@@ -3095,7 +3160,9 @@ def render_ai_summary_tab():
             style_qty[sty] = style_qty.get(sty, 0) + tot_o
             style_price[sty] = price
             style_name[sty] = smap.get(sty, d.get('name', ''))
-    top_10 = sorted(style_qty.items(), key=lambda x: -x[1])[:10]
+    # 매출 순위 정렬 (사용자 요청 — 판매량 → 매출 기준 변경)
+    style_amt = {s: q * style_price.get(s, 0) for s, q in style_qty.items()}
+    top_10 = sorted(style_amt.items(), key=lambda x: -x[1])[:10]
 
     preset = SCENARIOS['🛡️ 기본']
     params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'],
@@ -3134,18 +3201,25 @@ def render_ai_summary_tab():
     today = _dt.now()
     yest = today - _td(days=1)
     yest_label = yest.strftime('%m/%d')
-    daily_eok = daily_amt_total / 100000000
+    # 매출 표기: '3억 4,067만원' (정수 억 + 나머지 만원)
+    daily_eok_int = int(daily_amt_total // 100000000)
     daily_man_remainder = int((daily_amt_total % 100000000) / 10000)
     ch_strs = [f'{CH_SHORT.get(c, c)} <b>{int(ch_daily_amt[c]/10000):,}만원</b>' for c in CHANNELS]
     actual_eok = actual_move_amt / 100000000
     rev_eok = rotation_revenue / 100000000
     dist_actual_eok = dist_actual_amt / 100000000
     dist_rev_eok = dist_revenue / 100000000
+    # 현 재고액 + 재고보유일수
+    total_inv_eok = total_inv_amt / 100000000
+    daily_qty_avg = total_orders_qty / 7 if total_orders_qty > 0 else 0
+    woc_days_int = int(total_inv_qty / daily_qty_avg) if daily_qty_avg > 0 else 0
 
     body = (
         f'<b>[전일 온라인 주문 기준 매출 보고]</b><br>'
-        f'{yest_label}일 주문 기준 매출은 <b>{daily_eok:.2f}억 {daily_man_remainder:,}만원</b>입니다.<br>'
-        f'채널별: ' + ' / '.join(ch_strs) + '<br><br>'
+        f'{yest_label}일 주문 기준 매출은 <b>{daily_eok_int}억 {daily_man_remainder:,}만원</b>입니다.<br>'
+        f'채널별: ' + ' / '.join(ch_strs) + '<br>'
+        f'온라인 현 재고액은 <b>{total_inv_eok:.0f}억</b>이며, '
+        f'재고보유일수는 <b>{woc_days_int}일</b>입니다.<br><br>'
         f'<b>[회전·분배 추천]</b><br>'
         f'현재 6채널 결품 <b>{short_cnt:,}건</b> 발생하여 '
         f'총 회전량 <b>{rotation_qty:,}장</b> 재배치 필요 — '
@@ -3162,37 +3236,7 @@ def render_ai_summary_tab():
         unsafe_allow_html=True,
     )
 
-    st.markdown('#### 🏆 전일 TOP 10 스타일')
-    if top_10:
-        html = '<table class="aica-top10"><tr>'
-        for i in range(1, 11):
-            html += f'<th>{i}</th>'
-        html += '</tr><tr>'
-        for sty, _ in top_10:
-            img_url = _spao_img_url(sty, '#4a90ff')
-            html += f'<td class="img-cell"><img src="{img_url}" width="80" height="100"/></td>'
-        html += '</tr><tr>'
-        for sty, _ in top_10:
-            nm = (style_name.get(sty) or '')[:14]
-            html += (f'<td><b style="color:#c4a8ff">{sty}</b><br>'
-                     f'<span style="color:#9ab;font-size:10px">{nm}</span></td>')
-        html += '</tr><tr>'
-        for sty, q in top_10:
-            daily_q = q // 7
-            html += (f'<td><b style="color:#ffb84d">{daily_q:,}</b>'
-                     f'<br><span style="color:#9ab;font-size:10px">장/일</span></td>')
-        html += '</tr><tr>'
-        for sty, q in top_10:
-            daily_q = q // 7
-            amt_man = round(daily_q * style_price.get(sty, 0) / 10000)
-            html += (f'<td><b style="color:#7cd99c">{amt_man:,}</b>'
-                     f'<br><span style="color:#9ab;font-size:10px">만원/일</span></td>')
-        html += '</tr></table>'
-        st.markdown(html, unsafe_allow_html=True)
-    else:
-        st.caption('데이터 없음')
-
-    st.markdown('---')
+    # ── 순서 변경: 채팅 먼저 → TOP10 마지막 ──
     st.markdown('### 💬 자연어 질의')
     if 'aica_chat' not in st.session_state:
         st.session_state['aica_chat'] = []
@@ -3200,7 +3244,7 @@ def render_ai_summary_tab():
     K = {
         'daily_amt_total': daily_amt_total,
         'ch_daily_amt': ch_daily_amt,
-        'top_10': [(s, q // 7, style_name.get(s, '')) for s, q in top_10],
+        'top_10': [(s, style_qty.get(s, 0) // 7, style_name.get(s, '')) for s, _amt in top_10],
         'short_cnt': short_cnt,
         'rotation_qty': rotation_qty,
         'rotation_revenue': rotation_revenue,
@@ -3232,6 +3276,41 @@ def render_ai_summary_tab():
         ans = _aica_answer(user_q, K)
         st.session_state['aica_chat'].append({'role': 'ai', 'text': ans})
         st.rerun()
+
+    # ── TOP 10 가로 표 (마지막으로 이동) ──
+    st.markdown('---')
+    st.markdown('#### 🏆 전일 TOP 10 스타일')
+    if top_10:
+        html = '<table class="aica-top10"><tr>'
+        for i in range(1, 11):
+            html += f'<th>{i}</th>'
+        html += '</tr><tr>'
+        # 이미지 행
+        for sty, _amt in top_10:
+            img_url = _spao_img_url(sty, '#4a90ff')
+            html += f'<td class="img-cell"><img src="{img_url}" width="80" height="100"/></td>'
+        html += '</tr><tr>'
+        # 스타일코드 + 이름
+        for sty, _amt in top_10:
+            nm = (style_name.get(sty) or '')[:14]
+            html += (f'<td><b style="color:#c4a8ff">{sty}</b><br>'
+                     f'<span style="color:#9ab;font-size:10px">{nm}</span></td>')
+        html += '</tr><tr>'
+        # 판매량 (style_qty에서 조회)
+        for sty, _amt in top_10:
+            daily_q = style_qty.get(sty, 0) // 7
+            html += (f'<td><b style="color:#ffb84d">{daily_q:,}</b>'
+                     f'<br><span style="color:#9ab;font-size:10px">장/일</span></td>')
+        html += '</tr><tr>'
+        # 전일매출 (amt = 주간 매출 → /7 → /10000 만원)
+        for sty, amt in top_10:
+            amt_man = round(amt / 7 / 10000)
+            html += (f'<td><b style="color:#7cd99c">{amt_man:,}</b>'
+                     f'<br><span style="color:#9ab;font-size:10px">만원/일</span></td>')
+        html += '</tr></table>'
+        st.markdown(html, unsafe_allow_html=True)
+    else:
+        st.caption('데이터 없음')
 
 
 def _aica_answer(q, K):
