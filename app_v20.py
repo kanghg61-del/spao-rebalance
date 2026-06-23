@@ -3098,20 +3098,21 @@ def render_ai_summary_tab():
     from datetime import datetime as _dt, timedelta as _td
 
     st.markdown("""<style>
-      .aica-hero { text-align:center; padding: 2px 0 6px 0; }
-      .aica-hero h2 { color:#fff; font-size: 26px; font-weight: 800; margin: 4px 0 0 0; }
-      .aica-hero p { color:#9fb3d9; font-size: 13px; margin-top: 4px; }
-      .aica-robot { display:inline-block; font-size: 56px; line-height: 1;
-                    filter: drop-shadow(0 4px 18px rgba(196,168,255,.35));
+      /* 좌우분할 hero — 글자 크게 유지 + 패딩만 컴팩트 (사용자 6/22 정정) */
+      .aica-hero { text-align:center; padding: 0; }
+      .aica-hero h2 { color:#fff; font-size: 22px; font-weight: 800; margin: 4px 0 0 0; line-height:1.2; }
+      .aica-hero p { color:#9fb3d9; font-size: 12px; margin-top: 4px; line-height:1.35; }
+      .aica-robot { display:inline-block; font-size: 60px; line-height: 1;
+                    filter: drop-shadow(0 3px 16px rgba(196,168,255,.35));
                     animation: aicabob 2.4s ease-in-out infinite; }
-      @keyframes aicabob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+      @keyframes aicabob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
       .aica-brief { background: linear-gradient(135deg, #1a0d2e 0%, #0a2138 100%);
-                    border: 1px solid #5a3fb8; border-radius: 14px;
-                    padding: 20px 24px; margin-top: 8px;
-                    box-shadow: 0 0 30px rgba(90,63,184,.18); }
-      .aica-brief-title { color: #c4a8ff; font-size: 12px; font-weight: 700; letter-spacing: 2px; }
-      .aica-brief-body { color: #fff; font-size: 16px; line-height: 1.9; margin-top: 10px; }
-      .aica-brief-body b { color: #ffb84d; font-weight: 800; }
+                    border: 1px solid #5a3fb8; border-radius: 12px;
+                    padding: 14px 20px; margin-top: 0;
+                    box-shadow: 0 0 24px rgba(90,63,184,.18); }
+      .aica-brief-title { color: #c4a8ff; font-size: 12px; font-weight: 700; letter-spacing: 1.5px; }
+      .aica-brief-body { color: #fff; font-size: 16px; line-height: 1.75; margin-top: 8px; }
+      .aica-brief-body b { color: #ffb84d; font-weight: 800; font-size: 17px; }
       .aica-top10 { width:100%; border-collapse:collapse; margin-top: 8px; table-layout: fixed; }
       .aica-top10 th { background:#0d2540; color:#9ab; font-size:13px; font-weight:700;
                        padding:6px; border:1px solid #2e3b50; text-align:center; }
@@ -3127,13 +3128,13 @@ def render_ai_summary_tab():
                         display:inline-block; max-width:88%; line-height:1.7; }
     </style>""", unsafe_allow_html=True)
 
-    st.markdown(
+    # 좌우 분할용 hero HTML 정의 (실 출력은 brief markdown 호출 시 컬럼 안)
+    _hero_html = (
         '<div class="aica-hero">'
         '<div class="aica-robot">🤖</div>'
         '<h2>AI 일일 요약 보고</h2>'
-        '<p>SPAO 온라인 재고 AICA — 자연어로 자유롭게 질문해보세요</p>'
-        '</div>',
-        unsafe_allow_html=True,
+        '<p>SPAO 온라인 재고 AICA<br>자연어로 자유롭게 질문</p>'
+        '</div>'
     )
 
     try:
@@ -3236,13 +3237,18 @@ def render_ai_summary_tab():
         f'반응과에서 <b>{dist_qty:,}장</b> 필업 필요 — '
         f'실제 이동금액 <b>{dist_actual_eok:.2f}억</b> / 기대매출 <b>{dist_rev_eok:.2f}억</b>.'
     )
-    st.markdown(
-        f'<div class="aica-brief">'
-        f'<div class="aica-brief-title">📡 AICA · DAILY BRIEFING</div>'
-        f'<div class="aica-brief-body">{body}</div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+    # ── 좌우 분할 렌더: 헤더(1) + 브리핑(5) ──
+    _hc, _bc = st.columns([1, 5])
+    with _hc:
+        st.markdown(_hero_html, unsafe_allow_html=True)
+    with _bc:
+        st.markdown(
+            f'<div class="aica-brief">'
+            f'<div class="aica-brief-title">📡 AICA · DAILY BRIEFING</div>'
+            f'<div class="aica-brief-body">{body}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
     # ── 순서 변경: 채팅 먼저 → TOP10 마지막 ──
     st.markdown('### 💬 자연어 질의')
