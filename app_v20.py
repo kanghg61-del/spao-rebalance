@@ -3372,7 +3372,7 @@ def _aica_answer_llm(q, K):
                 if o > 0 and i / o < 1:
                     ch_short_cnt[c] += 1
         ch_woc_days = {c: int(ch_inv_qty[c] / ch_daily_qty[c]) if ch_daily_qty[c] > 0 else 0 for c in CHANNELS}
-        # 회전 결과 상위 10건 요약
+        # 회전 결과 상위 10건 요약 (전체)
         results = K['results']
         sty_rev = {}
         for r in results:
@@ -3381,6 +3381,36 @@ def _aica_answer_llm(q, K):
         rot_top10 = sorted([(s, v) for s, v in sty_rev.items() if v > 0], key=lambda x: -x[1])[:10]
         rot_top_str = ' / '.join([f"{s}({smap.get(s,'')[:10]}) 회수 {round(v/10000):,}만원" for s, v in rot_top10])
         top_10_str = ' / '.join([f"{s}({n[:10]}) {q:,}장/일" for s, q, n in K['top_10'][:10]])
+        # ── 채널별 결품 단품 TOP 5 (재고주수 낮은 순) ── 사용자 6/24 요청
+        ch_short_top5 = {c: [] for c in CHANNELS}
+        for c in CHANNELS:
+            cand = []
+            for code, d in skus.items():
+                o = d['orders'].get(c, 0); i = d['inv'].get(c, 0)
+                if o > 0 and i / o < 1:
+                    sty = code[:10]
+                    cand.append((code, i, o, i / o, smap.get(sty, '')[:14]))
+            cand.sort(key=lambda x: x[3])
+            ch_short_top5[c] = cand[:5]
+        # ── 채널별 회전 기대매출 TOP 5 (해당 채널 IN(+) 받는 단품의 기대매출 기준) ──
+        ch_rot_top5 = {c: [] for c in CHANNELS}
+        for c in CHANNELS:
+            cand = []
+            for r in results:
+                in_qty = max(0, r['moves'].get(c, 0))
+                if in_qty > 0 and r['revenue'] > 0:
+                    code = r['code']; sty = code[:10]
+                    cand.append((code, in_qty, r['revenue'], smap.get(sty, r['data'].get('name', ''))[:14]))
+            cand.sort(key=lambda x: -x[2])
+            ch_rot_top5[c] = cand[:5]
+        ch_short_block = chr(10).join([
+            f"[{c} 결품 TOP5] " + (' / '.join([f"{cd}({nm}) 재고{inv}/주판{o} {w:.2f}주" for cd, inv, o, w, nm in ch_short_top5[c]]) if ch_short_top5[c] else '없음')
+            for c in CHANNELS
+        ])
+        ch_rot_block = chr(10).join([
+            f"[{c} 회전IN 기대매출 TOP5] " + (' / '.join([f"{cd}({nm}) IN{q}장 회수{round(rev/10000):,}만원" for cd, q, rev, nm in ch_rot_top5[c]]) if ch_rot_top5[c] else '없음')
+            for c in CHANNELS
+        ])
         # 채널명은 풀네임 사용 (사용자 6/23 요청 — 이몰/무신/지재 같은 줄임말 금지)
         context = f"""당신은 SPAO 온라인 재고 AI 에이전트 'AICA' 입니다.
 아래 SPAO 온라인 재고 데이터를 보고 한국어로 간결·정확히 답변하세요.
@@ -3403,8 +3433,14 @@ def _aica_answer_llm(q, K):
 [전일 매출 TOP 10 스타일]
 {top_10_str}
 
-[회전 회수매출 TOP 10 스타일]
+[회전 회수매출 TOP 10 스타일 — 전체]
 {rot_top_str}
+
+[채널별 결품 단품 TOP 5 — 재고주수 낮은 순]
+{ch_short_block}
+
+[채널별 회전IN 기대매출 TOP 5 — 해당 채널 IN(+) 받는 단품 기준]
+{ch_rot_block}
 
 [사용자 질문]
 {q}
