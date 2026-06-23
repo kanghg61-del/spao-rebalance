@@ -1235,7 +1235,8 @@ def _render_group(results_ch, keyfn, g_inv, g_ord, g_move, g_eff, g_ext, keycol,
     def mk(k, a):
         woc = a['inv'] / a['ordd'] if a['ordd'] > 0 else None
         daily = a['ordd'] / 7
-        row = {keycol: k}
+        # 이미지는 스타일/아이템 코드 기준 mock SVG (7월 본연동 시 실 SPAO 이미지로 교체)
+        row = {'이미지': _spao_img_url(k), keycol: k}
         if namefn:
             v = nm.get(k, '')
             row['대표 상품명'] = (v[:18] + '…') if len(v) > 18 else v
@@ -1261,7 +1262,7 @@ def _render_group(results_ch, keyfn, g_inv, g_ord, g_move, g_eff, g_ext, keycol,
     T = {f: sum(a[f] for a in agg.values()) for f in ('sku', 'ordd', 'inv', 'invamt', 'salesamt', 'ext', 'mv', 'eff', 'item', 'urg')}
     woc = T['inv'] / T['ordd'] if T['ordd'] > 0 else None
     daily = T['ordd'] / 7
-    sumrow = {keycol: '합계'}
+    sumrow = {'이미지': '', keycol: '합계'}
     if namefn:
         sumrow['대표 상품명'] = f'{len(body):,}개'
     sumrow.update({
@@ -1286,7 +1287,9 @@ def _render_group(results_ch, keyfn, g_inv, g_ord, g_move, g_eff, g_ext, keycol,
                        '소진예상(일)': _int0,
                        '추천이동(회전)': '{:,}'.format, '효과(만원)': '{:,}'.format,
                        '판매량 비중(%)': '{:.2f}'.format, '결품률(%)': '{:.1f}'.format}))
-    st.dataframe(styled, use_container_width=True, height=440, hide_index=True)
+    st.dataframe(styled, use_container_width=True, height=440, hide_index=True,
+                 column_config={'이미지': st.column_config.ImageColumn('이미지', width='small',
+                                                                       help='추후 SPAO 공홈 실 이미지로 교체')})
 
 
 def render_channel_tab():
@@ -1496,6 +1499,7 @@ def render_channel_tab():
             else:
                 stat = '🟢 정상'
             row = {
+                '이미지': _spao_img_url(r['code'][:10]),
                 '상태': stat, '복종': _bok(r['code']),
                 '상품코드': r['code'][:10], '단품코드(SKU)': r['code'],
                 '상품명': (d['name'][:22] + '…') if len(d['name']) > 22 else d['name'],
@@ -1524,6 +1528,7 @@ def render_channel_tab():
         data = [x[0] for x in rows]
         st.caption(f'총 {len(data):,}건' + (' · 합계 외 상위 500건 표시' if len(data) > 500 else '') + ' · 맨 위 합계')
         sumrow = {
+            '이미지': '',
             '상태': '— 합계 —', '복종': '', '상품코드': '', '단품코드(SKU)': f'{len(data):,}건', '상품명': '',
             '일평균 판매량': round(s_daily, 1), '일평균 매출(만원)': round(s_damt, 1),
             '현 재고량': int(s_inv), '현 재고금액(만원)': round(s_iamt),
@@ -1546,7 +1551,10 @@ def render_channel_tab():
                                '추천이동': '{:,}'.format, '이동후재고': '{:,}'.format, '외부창고': '{:,}'.format,
                                '효과(만원)': '{:,}'.format}))
             st.dataframe(styled, use_container_width=True, height=520, hide_index=True,
-                         column_config={'복종': st.column_config.TextColumn('복종', width='small')})
+                         column_config={
+                             '이미지': st.column_config.ImageColumn('이미지', width='small',
+                                                                     help='추후 SPAO 공홈 실 이미지로 교체'),
+                             '복종': st.column_config.TextColumn('복종', width='small')})
         else:
             st.info('표시할 단품이 없습니다.')
 
