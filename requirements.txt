@@ -2,5 +2,4 @@ streamlit>=1.30.0
 pandas>=2.0.0
 openpyxl>=3.1.0
 pyyaml>=6.0
-# LLM (선택) — Streamlit Cloud에서 자동 설치 시도, 실패해도 앱은 fallback 모드로 정상 작동
-# google-genai
+google-genai>=1.0.0,<2.0.0
