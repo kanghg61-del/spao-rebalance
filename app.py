@@ -96,15 +96,15 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-_default_mode = st.session_state.get('app_mode', 'studio')
+_default_mode = st.session_state.get('app_mode', 'ops')
 ver = st.radio(
-    '모드 선택 — 🤖 AICA Studio는 AI 결과물(7월 초 시연용), 🟢 v0.9는 안정 운영본',
-    ['🤖 AICA Studio', '🟢 v0.9 (운영 모드)'],
-    index=0 if _default_mode == 'studio' else 1,
+    '모드 선택 — 🟢 v0.9는 안정 운영본(기본), 🧪 AICA Studio는 AI 결과물 TEST(7월 초 시연용)',
+    ['🟢 v0.9 (운영 모드)', '🧪 AICA Studio (TEST)'],
+    index=1 if _default_mode == 'studio' else 0,
     horizontal=True,
     key='app_version',
 )
-_new_mode = 'studio' if ver.startswith('🤖') else 'ops'
+_new_mode = 'studio' if ver.startswith('🧪') else 'ops'
 if _new_mode != st.session_state.get('app_mode'):
     st.session_state['app_mode'] = _new_mode
     st.rerun()

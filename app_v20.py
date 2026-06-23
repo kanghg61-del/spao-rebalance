@@ -323,13 +323,53 @@ def _apply_overrides(results):
     return out
 
 
+def _active_period_patterns():
+    """ch_excl_periods 중 오늘 날짜가 기간 안에 들어오는 항목만 활성화."""
+    from datetime import date as _date
+    today = _date.today()
+    out = {}  # ch -> {'in': set, 'out': set}
+    rows = st.session_state.get('ch_excl_periods', [])
+    for row in rows:
+        try:
+            ch = row.get('채널')
+            direction = (row.get('방향') or '').lower()
+            pat = (row.get('스타일 패턴') or '').strip()
+            start = row.get('시작일')
+            end = row.get('종료일')
+            if not (ch and direction in ('in', 'out') and pat and start and end):
+                continue
+            if hasattr(start, 'toordinal'):
+                s = start
+            else:
+                s = _date.fromisoformat(str(start)[:10])
+            if hasattr(end, 'toordinal'):
+                e = end
+            else:
+                e = _date.fromisoformat(str(end)[:10])
+            if not (s <= today <= e):
+                continue
+            out.setdefault(ch, {}).setdefault(direction, set()).add(pat)
+        except Exception:
+            continue
+    return out
+
+
 def _ch_excl_key():
-    """채널별 IN/OUT 제외(세션) → 캐시 키용 해시가능 튜플."""
+    """채널별 IN/OUT 제외(세션) → 캐시 키용 해시가능 튜플.
+    영구 제외(ch_excl) + 기간 한정 제외(ch_excl_periods 중 오늘 활성) 통합."""
     st_ex = st.session_state.get('ch_excl', {})
+    periods = _active_period_patterns()
+    merged = {}  # ch -> {'in': set, 'out': set}
+    for ch in CHANNELS:
+        for dr in ('in', 'out'):
+            s = set(st_ex.get(ch, {}).get(dr, []))
+            s |= periods.get(ch, {}).get(dr, set())
+            if s:
+                merged.setdefault(ch, {})[dr] = s
     return tuple(sorted(
-        (ch, dr, tuple(sorted(st_ex.get(ch, {}).get(dr, []))))
+        (ch, dr, tuple(sorted(merged.get(ch, {}).get(dr, []))))
         for ch in CHANNELS for dr in ('in', 'out')
-        if st_ex.get(ch, {}).get(dr)
+        if merged.get(ch, {}).get(dr)
     ))
 
 
@@ -463,19 +503,30 @@ def render_scenario(scenario_key, container, allow_slider=False):
 
     kpi_ph = container.container()
 
-    col_f1, col_fs, col_f3 = container.columns([1.6, 4, 2])
+    col_f1, col_fs, col_fp, col_f3 = container.columns([1.4, 2.6, 2.6, 1.8])
     with col_f1:
         show_only_moved = st.checkbox('이동 발생만', value=True, key=f'moved_{scenario_key}')
     with col_fs:
-        search_code = st.text_input('단품코드 검색', placeholder='앞 10자리만 입력해도 OK (예: SPPPG25U05)', key=f'search_{scenario_key}').strip().upper()
+        search_code = st.text_input('단품코드 검색', placeholder='앞 10자리 입력 (예: SPPPG25U05)', key=f'search_{scenario_key}').strip().upper()
+    with col_fp:
+        # 단품코드 선택 (멀티) — 회전 발생 단품 우선 노출
+        _move_codes = sorted({r['code'] for r in results if any(v != 0 for v in r['moves'].values())})
+        if not _move_codes:
+            _move_codes = sorted({r['code'] for r in results})[:200]
+        picked = st.multiselect('단품코드 선택 (복수 가능)', options=_move_codes,
+                                key=f'pick_{scenario_key}',
+                                placeholder='드롭다운에서 단품 다중 선택')
     with col_f3:
         sort_by = st.selectbox('정렬', ['온라인 매출 순위 ↑', '기대효과 ↓', '이동수량 ↓', '단품코드'], key=f'sort_{scenario_key}')
 
     filtered = list(results)
-    if show_only_moved and not search_code:
+    if show_only_moved and not search_code and not picked:
         filtered = [r for r in filtered if any(v != 0 for v in r['moves'].values())]
     if search_code:
         filtered = [r for r in filtered if r['code'].upper().startswith(search_code)]
+    if picked:
+        _set = set(picked)
+        filtered = [r for r in filtered if r['code'] in _set]
 
     if sort_by == '온라인 매출 순위 ↑':
         filtered.sort(key=lambda r: r['data'].get('rank_online', 9999))
@@ -761,6 +812,56 @@ def render_excluded_tab():
             st.session_state['excluded_text'] = ''
             st.session_state['excluded_codes'] = set()
             st.rerun()
+
+    st.markdown('---')
+    with st.expander('📅 기간 한정 제외 (기획전·이벤트 동안만 자동 제외 → 종료 시 자동 해제)', expanded=True):
+        st.caption('스타일 패턴 + 기간을 등록하면 오늘 날짜가 기간 안일 때만 제외 적용. '
+                   '기간 종료 후 자동으로 다시 회전 대상에 포함됩니다. '
+                   '재배치(기본/임의) 계산에 즉시 반영됩니다.')
+        import pandas as _pd
+        from datetime import date as _date, timedelta as _td
+        default_periods = st.session_state.get('ch_excl_periods', [])
+        if not default_periods:
+            default_periods = [
+                {'채널': CHANNELS[0], '방향': 'out', '스타일 패턴': 'SPACG24A5',
+                 '시작일': _date.today(), '종료일': _date.today() + _td(days=7),
+                 '메모': '예시 (기획전 동안 OUT 차단)'}
+            ]
+        df_p = _pd.DataFrame(default_periods)
+        edited = st.data_editor(
+            df_p,
+            num_rows='dynamic',
+            use_container_width=True,
+            key='period_excl_editor',
+            column_config={
+                '채널': st.column_config.SelectboxColumn('채널', options=CHANNELS, required=True),
+                '방향': st.column_config.SelectboxColumn('방향', options=['in', 'out'], required=True,
+                                                         help='in = 수신 차단 / out = 반출 차단'),
+                '스타일 패턴': st.column_config.TextColumn('스타일 패턴', required=True,
+                                                              help='코드 일부만 입력해도 매칭 (예: SPACG24)'),
+                '시작일': st.column_config.DateColumn('시작일', required=True, format='YYYY-MM-DD'),
+                '종료일': st.column_config.DateColumn('종료일', required=True, format='YYYY-MM-DD'),
+                '메모': st.column_config.TextColumn('메모 (선택)'),
+            },
+        )
+        # 세션 저장
+        new_rows = edited.to_dict('records') if hasattr(edited, 'to_dict') else []
+        st.session_state['ch_excl_periods'] = new_rows
+        # 오늘 활성 항목 미리보기
+        active = _active_period_patterns()
+        if active:
+            lines = []
+            for ch, dr_map in active.items():
+                for dr, pats in dr_map.items():
+                    lines.append(f'• <b>{ch}</b> · {dr.upper()} : {", ".join(sorted(pats))}')
+            st.markdown(
+                f'<div style="background:#1B4D3E;border-radius:6px;padding:8px 12px;margin-top:6px;'
+                f'color:#4AE3B5;font-size:12px">📅 오늘({_date.today()}) 활성 기간 제외:<br>'
+                + '<br>'.join(lines) + '</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption(f'📅 오늘({_date.today()}) 활성 기간 제외 없음 (모든 기간 패턴이 비활성)')
 
 
 def render_export_tab():
@@ -1255,11 +1356,30 @@ def render_channel_tab():
     # ───────────── 스타일별 (상품코드 10자리) ─────────────
     with sub_style:
         st.caption('스타일 = 상품코드 10자리 기준. 선택 채널 기준 집계 · 단품 상세 지표 동일 · 맨 위 합계.')
-        _render_group(results_ch, lambda c: c[:10], g_inv, g_ord, g_move, g_eff, g_ext, '스타일코드', namefn=True)
+        cs1, cs2 = st.columns([2, 3])
+        with cs1:
+            sty_search_s = st.text_input('스타일 검색', placeholder='앞 10자리 (예: SPACG24A5)', key='sty_search_style').strip().upper()
+        with cs2:
+            all_stys_s = sorted({r['code'][:10] for r in results_ch})
+            sty_pick_s = st.multiselect('스타일 선택 (복수 가능)', options=all_stys_s,
+                                         key='sty_pick_style',
+                                         placeholder='드롭다운에서 스타일 다중 선택')
+        filtered_style = list(results_ch)
+        if sty_search_s:
+            filtered_style = [r for r in filtered_style if r['code'][:10].upper().startswith(sty_search_s)]
+        if sty_pick_s:
+            _spset = set(sty_pick_s)
+            filtered_style = [r for r in filtered_style if r['code'][:10] in _spset]
+        _render_group(filtered_style, lambda c: c[:10], g_inv, g_ord, g_move, g_eff, g_ext, '스타일코드', namefn=True)
 
     # ───────────── 단품 상세 ─────────────
     with sub_sku:
-        f1, f2, f3, f4, f5 = st.columns([1.6, 1.6, 1.3, 2.4, 2])
+        f0, f1, f2, f3, f4, f5 = st.columns([2.2, 1.2, 1.2, 1.1, 2.4, 1.6])
+        with f0:
+            _all_stys_sku = sorted({r['code'][:10] for r in results_ch})
+            sty_pick_sku = st.multiselect('스타일 선택 (복수 가능)', options=_all_stys_sku,
+                                           key='sty_pick_sku',
+                                           placeholder='스타일 단위 다중 선택')
         with f1:
             only_urgent = st.checkbox('🔴 결품(주의)만', value=False, key='ch_only_urgent')
         with f2:
@@ -1270,6 +1390,7 @@ def render_channel_tab():
             ch_search = st.text_input('검색 (상품코드/SKU)', placeholder='앞 10자리만 입력해도 OK', key='ch_search').strip().upper()
         with f5:
             ch_sort = st.selectbox('정렬', ['온라인 매출 순위 ↑', '기대효과 ↓', '이동수량 ↓', '단품코드'], key='ch_sort')
+        _sty_pick_set = set(sty_pick_sku) if sty_pick_sku else None
 
         rows = []
         s_daily = s_damt = s_inv = s_iamt = s_ext = s_mv = s_ni = s_eff = 0.0
@@ -1284,6 +1405,8 @@ def render_channel_tab():
             if bok_pick != '전체' and _bok(r['code']) != bok_pick:
                 continue
             if ch_search and not r['code'].upper().startswith(ch_search):
+                continue
+            if _sty_pick_set and r['code'][:10] not in _sty_pick_set:
                 continue
             daily = o / 7 if o > 0 else 0
             sojin = round(i / daily) if daily > 0 else None
@@ -3069,8 +3192,7 @@ def render_ai_summary_tab():
         f'</div>',
         unsafe_allow_html=True,
     )
-    st.caption('📌 옆 탭 → <b>재배치(기본)</b>에서 회전 분배판 상세 확인 + 승인. '
-               '<b>추가 분배</b>에서 반응과 분배 상세 + SCM 메일 발송.')
+    st.caption('📌 옆 탭 → 재배치(기본)에서 회전 분배판 상세 확인 + 승인. 추가 분배에서 반응과 분배 상세 + SCM 메일 발송.')
 
 
 def render():
@@ -3083,10 +3205,7 @@ def render():
         reorder_txt = ''
     col_a, col_b, col_c = st.columns([6, 1, 1])
     with col_a:
-        st.caption(
-            f'<b>마지막 데이터 갱신</b>: {last}'
-            f'{reorder_txt}'
-        )
+        st.caption(f'<b>마지막 데이터 갱신</b>: {last}{reorder_txt}')
     with col_b:
         if st.button('🔄 새로고침', use_container_width=True):
             st.rerun()
@@ -3107,7 +3226,6 @@ def render():
     t = st.tabs(labels)
 
     def _safe(name, fn):
-        """탭 렌더 안전망 — 에러 시 어떤 탭/어떤 에러인지 표시 (다른 탭 영향 차단)."""
         import traceback as _tb
         try:
             fn()
