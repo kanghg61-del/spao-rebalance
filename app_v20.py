@@ -3381,33 +3381,78 @@ def _aica_answer_llm(q, K):
         rot_top10 = sorted([(s, v) for s, v in sty_rev.items() if v > 0], key=lambda x: -x[1])[:10]
         rot_top_str = ' / '.join([f"{s}({smap.get(s,'')[:10]}) 회수 {round(v/10000):,}만원" for s, v in rot_top10])
         top_10_str = ' / '.join([f"{s}({n[:10]}) {q:,}장/일" for s, q, n in K['top_10'][:10]])
-        # ── 사용자 6/24: 전체 데이터 dump로 LLM이 어떤 질문이든 자체 분석 가능하게 변경 ──
-        # 활성 단품(주문 발생) 전체를 compact format으로 dump.
-        # format: code|name|price|공홈inv/ord|이랜드몰inv/ord|무신사inv/ord|지그재그inv/ord|네이버inv/ord|카카오선물하기inv/ord
-        active_lines = []
+        # ── 사용자 6/24: 질문 키워드 기반 동적 dump (TPM quota 안전) ──
+        # 전체 dump는 60만 토큰 → 429. 질문에서 관련 데이터만 추려 5만~15만 토큰으로 축소.
+        ql = (q or '').lower()
+        # 1) 질문에서 채널 키워드 감지 (풀네임 + 줄임말 둘 다)
+        ch_aliases = {
+            '공홈': ['공홈', '공식몰', '자사몰'],
+            '이랜드몰': ['이랜드몰', '이몰', '이랜드', 'eland'],
+            '무신사': ['무신사', '무신', 'musinsa'],
+            '지그재그': ['지그재그', '지재', 'zigzag'],
+            '네이버': ['네이버', '네이', 'naver'],
+            '카카오선물하기': ['카카오선물하기', '카카오', '카카', 'kakao'],
+        }
+        mentioned_channels = [c for c, aliases in ch_aliases.items() if any(a in q for a in aliases)]
+        # 2) 의도 분류
+        is_short_q = any(k in ql for k in ['결품', '재고주수', '주수', '재고 부족', '품절'])
+        is_rot_q = any(k in ql for k in ['회전', '재배치', '이동', '회수매출', '기대매출', '기대 매출'])
+        is_topsell_q = any(k in ql for k in ['top', '상위', '베스트', '많이 팔', '매출 높', '잘 팔'])
+        # 3) 결품 단품 (재고주수<1) 전체 — code|name|price|c1:inv/주판|...
+        short_lines = []
         for code, d in skus.items():
-            orders_d = d.get('orders', {})
-            inv_d = d.get('inv', {})
-            if sum(orders_d.get(c, 0) for c in CHANNELS) == 0 and sum(inv_d.get(c, 0) for c in CHANNELS) == 0:
-                continue  # 완전 비활성 단품 제외
+            orders_d = d.get('orders', {}); inv_d = d.get('inv', {})
+            is_short = any(orders_d.get(c, 0) > 0 and inv_d.get(c, 0) / orders_d.get(c, 0) < 1.0 for c in CHANNELS)
+            if not is_short:
+                continue
+            if mentioned_channels and not any(orders_d.get(c, 0) > 0 and inv_d.get(c, 0) / orders_d.get(c, 0) < 1.0 for c in mentioned_channels):
+                continue  # 언급 채널에서 결품 아닌 단품 제외
             nm = (d.get('name', '') or '')[:18]
             px = int(d.get('price', 0))
             ch_str = ' '.join(f"{c[:2]}:{inv_d.get(c,0)}/{orders_d.get(c,0)}" for c in CHANNELS)
-            active_lines.append(f"{code}|{nm}|{px}|{ch_str}")
-        sku_dump = '\n'.join(active_lines)
-        # 회전 추천 결과 (이동 발생 단품만) compact dump
-        # format: code|name|회수만원|공홈mv|이랜드몰mv|무신사mv|지그재그mv|네이버mv|카카오선물하기mv
+            short_lines.append(f"{code}|{nm}|{px}|{ch_str}")
+        # 4) 회전 추천 결과 전체 (이동 발생만)
         rot_lines = []
         for r in results:
             mv = r['moves']
             if not any(v != 0 for v in mv.values()):
                 continue
-            code = r['code']
-            nm = (r['data'].get('name', '') or '')[:18]
+            code = r['code']; nm = (r['data'].get('name', '') or '')[:18]
             rev_man = round(r['revenue'] / 10000)
             mv_str = ' '.join(f"{c[:2]}:{mv.get(c,0):+d}" for c in CHANNELS)
             rot_lines.append(f"{code}|{nm}|{rev_man}만|{mv_str}")
-        rot_dump = '\n'.join(rot_lines)
+        # 5) 매출 상위 단품 dump (스타일 단위, 매출 내림차순)
+        sku_amt = []
+        for code, d in skus.items():
+            orders_d = d.get('orders', {})
+            tot_o = sum(orders_d.get(c, 0) for c in CHANNELS)
+            if tot_o == 0:
+                continue
+            amt = tot_o * d.get('price', 0)
+            sku_amt.append((amt, code, d))
+        sku_amt.sort(key=lambda x: -x[0])
+        top_n = 500 if not mentioned_channels else 1000
+        topsell_lines = []
+        for amt, code, d in sku_amt[:top_n]:
+            inv_d = d.get('inv', {}); orders_d = d.get('orders', {})
+            if mentioned_channels and not any(orders_d.get(c, 0) > 0 for c in mentioned_channels):
+                continue
+            nm = (d.get('name', '') or '')[:18]
+            px = int(d.get('price', 0))
+            amt_man = round(amt / 10000)
+            ch_str = ' '.join(f"{c[:2]}:{inv_d.get(c,0)}/{orders_d.get(c,0)}" for c in CHANNELS)
+            topsell_lines.append(f"{code}|{nm}|{px}|주매출{amt_man}만|{ch_str}")
+        # 어떤 블록 포함할지 결정 (질문 의도 기반)
+        include_short = is_short_q or (not is_rot_q and not is_topsell_q)
+        include_rot = is_rot_q or (not is_short_q and not is_topsell_q)
+        include_topsell = is_topsell_q or (mentioned_channels and not is_short_q and not is_rot_q)
+        # 항상 회전 결과는 포함 (작은 사이즈)
+        include_rot = True
+        sku_dump = '\n'.join(short_lines) if include_short else ''
+        topsell_dump = '\n'.join(topsell_lines) if include_topsell else ''
+        rot_dump = '\n'.join(rot_lines) if include_rot else ''
+        # 활성 단품 카운트 (전체 통계용)
+        active_total = sum(1 for d in skus.values() if sum(d.get('orders', {}).get(c, 0) for c in CHANNELS) > 0)
         # 채널명은 풀네임 사용 (사용자 6/23 요청)
         context = f"""당신은 SPAO 온라인 재고 AI 에이전트 'AICA' 입니다.
 아래 SPAO 온라인 재고 전체 데이터를 직접 분석해 한국어로 간결·정확히 답변하세요.
@@ -3440,11 +3485,16 @@ def _aica_answer_llm(q, K):
 [채널별 운영 요약]
 {chr(10).join([f"{c}: 일평균매출 {int(K['ch_daily_amt'][c]/10000):,}만원, 일평균판매 {int(ch_daily_qty[c]):,}장, 현재고 {ch_inv_qty[c]:,}장({ch_inv_amt[c]/1e8:.1f}억), 재고보유 {ch_woc_days[c]}일, 결품 {ch_short_cnt[c]:,}건" for c in CHANNELS])}
 
-[전체 단품 데이터 — 활성 단품 {len(active_lines):,}건]
-{sku_dump}
+[현재 데이터 범위 — 전체 활성 단품 {active_total:,}건 중 질문 관련 추출]
+
+[결품 단품 데이터 — 재고주수<1 {len(short_lines):,}건{', 언급채널 한정' if mentioned_channels else ''}]
+{sku_dump if sku_dump else '(이번 질문에 결품 단품 데이터 불필요로 제외)'}
+
+[매출 상위 단품 데이터 — 주매출 내림차순 {len(topsell_lines):,}건]
+{topsell_dump if topsell_dump else '(이번 질문에 매출 상위 단품 데이터 불필요로 제외)'}
 
 [회전 추천 결과 데이터 — 이동발생 {len(rot_lines):,}건]
-{rot_dump}
+{rot_dump if rot_dump else '(이번 질문에 회전 결과 데이터 불필요로 제외)'}
 
 [사용자 질문]
 {q}
@@ -3664,7 +3714,6 @@ def render():
         _safe('추가 분배', render_onepan_tab)
     with t[5]:
         _safe('리오더 요청', render_reorder_request_tab)
-
     with t[6]:
         _safe('통합 재고뷰', render_unified_tab)
     with t[7]:
