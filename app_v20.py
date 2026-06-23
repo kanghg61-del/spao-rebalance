@@ -3350,8 +3350,11 @@ def _aica_answer_llm(q, K):
         api_key = api_key or _os.environ.get('GEMINI_API_KEY')
         if not api_key:
             return None, '키 미설정 (Streamlit Secrets: GEMINI_API_KEY)'
-        from google import genai
-        client = genai.Client(api_key=api_key)
+        # SDK 우회 — google-genai SDK는 AQ.* 키를 Bearer로 보내 401.
+        # 실측 검증된 ?key= query string 방식을 urllib로 직접 호출.
+        import urllib.request as _ur
+        import urllib.error as _ue
+        import json as _json
         skus = K['skus']
         smap = K['smap']
         # 채널별 KPI 빌드 (LLM 컨텍스트용)
@@ -3407,25 +3410,44 @@ def _aica_answer_llm(q, K):
 {q}
 """
         # 모델 우선순위 — 실측 검증 결과 (사용자 6/23):
-        #   gemini-2.0-flash    → 무료 quota 초과 (RESOURCE_EXHAUSTED)
-        #   gemini-2.5-flash    → 일시 503 (UNAVAILABLE)
-        #   gemini-2.5-flash-lite → ✅ 200 OK (작동 확인됨)
-        # 따라서 lite를 1순위 + 다른 모델은 quota 회복 시 자동 사용
+        #   gemini-2.5-flash-lite → ✅ 200 OK (?key= query, AQ.* 키 작동 확인)
+        #   gemini-2.0-flash      → 429 RESOURCE_EXHAUSTED (무료 quota 초과)
+        #   gemini-2.5-flash      → 503 UNAVAILABLE (일시 장애)
+        #   gemini-2.5-pro        → 별도 quota
         candidates = ['gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-2.5-pro']
         last_err = None
         ans = None
         model_used = None
+        req_body = _json.dumps({"contents": [{"parts": [{"text": context}]}]}).encode('utf-8')
         for m in candidates:
+            url = f'https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}'
+            req = _ur.Request(
+                url,
+                data=req_body,
+                headers={'Content-Type': 'application/json; charset=utf-8'},
+                method='POST',
+            )
             try:
-                resp = client.models.generate_content(model=m, contents=context)
-                t = (resp.text or '').strip()
-                if t:
-                    ans = t
-                    model_used = m
-                    break
+                with _ur.urlopen(req, timeout=30) as r:
+                    data = _json.loads(r.read().decode('utf-8'))
+                cands = data.get('candidates') or []
+                if cands:
+                    parts = cands[0].get('content', {}).get('parts', [])
+                    text = ''.join(p.get('text', '') for p in parts).strip()
+                    if text:
+                        ans = text
+                        model_used = m
+                        break
                 last_err = f'{m}: empty response'
+            except _ue.HTTPError as he:
+                try:
+                    err_body = he.read().decode('utf-8')[:300]
+                except Exception:
+                    err_body = ''
+                last_err = f'{m}: HTTP {he.code} {he.reason} — {err_body}'
+                continue
             except Exception as me:
-                last_err = f'{m}: {type(me).__name__}: {str(me)[:120]}'
+                last_err = f'{m}: {type(me).__name__}: {str(me)[:160]}'
                 continue
         if not ans:
             return None, last_err or 'all models failed'
@@ -3557,7 +3579,6 @@ def render():
     with col_c:
         st.caption('v0.9')
 
-    # 탭 그룹 6번/9번 좌측 마진(시각 분리)
     st.markdown(
         '<style>'
         'div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(6),'
