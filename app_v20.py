@@ -3372,7 +3372,7 @@ def _aica_answer_llm(q, K):
                 if o > 0 and i / o < 1:
                     ch_short_cnt[c] += 1
         ch_woc_days = {c: int(ch_inv_qty[c] / ch_daily_qty[c]) if ch_daily_qty[c] > 0 else 0 for c in CHANNELS}
-        # 회전 결과 상위 10건 요약 (전체)
+        # 회전 결과 (전체)
         results = K['results']
         sty_rev = {}
         for r in results:
@@ -3381,66 +3381,70 @@ def _aica_answer_llm(q, K):
         rot_top10 = sorted([(s, v) for s, v in sty_rev.items() if v > 0], key=lambda x: -x[1])[:10]
         rot_top_str = ' / '.join([f"{s}({smap.get(s,'')[:10]}) 회수 {round(v/10000):,}만원" for s, v in rot_top10])
         top_10_str = ' / '.join([f"{s}({n[:10]}) {q:,}장/일" for s, q, n in K['top_10'][:10]])
-        # ── 채널별 결품 단품 TOP 5 (재고주수 낮은 순) ── 사용자 6/24 요청
-        ch_short_top5 = {c: [] for c in CHANNELS}
-        for c in CHANNELS:
-            cand = []
-            for code, d in skus.items():
-                o = d['orders'].get(c, 0); i = d['inv'].get(c, 0)
-                if o > 0 and i / o < 1:
-                    sty = code[:10]
-                    cand.append((code, i, o, i / o, smap.get(sty, '')[:14]))
-            cand.sort(key=lambda x: x[3])
-            ch_short_top5[c] = cand[:5]
-        # ── 채널별 회전 기대매출 TOP 5 (해당 채널 IN(+) 받는 단품의 기대매출 기준) ──
-        ch_rot_top5 = {c: [] for c in CHANNELS}
-        for c in CHANNELS:
-            cand = []
-            for r in results:
-                in_qty = max(0, r['moves'].get(c, 0))
-                if in_qty > 0 and r['revenue'] > 0:
-                    code = r['code']; sty = code[:10]
-                    cand.append((code, in_qty, r['revenue'], smap.get(sty, r['data'].get('name', ''))[:14]))
-            cand.sort(key=lambda x: -x[2])
-            ch_rot_top5[c] = cand[:5]
-        ch_short_block = chr(10).join([
-            f"[{c} 결품 TOP5] " + (' / '.join([f"{cd}({nm}) 재고{inv}/주판{o} {w:.2f}주" for cd, inv, o, w, nm in ch_short_top5[c]]) if ch_short_top5[c] else '없음')
-            for c in CHANNELS
-        ])
-        ch_rot_block = chr(10).join([
-            f"[{c} 회전IN 기대매출 TOP5] " + (' / '.join([f"{cd}({nm}) IN{q}장 회수{round(rev/10000):,}만원" for cd, q, rev, nm in ch_rot_top5[c]]) if ch_rot_top5[c] else '없음')
-            for c in CHANNELS
-        ])
-        # 채널명은 풀네임 사용 (사용자 6/23 요청 — 이몰/무신/지재 같은 줄임말 금지)
+        # ── 사용자 6/24: 전체 데이터 dump로 LLM이 어떤 질문이든 자체 분석 가능하게 변경 ──
+        # 활성 단품(주문 발생) 전체를 compact format으로 dump.
+        # format: code|name|price|공홈inv/ord|이랜드몰inv/ord|무신사inv/ord|지그재그inv/ord|네이버inv/ord|카카오선물하기inv/ord
+        active_lines = []
+        for code, d in skus.items():
+            orders_d = d.get('orders', {})
+            inv_d = d.get('inv', {})
+            if sum(orders_d.get(c, 0) for c in CHANNELS) == 0 and sum(inv_d.get(c, 0) for c in CHANNELS) == 0:
+                continue  # 완전 비활성 단품 제외
+            nm = (d.get('name', '') or '')[:18]
+            px = int(d.get('price', 0))
+            ch_str = ' '.join(f"{c[:2]}:{inv_d.get(c,0)}/{orders_d.get(c,0)}" for c in CHANNELS)
+            active_lines.append(f"{code}|{nm}|{px}|{ch_str}")
+        sku_dump = '\n'.join(active_lines)
+        # 회전 추천 결과 (이동 발생 단품만) compact dump
+        # format: code|name|회수만원|공홈mv|이랜드몰mv|무신사mv|지그재그mv|네이버mv|카카오선물하기mv
+        rot_lines = []
+        for r in results:
+            mv = r['moves']
+            if not any(v != 0 for v in mv.values()):
+                continue
+            code = r['code']
+            nm = (r['data'].get('name', '') or '')[:18]
+            rev_man = round(r['revenue'] / 10000)
+            mv_str = ' '.join(f"{c[:2]}:{mv.get(c,0):+d}" for c in CHANNELS)
+            rot_lines.append(f"{code}|{nm}|{rev_man}만|{mv_str}")
+        rot_dump = '\n'.join(rot_lines)
+        # 채널명은 풀네임 사용 (사용자 6/23 요청)
         context = f"""당신은 SPAO 온라인 재고 AI 에이전트 'AICA' 입니다.
-아래 SPAO 온라인 재고 데이터를 보고 한국어로 간결·정확히 답변하세요.
-숫자는 데이터에 있는 것만 사용. HTML 태그 <b> <br> 활용해 가독성 강조.
-질문에 데이터로 답할 수 없으면 "현재 데이터에 그 정보가 없습니다"라고 답.
-채널명은 반드시 풀네임(공홈, 이랜드몰, 무신사, 지그재그, 네이버, 카카오선물하기)으로 답변. 줄임말(이몰/무신/지재/네이/카카오) 금지.
+아래 SPAO 온라인 재고 전체 데이터를 직접 분석해 한국어로 간결·정확히 답변하세요.
 
-[오늘 데이터]
-전일 매출(억): {K['daily_amt_total']/1e8:.2f}
-6채널 결품 단품: {K['short_cnt']:,}건
-회전 추천: {K['rotation_qty']:,}장 / 실제 이동 {K['actual_move_amt']/1e8:.2f}억 / 기대매출 {K['rotation_revenue']/1e8:.2f}억
+[답변 규칙]
+- 아래 [전체 단품 데이터], [회전 추천 결과 데이터]를 직접 조회·집계해서 답변
+- 채널·기준이 명확하지 않으면 합리적으로 추정해 답하고 기준 명시
+- 숫자는 데이터에 있는 것만 사용 (추측·창작 금지)
+- HTML 태그 <b> <br> 활용. 답변은 5~15줄 이내
+- 채널명은 반드시 풀네임(공홈, 이랜드몰, 무신사, 지그재그, 네이버, 카카오선물하기). 줄임말 금지
+- 단품코드는 15자리 그대로, 스타일은 앞 10자리
+
+[데이터 포맷 안내]
+[전체 단품 데이터] 한 줄당 한 단품:
+  코드|단품명|정상가|공홈inv/주판|이몰inv/주판|무신inv/주판|지재inv/주판|네이inv/주판|카카inv/주판
+  (채널 앞 2자: 공홈=공홈, 이몰=이랜드몰, 무신=무신사, 지재=지그재그, 네이=네이버, 카카=카카오선물하기)
+  주판 = 주간 주문량(7일). 재고주수 = inv / 주판.
+  결품 = 재고주수 < 1주 (inv/주판 < 1.0)
+
+[회전 추천 결과] 한 줄당 한 단품:
+  코드|단품명|기대회수만원|공홈mv|이몰mv|무신mv|지재mv|네이mv|카카mv
+  mv = +이면 IN(받음), -이면 OUT(보냄), 0이면 없음
+
+[전일 운영 KPI]
+전일 매출: {K['daily_amt_total']/1e8:.2f}억
+6채널 결품 단품(주수<1): {K['short_cnt']:,}건
+회전 추천: {K['rotation_qty']:,}장 / 실제 이동금액 {K['actual_move_amt']/1e8:.2f}억 / 기대매출 {K['rotation_revenue']/1e8:.2f}억
 반응과 분배: {K['dist_qty']:,}장 / {K['dist_revenue']/1e8:.2f}억
 
-[채널별 일평균 매출(만원)]
-{', '.join([f"{c} {int(K['ch_daily_amt'][c]/10000):,}" for c in CHANNELS])}
+[채널별 운영 요약]
+{chr(10).join([f"{c}: 일평균매출 {int(K['ch_daily_amt'][c]/10000):,}만원, 일평균판매 {int(ch_daily_qty[c]):,}장, 현재고 {ch_inv_qty[c]:,}장({ch_inv_amt[c]/1e8:.1f}억), 재고보유 {ch_woc_days[c]}일, 결품 {ch_short_cnt[c]:,}건" for c in CHANNELS])}
 
-[채널별 일평균 판매량/현재고/재고보유일수/결품건수]
-{chr(10).join([f"{c}: 일평균 {int(ch_daily_qty[c]):,}장, 현재고 {ch_inv_qty[c]:,}장({ch_inv_amt[c]/1e8:.1f}억), 재고보유 {ch_woc_days[c]}일, 결품 {ch_short_cnt[c]:,}건" for c in CHANNELS])}
+[전체 단품 데이터 — 활성 단품 {len(active_lines):,}건]
+{sku_dump}
 
-[전일 매출 TOP 10 스타일]
-{top_10_str}
-
-[회전 회수매출 TOP 10 스타일 — 전체]
-{rot_top_str}
-
-[채널별 결품 단품 TOP 5 — 재고주수 낮은 순]
-{ch_short_block}
-
-[채널별 회전IN 기대매출 TOP 5 — 해당 채널 IN(+) 받는 단품 기준]
-{ch_rot_block}
+[회전 추천 결과 데이터 — 이동발생 {len(rot_lines):,}건]
+{rot_dump}
 
 [사용자 질문]
 {q}
@@ -3660,6 +3664,7 @@ def render():
         _safe('추가 분배', render_onepan_tab)
     with t[5]:
         _safe('리오더 요청', render_reorder_request_tab)
+
     with t[6]:
         _safe('통합 재고뷰', render_unified_tab)
     with t[7]:
