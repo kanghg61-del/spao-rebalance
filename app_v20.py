@@ -3423,14 +3423,30 @@ def _aica_answer_llm(q, K):
 
 
 def _aica_answer(q, K):
-    # 1) Gemini Flash 시도 (키 있으면)
+    """LLM 시도 → 실패 시 fallback 답변 + LLM 디버그 사유를 inline으로 prepend."""
+    # 1) Gemini Flash 시도
     llm_ans, llm_err = _aica_answer_llm(q, K)
     if llm_ans:
         return llm_ans
-    # LLM 실패 사유를 세션에 저장 → 채팅 영역 상단 캡션으로 노출
+    # 2) Fallback 답변
+    fb = _aica_fallback(q, K)
+    # 3) LLM 디버그 사유를 답변 위에 inline 표시 (사용자 6/23 진단 강화 — 캡션 누락 대비)
     if llm_err:
         st.session_state['_aica_last_llm_err'] = llm_err
-    # 2) Fallback — 규칙 기반 (키 없거나 LLM 실패 시)
+        prefix = (
+            f'<div style="background:#3a1f1f;border-left:3px solid #ff6b6b;'
+            f'padding:8px 12px;border-radius:4px;margin-bottom:10px;font-size:11px;'
+            f'color:#ffb84d;line-height:1.5">'
+            f'<b>⚙️ LLM 진단</b> — Gemini 호출 실패 → 규칙 기반 fallback 사용 중<br>'
+            f'사유: <code style="color:#ff6b6b">{llm_err}</code>'
+            f'</div>'
+        )
+        return prefix + fb
+    return fb
+
+
+def _aica_fallback(q, K):
+    """규칙 기반 답변 (LLM 키 없거나 LLM 호출 실패 시)."""
     import re as _re
     num_match = _re.search(r'(\d+)\s*개|top\s*(\d+)|상위\s*(\d+)', q.lower())
     top_n = 5
