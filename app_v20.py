@@ -3213,7 +3213,8 @@ def render_ai_summary_tab():
     # 매출 표기: '3억 4,067만원' (정수 억 + 나머지 만원)
     daily_eok_int = int(daily_amt_total // 100000000)
     daily_man_remainder = int((daily_amt_total % 100000000) / 10000)
-    ch_strs = [f'{CH_SHORT.get(c, c)} <b>{int(ch_daily_amt[c]/10000):,}만원</b>' for c in CHANNELS]
+    # AI 일일 요약 브리프는 풀네임 사용 (사용자 6/23 요청)
+    ch_strs = [f'{c} <b>{int(ch_daily_amt[c]/10000):,}만원</b>' for c in CHANNELS]
     actual_eok = actual_move_amt / 100000000
     rev_eok = rotation_revenue / 100000000
     dist_actual_eok = dist_actual_amt / 100000000
@@ -3252,6 +3253,10 @@ def render_ai_summary_tab():
 
     # ── 순서 변경: 채팅 먼저 → TOP10 마지막 ──
     st.markdown('### 💬 자연어 질의')
+    # LLM 실패 사유 노출 (디버깅용 — 키 누락/API 에러 즉시 식별)
+    _llm_err = st.session_state.get('_aica_last_llm_err')
+    if _llm_err:
+        st.caption(f'⚠️ Gemini Flash 응답 실패 → 규칙 기반 fallback 사용 중. 사유: `{_llm_err}`')
     if 'aica_chat' not in st.session_state:
         st.session_state['aica_chat'] = []
 
@@ -3329,13 +3334,22 @@ def render_ai_summary_tab():
 
 def _aica_answer_llm(q, K):
     """Gemini Flash 호출 — st.secrets['GEMINI_API_KEY'] 필요.
-    실패/키 없음 시 None 반환 → 규칙 기반 fallback."""
+    반환: (answer_html or None, debug_msg or None).
+      - 성공 → (text, None)
+      - 키 없음 → (None, '키 미설정')
+      - 호출 실패 → (None, 'ErrorType: msg')
+    호출자는 None이면 fallback 사용, debug_msg를 캡션으로 노출."""
     try:
-        api_key = st.secrets.get('GEMINI_API_KEY') if hasattr(st, 'secrets') else None
+        api_key = None
+        try:
+            if hasattr(st, 'secrets'):
+                api_key = st.secrets.get('GEMINI_API_KEY')
+        except Exception:
+            api_key = None
         import os as _os
         api_key = api_key or _os.environ.get('GEMINI_API_KEY')
         if not api_key:
-            return None
+            return None, '키 미설정 (Streamlit Secrets: GEMINI_API_KEY)'
         from google import genai
         client = genai.Client(api_key=api_key)
         skus = K['skus']
@@ -3364,10 +3378,12 @@ def _aica_answer_llm(q, K):
         rot_top10 = sorted([(s, v) for s, v in sty_rev.items() if v > 0], key=lambda x: -x[1])[:10]
         rot_top_str = ' / '.join([f"{s}({smap.get(s,'')[:10]}) 회수 {round(v/10000):,}만원" for s, v in rot_top10])
         top_10_str = ' / '.join([f"{s}({n[:10]}) {q:,}장/일" for s, q, n in K['top_10'][:10]])
+        # 채널명은 풀네임 사용 (사용자 6/23 요청 — 이몰/무신/지재 같은 줄임말 금지)
         context = f"""당신은 SPAO 온라인 재고 AI 에이전트 'AICA' 입니다.
 아래 SPAO 온라인 재고 데이터를 보고 한국어로 간결·정확히 답변하세요.
 숫자는 데이터에 있는 것만 사용. HTML 태그 <b> <br> 활용해 가독성 강조.
 질문에 데이터로 답할 수 없으면 "현재 데이터에 그 정보가 없습니다"라고 답.
+채널명은 반드시 풀네임(공홈, 이랜드몰, 무신사, 지그재그, 네이버, 카카오선물하기)으로 답변. 줄임말(이몰/무신/지재/네이/카카오) 금지.
 
 [오늘 데이터]
 전일 매출(억): {K['daily_amt_total']/1e8:.2f}
@@ -3376,10 +3392,10 @@ def _aica_answer_llm(q, K):
 반응과 분배: {K['dist_qty']:,}장 / {K['dist_revenue']/1e8:.2f}억
 
 [채널별 일평균 매출(만원)]
-{', '.join([f"{CH_SHORT.get(c,c)} {int(K['ch_daily_amt'][c]/10000):,}" for c in CHANNELS])}
+{', '.join([f"{c} {int(K['ch_daily_amt'][c]/10000):,}" for c in CHANNELS])}
 
 [채널별 일평균 판매량/현재고/재고보유일수/결품건수]
-{chr(10).join([f"{CH_SHORT.get(c,c)}: 일평균 {int(ch_daily_qty[c]):,}장, 현재고 {ch_inv_qty[c]:,}장({ch_inv_amt[c]/1e8:.1f}억), 재고보유 {ch_woc_days[c]}일, 결품 {ch_short_cnt[c]:,}건" for c in CHANNELS])}
+{chr(10).join([f"{c}: 일평균 {int(ch_daily_qty[c]):,}장, 현재고 {ch_inv_qty[c]:,}장({ch_inv_amt[c]/1e8:.1f}억), 재고보유 {ch_woc_days[c]}일, 결품 {ch_short_cnt[c]:,}건" for c in CHANNELS])}
 
 [전일 매출 TOP 10 스타일]
 {top_10_str}
@@ -3390,21 +3406,30 @@ def _aica_answer_llm(q, K):
 [사용자 질문]
 {q}
 """
-        resp = client.models.generate_content(
-            model='gemini-2.0-flash-exp',
-            contents=context,
-        )
-        ans = resp.text.strip()
-        return ans + '<br><br><span style="color:#9ab;font-size:10px">🤖 Gemini Flash 자유 응답</span>'
+        # 안정 GA 모델 사용 — gemini-2.0-flash-exp(실험)는 일부 키 권한 문제 → gemini-2.0-flash(GA)
+        # 실패 시 gemini-1.5-flash(완전한 안정 모델)로 폴백
+        model_used = 'gemini-2.0-flash'
+        try:
+            resp = client.models.generate_content(model=model_used, contents=context)
+        except Exception:
+            model_used = 'gemini-1.5-flash'
+            resp = client.models.generate_content(model=model_used, contents=context)
+        ans = (resp.text or '').strip()
+        if not ans:
+            return None, f'{model_used} 응답 비어있음'
+        return ans + f'<br><br><span style="color:#9ab;font-size:10px">🤖 {model_used} 자유 응답</span>', None
     except Exception as e:
-        return None
+        return None, f'{type(e).__name__}: {str(e)[:200]}'
 
 
 def _aica_answer(q, K):
     # 1) Gemini Flash 시도 (키 있으면)
-    llm = _aica_answer_llm(q, K)
-    if llm:
-        return llm
+    llm_ans, llm_err = _aica_answer_llm(q, K)
+    if llm_ans:
+        return llm_ans
+    # LLM 실패 사유를 세션에 저장 → 채팅 영역 상단 캡션으로 노출
+    if llm_err:
+        st.session_state['_aica_last_llm_err'] = llm_err
     # 2) Fallback — 규칙 기반 (키 없거나 LLM 실패 시)
     import re as _re
     num_match = _re.search(r'(\d+)\s*개|top\s*(\d+)|상위\s*(\d+)', q.lower())
@@ -3441,6 +3466,7 @@ def _aica_answer(q, K):
         return f'전일 매출 TOP {top_n} 스타일:<br><br>' + '<br>'.join(lines)
     for c in CHANNELS:
         short = CH_SHORT.get(c, c)
+        # 매칭은 양쪽(풀네임/줄임말) 다 지원, 출력은 풀네임 사용 (사용자 6/23 요청)
         if (c in q or short in q) and '결품' in q:
             shorts = []
             for code, d in skus.items():
@@ -3451,12 +3477,12 @@ def _aica_answer(q, K):
             shorts.sort(key=lambda x: x[3])
             top_s = shorts[:top_n]
             if not top_s:
-                return f'<b>{short}</b> 채널 결품 단품 없음 (모두 ≥ 1주).'
+                return f'<b>{c}</b> 채널 결품 단품 없음 (모두 ≥ 1주).'
             lines = [
                 f'{i}. <b>{c0}</b> {(nm or "")[:14]} — 재고 {inv:,} · 주판 {o:,} · <b style="color:#ff6b6b">{w:.1f}주</b>'
                 for i, (c0, inv, o, w, nm) in enumerate(top_s, 1)
             ]
-            return f'<b>{short}</b> 채널 결품 상위 {top_n}건:<br><br>' + '<br>'.join(lines)
+            return f'<b>{c}</b> 채널 결품 상위 {top_n}건:<br><br>' + '<br>'.join(lines)
     if any(k in q for k in ['기대매출', '회수', '효과', '얼마']) and '회전' in q:
         return (f'회전 기대매출: <b style="color:#ffb84d">{K["rotation_revenue"]/100000000:.2f}억</b><br>'
                 f'(실제 이동금액 {K["actual_move_amt"]/100000000:.2f}억, 총 이동량 {K["rotation_qty"]:,}장)')
@@ -3466,9 +3492,10 @@ def _aica_answer(q, K):
                 f'기대매출 <b>{K["dist_revenue"]/100000000:.2f}억</b>')
     if '결품' in q:
         return (f'현재 6채널 결품 단품: <b style="color:#ff6b6b">{K["short_cnt"]:,}건</b><br>'
-                f'채널명 지정하시면 상위 결품을 보여드릴게요. (예: "무신 결품 5건")')
+                f'채널명 지정하시면 상위 결품을 보여드릴게요. (예: "무신사 결품 5건")')
     if any(k in q for k in ['매출', '주문', '전일', '어제', '오늘']):
-        ch_strs = [f'{CH_SHORT.get(c, c)} {int(K["ch_daily_amt"][c]/10000):,}만원' for c in CHANNELS]
+        # 풀네임 사용 (사용자 6/23 요청)
+        ch_strs = [f'{c} {int(K["ch_daily_amt"][c]/10000):,}만원' for c in CHANNELS]
         return (f'전일 주문 기준 매출: <b>{K["daily_amt_total"]/100000000:.2f}억</b><br>'
                 f'채널별: {" / ".join(ch_strs)}')
     if '회전' in q or '재배치' in q:
@@ -3501,33 +3528,6 @@ def render():
             st.rerun()
     with col_c:
         st.caption('v0.9')
-    st.markdown("""
-    <style>
-    div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(6),
-    div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(9){
-        margin-left: 68px;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-    labels = ['🤖 AI 일일 요약', '🛡️ 재배치(기본)', '🎛️ 재배치(임의)', '📈 실행 효과',
-              '🧩 추가 분배', '🚨 리오더 요청',
-              '🏬 통합 재고뷰', '📊 채널 별 세부', '📦 입고 예정',
-              '🚫 채널 IN-OUT (MD 기입)', '🔁 리오더 매핑 (SCM 기입)']
-    t = st.tabs(labels)
-
-    def _safe(name, fn):
-        import traceback as _tb
-        try:
-            fn()
-        except Exception as e:
-            st.error(f'⚠️ **[{name}] 탭 렌더 실패** — `{type(e).__name__}: {e}`')
-            with st.expander('🔎 디버그 traceback'):
-                st.code(_tb.format_exc())
-
-    with t[0]:
-        _safe('AI 일일 요약', render_ai_summary_tab)
-    with t[1]:
-        _safe('재배치(기본)', lambda: render_scenario('🛡️ 기본', st, allow_slider=False))
     with t[2]:
         _safe('재배치(임의)', lambda: render_scenario('🎛️ 임의', st, allow_slider=True))
     with t[3]:
