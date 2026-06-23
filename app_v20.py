@@ -3327,7 +3327,85 @@ def render_ai_summary_tab():
         st.caption('데이터 없음')
 
 
+def _aica_answer_llm(q, K):
+    """Gemini Flash 호출 — st.secrets['GEMINI_API_KEY'] 필요.
+    실패/키 없음 시 None 반환 → 규칙 기반 fallback."""
+    try:
+        api_key = st.secrets.get('GEMINI_API_KEY') if hasattr(st, 'secrets') else None
+        import os as _os
+        api_key = api_key or _os.environ.get('GEMINI_API_KEY')
+        if not api_key:
+            return None
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        skus = K['skus']
+        smap = K['smap']
+        # 채널별 KPI 빌드 (LLM 컨텍스트용)
+        ch_inv_qty = {c: 0 for c in CHANNELS}
+        ch_inv_amt = {c: 0 for c in CHANNELS}
+        ch_short_cnt = {c: 0 for c in CHANNELS}
+        ch_daily_qty = {c: 0 for c in CHANNELS}
+        for code, d in skus.items():
+            price = d.get('price', 0)
+            for c in CHANNELS:
+                o = d['orders'].get(c, 0); i = d['inv'].get(c, 0)
+                ch_inv_qty[c] += i
+                ch_inv_amt[c] += i * price
+                ch_daily_qty[c] += o / 7
+                if o > 0 and i / o < 1:
+                    ch_short_cnt[c] += 1
+        ch_woc_days = {c: int(ch_inv_qty[c] / ch_daily_qty[c]) if ch_daily_qty[c] > 0 else 0 for c in CHANNELS}
+        # 회전 결과 상위 10건 요약
+        results = K['results']
+        sty_rev = {}
+        for r in results:
+            sty = r['code'][:10]
+            sty_rev[sty] = sty_rev.get(sty, 0) + r['revenue']
+        rot_top10 = sorted([(s, v) for s, v in sty_rev.items() if v > 0], key=lambda x: -x[1])[:10]
+        rot_top_str = ' / '.join([f"{s}({smap.get(s,'')[:10]}) 회수 {round(v/10000):,}만원" for s, v in rot_top10])
+        top_10_str = ' / '.join([f"{s}({n[:10]}) {q:,}장/일" for s, q, n in K['top_10'][:10]])
+        context = f"""당신은 SPAO 온라인 재고 AI 에이전트 'AICA' 입니다.
+아래 SPAO 온라인 재고 데이터를 보고 한국어로 간결·정확히 답변하세요.
+숫자는 데이터에 있는 것만 사용. HTML 태그 <b> <br> 활용해 가독성 강조.
+질문에 데이터로 답할 수 없으면 "현재 데이터에 그 정보가 없습니다"라고 답.
+
+[오늘 데이터]
+전일 매출(억): {K['daily_amt_total']/1e8:.2f}
+6채널 결품 단품: {K['short_cnt']:,}건
+회전 추천: {K['rotation_qty']:,}장 / 실제 이동 {K['actual_move_amt']/1e8:.2f}억 / 기대매출 {K['rotation_revenue']/1e8:.2f}억
+반응과 분배: {K['dist_qty']:,}장 / {K['dist_revenue']/1e8:.2f}억
+
+[채널별 일평균 매출(만원)]
+{', '.join([f"{CH_SHORT.get(c,c)} {int(K['ch_daily_amt'][c]/10000):,}" for c in CHANNELS])}
+
+[채널별 일평균 판매량/현재고/재고보유일수/결품건수]
+{chr(10).join([f"{CH_SHORT.get(c,c)}: 일평균 {int(ch_daily_qty[c]):,}장, 현재고 {ch_inv_qty[c]:,}장({ch_inv_amt[c]/1e8:.1f}억), 재고보유 {ch_woc_days[c]}일, 결품 {ch_short_cnt[c]:,}건" for c in CHANNELS])}
+
+[전일 매출 TOP 10 스타일]
+{top_10_str}
+
+[회전 회수매출 TOP 10 스타일]
+{rot_top_str}
+
+[사용자 질문]
+{q}
+"""
+        resp = client.models.generate_content(
+            model='gemini-2.0-flash-exp',
+            contents=context,
+        )
+        ans = resp.text.strip()
+        return ans + '<br><br><span style="color:#9ab;font-size:10px">🤖 Gemini Flash 자유 응답</span>'
+    except Exception as e:
+        return None
+
+
 def _aica_answer(q, K):
+    # 1) Gemini Flash 시도 (키 있으면)
+    llm = _aica_answer_llm(q, K)
+    if llm:
+        return llm
+    # 2) Fallback — 규칙 기반 (키 없거나 LLM 실패 시)
     import re as _re
     num_match = _re.search(r'(\d+)\s*개|top\s*(\d+)|상위\s*(\d+)', q.lower())
     top_n = 5
