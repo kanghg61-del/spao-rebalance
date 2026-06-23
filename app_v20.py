@@ -3406,17 +3406,29 @@ def _aica_answer_llm(q, K):
 [사용자 질문]
 {q}
 """
-        # 안정 GA 모델 사용 — gemini-2.0-flash-exp(실험)는 일부 키 권한 문제 → gemini-2.0-flash(GA)
-        # 실패 시 gemini-1.5-flash(완전한 안정 모델)로 폴백
-        model_used = 'gemini-2.0-flash'
-        try:
-            resp = client.models.generate_content(model=model_used, contents=context)
-        except Exception:
-            model_used = 'gemini-1.5-flash'
-            resp = client.models.generate_content(model=model_used, contents=context)
-        ans = (resp.text or '').strip()
+        # 모델 우선순위 — 실측 검증 결과 (사용자 6/23):
+        #   gemini-2.0-flash    → 무료 quota 초과 (RESOURCE_EXHAUSTED)
+        #   gemini-2.5-flash    → 일시 503 (UNAVAILABLE)
+        #   gemini-2.5-flash-lite → ✅ 200 OK (작동 확인됨)
+        # 따라서 lite를 1순위 + 다른 모델은 quota 회복 시 자동 사용
+        candidates = ['gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-2.5-pro']
+        last_err = None
+        ans = None
+        model_used = None
+        for m in candidates:
+            try:
+                resp = client.models.generate_content(model=m, contents=context)
+                t = (resp.text or '').strip()
+                if t:
+                    ans = t
+                    model_used = m
+                    break
+                last_err = f'{m}: empty response'
+            except Exception as me:
+                last_err = f'{m}: {type(me).__name__}: {str(me)[:120]}'
+                continue
         if not ans:
-            return None, f'{model_used} 응답 비어있음'
+            return None, last_err or 'all models failed'
         return ans + f'<br><br><span style="color:#9ab;font-size:10px">🤖 {model_used} 자유 응답</span>', None
     except Exception as e:
         return None, f'{type(e).__name__}: {str(e)[:200]}'
