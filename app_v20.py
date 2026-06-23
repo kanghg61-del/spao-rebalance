@@ -323,54 +323,50 @@ def _apply_overrides(results):
     return out
 
 
-def _active_period_patterns():
-    """ch_excl_periods 중 오늘 날짜가 기간 안에 들어오는 항목만 활성화."""
+def _ch_excl_key():
+    """채널별 IN/OUT 제외 — ch_excl_rows 통합 구조 (스타일 + 시작일 + 종료일).
+    시작일/종료일이 비어 있으면 영구 적용, 둘 다 있으면 오늘 ∈ [시작, 종료] 일 때만 활성."""
     from datetime import date as _date
     today = _date.today()
-    out = {}  # ch -> {'in': set, 'out': set}
-    rows = st.session_state.get('ch_excl_periods', [])
+    rows = st.session_state.get('ch_excl_rows', [])
+    # 레거시: 기존 ch_excl 텍스트영역 데이터도 흡수
+    legacy = st.session_state.get('ch_excl', {})
+    merged = {}  # ch -> {'in': set, 'out': set}
+    for ch in CHANNELS:
+        for dr in ('in', 'out'):
+            pats = set(legacy.get(ch, {}).get(dr, []))
+            if pats:
+                merged.setdefault(ch, {}).setdefault(dr, set()).update(pats)
     for row in rows:
         try:
             ch = row.get('채널')
             direction = (row.get('방향') or '').lower()
-            pat = (row.get('스타일 패턴') or '').strip()
+            pat = (row.get('스타일') or row.get('스타일 패턴') or '').strip()
+            if not (ch and direction in ('in', 'out') and pat):
+                continue
             start = row.get('시작일')
             end = row.get('종료일')
-            if not (ch and direction in ('in', 'out') and pat and start and end):
-                continue
-            if hasattr(start, 'toordinal'):
-                s = start
-            else:
-                s = _date.fromisoformat(str(start)[:10])
-            if hasattr(end, 'toordinal'):
-                e = end
-            else:
-                e = _date.fromisoformat(str(end)[:10])
-            if not (s <= today <= e):
-                continue
-            out.setdefault(ch, {}).setdefault(direction, set()).add(pat)
+            if start or end:
+                # 기간 지정 — 둘 다 있어야 활성
+                if not (start and end):
+                    continue
+                s = start if hasattr(start, 'toordinal') else _date.fromisoformat(str(start)[:10])
+                e = end if hasattr(end, 'toordinal') else _date.fromisoformat(str(end)[:10])
+                if not (s <= today <= e):
+                    continue
+            merged.setdefault(ch, {}).setdefault(direction, set()).add(pat)
         except Exception:
             continue
-    return out
-
-
-def _ch_excl_key():
-    """채널별 IN/OUT 제외(세션) → 캐시 키용 해시가능 튜플.
-    영구 제외(ch_excl) + 기간 한정 제외(ch_excl_periods 중 오늘 활성) 통합."""
-    st_ex = st.session_state.get('ch_excl', {})
-    periods = _active_period_patterns()
-    merged = {}  # ch -> {'in': set, 'out': set}
-    for ch in CHANNELS:
-        for dr in ('in', 'out'):
-            s = set(st_ex.get(ch, {}).get(dr, []))
-            s |= periods.get(ch, {}).get(dr, set())
-            if s:
-                merged.setdefault(ch, {})[dr] = s
     return tuple(sorted(
         (ch, dr, tuple(sorted(merged.get(ch, {}).get(dr, []))))
         for ch in CHANNELS for dr in ('in', 'out')
         if merged.get(ch, {}).get(dr)
     ))
+
+
+def _active_period_patterns():
+    """하위 호환 — 이전 코드가 이 함수를 호출할 경우 빈 dict 반환."""
+    return {}
 
 
 def woc_color(w):
@@ -757,46 +753,114 @@ def render_scenario(scenario_key, container, allow_slider=False):
 
 def render_excluded_tab():
     st.markdown('### 🚫 채널별 IN·OUT 제외 관리 (채널 담당 MD)')
-    st.caption('채널 MD가 자동 재배치에서 제외할 스타일을 채널별로 직접 관리합니다.  '
-               '**🟢 IN 제외** = 이 채널로 재고를 받지 않음(수신 차단)  ·  **🔴 OUT 제외** = 이 채널에서 재고를 빼지 않음(반출 차단).  '
-               '코드 일부만 입력해도 매칭(예: `SPACG24`).  입력 후 다른 탭으로 이동하면 재배치에 반영됩니다.')
+    st.caption('🟢 IN 제외 = 이 채널로 재고를 받지 않음(수신 차단) · '
+               '🔴 OUT 제외 = 이 채널에서 재고를 빼지 않음(반출 차단). '
+               '스타일 코드 일부만 입력해도 매칭(예: SPACG24). '
+               '시작일/종료일 입력 시 해당 기간만 자동 적용 → 종료 후 자동 해제. '
+               '시작일/종료일 비워두면 영구 제외. 입력 후 다른 탭으로 이동하면 재배치에 반영됩니다.')
 
     try:
         skus = load_data_v20()
     except Exception:
         skus = None
 
-    ch_excl = st.session_state.get('ch_excl', {})
+    import pandas as _pd
+    from datetime import date as _date
+
+    all_rows = list(st.session_state.get('ch_excl_rows', []))
     tabs = st.tabs([str(c) for c in CHANNELS])
     for tab, c in zip(tabs, CHANNELS):
         with tab:
             ca, cb = st.columns(2)
+            # ── IN 제외 ─────────────────────────────
             with ca:
-                in_txt = st.text_area('🟢 IN 제외 (이 채널로 받지 않을 스타일)',
-                                      value=st.session_state.get(f'excl_in_{c}', ''), height=170,
-                                      placeholder='예:\nSPACG24A5\nSPJJG25G01', key=f'ta_in_{c}')
+                st.markdown('**🟢 IN 제외 (이 채널로 받지 않을 스타일)**')
+                in_rows_existing = [r for r in all_rows if r.get('채널') == c and r.get('방향') == 'in']
+                if not in_rows_existing:
+                    in_rows_existing = [{'스타일': '', '시작일': None, '종료일': None}]
+                df_in = _pd.DataFrame(in_rows_existing)[['스타일', '시작일', '종료일']]
+                edited_in = st.data_editor(
+                    df_in, num_rows='dynamic', use_container_width=True,
+                    key=f'excl_in_editor_{c}',
+                    column_config={
+                        '스타일': st.column_config.TextColumn('스타일', help='코드 일부만 입력해도 매칭', required=False),
+                        '시작일': st.column_config.DateColumn('시작일', format='YYYY-MM-DD', help='비워두면 영구 적용'),
+                        '종료일': st.column_config.DateColumn('종료일', format='YYYY-MM-DD'),
+                    })
+            # ── OUT 제외 ────────────────────────────
             with cb:
-                out_txt = st.text_area('🔴 OUT 제외 (이 채널에서 빼지 않을 스타일)',
-                                       value=st.session_state.get(f'excl_out_{c}', ''), height=170,
-                                       placeholder='예:\nSPACG24A5', key=f'ta_out_{c}')
-            in_set = {x.strip() for x in in_txt.replace(',', '\n').split('\n') if x.strip()}
-            out_set = {x.strip() for x in out_txt.replace(',', '\n').split('\n') if x.strip()}
-            st.session_state[f'excl_in_{c}'] = in_txt
-            st.session_state[f'excl_out_{c}'] = out_txt
-            ch_excl.setdefault(c, {})['in'] = in_set
-            ch_excl[c]['out'] = out_set
-            m_in = sum(1 for code in skus if any(p in code for p in in_set)) if (skus and in_set) else 0
-            m_out = sum(1 for code in skus if any(p in code for p in out_set)) if (skus and out_set) else 0
-            mc1, mc2, mc3 = st.columns(3)
-            mc1.metric('IN 제외 패턴', f'{len(in_set):,}')
-            mc2.metric('OUT 제외 패턴', f'{len(out_set):,}')
+                st.markdown('**🔴 OUT 제외 (이 채널에서 빼지 않을 스타일)**')
+                out_rows_existing = [r for r in all_rows if r.get('채널') == c and r.get('방향') == 'out']
+                if not out_rows_existing:
+                    out_rows_existing = [{'스타일': '', '시작일': None, '종료일': None}]
+                df_out = _pd.DataFrame(out_rows_existing)[['스타일', '시작일', '종료일']]
+                edited_out = st.data_editor(
+                    df_out, num_rows='dynamic', use_container_width=True,
+                    key=f'excl_out_editor_{c}',
+                    column_config={
+                        '스타일': st.column_config.TextColumn('스타일', required=False),
+                        '시작일': st.column_config.DateColumn('시작일', format='YYYY-MM-DD'),
+                        '종료일': st.column_config.DateColumn('종료일', format='YYYY-MM-DD'),
+                    })
+
+            # 입력 정리 (스타일 비어있는 행 제외) — 채널별로 갱신
+            in_records, out_records = [], []
+            for _, row in edited_in.iterrows():
+                sty = str(row.get('스타일') or '').strip()
+                if sty:
+                    in_records.append({'채널': c, '방향': 'in', '스타일': sty,
+                                       '시작일': row.get('시작일'), '종료일': row.get('종료일')})
+            for _, row in edited_out.iterrows():
+                sty = str(row.get('스타일') or '').strip()
+                if sty:
+                    out_records.append({'채널': c, '방향': 'out', '스타일': sty,
+                                        '시작일': row.get('시작일'), '종료일': row.get('종료일')})
+            # 이 채널 데이터만 교체
+            all_rows = [r for r in all_rows if r.get('채널') != c]
+            all_rows.extend(in_records + out_records)
+
+            # KPI
+            in_pats = {r['스타일'] for r in in_records}
+            out_pats = {r['스타일'] for r in out_records}
+            m_in = sum(1 for code in skus if any(p in code for p in in_pats)) if (skus and in_pats) else 0
+            m_out = sum(1 for code in skus if any(p in code for p in out_pats)) if (skus and out_pats) else 0
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            mc1.metric('IN 제외 패턴', f'{len(in_pats):,}')
+            mc2.metric('OUT 제외 패턴', f'{len(out_pats):,}')
             mc3.metric('매칭 단품 (IN / OUT)', f'{m_in:,} / {m_out:,}')
-            if st.button('🗑️ 이 채널 제외 초기화', key=f'clr_{c}'):
-                st.session_state[f'excl_in_{c}'] = ''
-                st.session_state[f'excl_out_{c}'] = ''
-                ch_excl[c] = {'in': set(), 'out': set()}
+            # 오늘 활성 미리보기
+            today = _date.today()
+            active_today_in = []
+            active_today_out = []
+            for r in in_records + out_records:
+                s = r.get('시작일'); e = r.get('종료일')
+                if not (s or e):
+                    is_active = True
+                elif s and e:
+                    try:
+                        s_ = s if hasattr(s, 'toordinal') else _date.fromisoformat(str(s)[:10])
+                        e_ = e if hasattr(e, 'toordinal') else _date.fromisoformat(str(e)[:10])
+                        is_active = s_ <= today <= e_
+                    except Exception:
+                        is_active = False
+                else:
+                    is_active = False
+                if is_active and r['방향'] == 'in':
+                    active_today_in.append(r['스타일'])
+                elif is_active and r['방향'] == 'out':
+                    active_today_out.append(r['스타일'])
+            mc4.metric(f'오늘({today.strftime("%m/%d")}) 활성', f'{len(active_today_in)} / {len(active_today_out)}',
+                       help='IN 활성 / OUT 활성 패턴 수 (기간 없으면 영구 활성)')
+
+            if st.button('🗑️ 이 채널 제외 초기화', key=f'clr_v2_{c}'):
+                all_rows = [r for r in all_rows if r.get('채널') != c]
+                st.session_state['ch_excl_rows'] = all_rows
+                # 레거시 텍스트영역도 비움
+                if c in st.session_state.get('ch_excl', {}):
+                    st.session_state['ch_excl'].pop(c, None)
                 st.rerun()
-    st.session_state['ch_excl'] = ch_excl
+
+    st.session_state['ch_excl_rows'] = all_rows
 
     st.markdown('---')
     with st.expander('🚫 전체 이동 제외 (예약판매·기획전 등 — 모든 채널에서 이동 자체를 막음)', expanded=False):
@@ -813,55 +877,6 @@ def render_excluded_tab():
             st.session_state['excluded_codes'] = set()
             st.rerun()
 
-    st.markdown('---')
-    with st.expander('📅 기간 한정 제외 (기획전·이벤트 동안만 자동 제외 → 종료 시 자동 해제)', expanded=True):
-        st.caption('스타일 패턴 + 기간을 등록하면 오늘 날짜가 기간 안일 때만 제외 적용. '
-                   '기간 종료 후 자동으로 다시 회전 대상에 포함됩니다. '
-                   '재배치(기본/임의) 계산에 즉시 반영됩니다.')
-        import pandas as _pd
-        from datetime import date as _date, timedelta as _td
-        default_periods = st.session_state.get('ch_excl_periods', [])
-        if not default_periods:
-            default_periods = [
-                {'채널': CHANNELS[0], '방향': 'out', '스타일 패턴': 'SPACG24A5',
-                 '시작일': _date.today(), '종료일': _date.today() + _td(days=7),
-                 '메모': '예시 (기획전 동안 OUT 차단)'}
-            ]
-        df_p = _pd.DataFrame(default_periods)
-        edited = st.data_editor(
-            df_p,
-            num_rows='dynamic',
-            use_container_width=True,
-            key='period_excl_editor',
-            column_config={
-                '채널': st.column_config.SelectboxColumn('채널', options=CHANNELS, required=True),
-                '방향': st.column_config.SelectboxColumn('방향', options=['in', 'out'], required=True,
-                                                         help='in = 수신 차단 / out = 반출 차단'),
-                '스타일 패턴': st.column_config.TextColumn('스타일 패턴', required=True,
-                                                              help='코드 일부만 입력해도 매칭 (예: SPACG24)'),
-                '시작일': st.column_config.DateColumn('시작일', required=True, format='YYYY-MM-DD'),
-                '종료일': st.column_config.DateColumn('종료일', required=True, format='YYYY-MM-DD'),
-                '메모': st.column_config.TextColumn('메모 (선택)'),
-            },
-        )
-        # 세션 저장
-        new_rows = edited.to_dict('records') if hasattr(edited, 'to_dict') else []
-        st.session_state['ch_excl_periods'] = new_rows
-        # 오늘 활성 항목 미리보기
-        active = _active_period_patterns()
-        if active:
-            lines = []
-            for ch, dr_map in active.items():
-                for dr, pats in dr_map.items():
-                    lines.append(f'• <b>{ch}</b> · {dr.upper()} : {", ".join(sorted(pats))}')
-            st.markdown(
-                f'<div style="background:#1B4D3E;border-radius:6px;padding:8px 12px;margin-top:6px;'
-                f'color:#4AE3B5;font-size:12px">📅 오늘({_date.today()}) 활성 기간 제외:<br>'
-                + '<br>'.join(lines) + '</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.caption(f'📅 오늘({_date.today()}) 활성 기간 제외 없음 (모든 기간 패턴이 비활성)')
 
 
 def render_export_tab():
@@ -3010,189 +3025,293 @@ def _compute_summary_kpis(skus, seed):
 
 
 def render_ai_summary_tab():
-    """🤖 AICA 일일 요약 — 첫 화면. 전일·재고·채널 리딩·회전/분배 추천."""
-    from datetime import datetime as _dt
+    """🤖 AI 일일 요약 — 이전 AICA Studio(TEST) 페이지 내용 + 사용자 요청 양식.
+    브리핑 박스(실제 이동/기대매출 분리) + TOP10 가로 표 + 자연어 채팅.
+    """
+    from datetime import datetime as _dt, timedelta as _td
+
+    st.markdown("""<style>
+      .aica-hero { text-align:center; padding: 2px 0 6px 0; }
+      .aica-hero h2 { color:#fff; font-size: 26px; font-weight: 800; margin: 4px 0 0 0; }
+      .aica-hero p { color:#9fb3d9; font-size: 13px; margin-top: 4px; }
+      .aica-robot { display:inline-block; font-size: 56px; line-height: 1;
+                    filter: drop-shadow(0 4px 18px rgba(196,168,255,.35));
+                    animation: aicabob 2.4s ease-in-out infinite; }
+      @keyframes aicabob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+      .aica-brief { background: linear-gradient(135deg, #1a0d2e 0%, #0a2138 100%);
+                    border: 1px solid #5a3fb8; border-radius: 14px;
+                    padding: 20px 24px; margin-top: 8px;
+                    box-shadow: 0 0 30px rgba(90,63,184,.18); }
+      .aica-brief-title { color: #c4a8ff; font-size: 12px; font-weight: 700; letter-spacing: 2px; }
+      .aica-brief-body { color: #fff; font-size: 16px; line-height: 1.9; margin-top: 10px; }
+      .aica-brief-body b { color: #ffb84d; font-weight: 800; }
+      .aica-top10 { width:100%; border-collapse:collapse; margin-top: 8px; table-layout: fixed; }
+      .aica-top10 th { background:#0d2540; color:#9ab; font-size:13px; font-weight:700;
+                       padding:6px; border:1px solid #2e3b50; text-align:center; }
+      .aica-top10 td { background:#0f1d3a; color:#fff; font-size:12px;
+                       padding:6px 4px; border:1px solid #2e3b50; text-align:center;
+                       vertical-align:middle; }
+      .aica-top10 td.img-cell { padding:4px; }
+      .aica-bubble-user { background:#3a4a6b; padding:10px 16px;
+                          border-radius:16px 16px 4px 16px; color:#fff;
+                          display:inline-block; max-width:75%; }
+      .aica-bubble-ai { background:#1f2937; padding:12px 18px;
+                        border-radius:16px 16px 16px 4px; color:#e5e7eb;
+                        display:inline-block; max-width:88%; line-height:1.7; }
+    </style>""", unsafe_allow_html=True)
+
     st.markdown(
-        '<div style="background:linear-gradient(135deg,#1a0d2e 0%,#0f1d3a 50%,#0a2138 100%);'
-        'padding:18px 22px;border-radius:12px;border:1px solid #5a3fb8;margin-bottom:14px">'
-        '<div style="color:#c4a8ff;font-size:13px;letter-spacing:2px;font-weight:700">AICA · DAILY BRIEF</div>'
-        '<div style="color:#fff;font-size:34px;font-weight:800;margin-top:6px">'
-        '🤖 오늘의 일일 요약 보고</div>'
-        f'<div style="color:#9fb3d9;font-size:14px;margin-top:6px">'
-        f'📅 {_dt.now().strftime("%Y-%m-%d %A")} · 전일 주문·현 재고·회전·반응과 분배 한눈에</div>'
+        '<div class="aica-hero">'
+        '<div class="aica-robot">🤖</div>'
+        '<h2>AI 일일 요약 보고</h2>'
+        '<p>SPAO 온라인 재고 AICA — 자연어로 자유롭게 질문해보세요</p>'
         '</div>',
         unsafe_allow_html=True,
     )
 
-    # 갱신 시각 + 새로고침 버튼
-    seed = _get_data_seed()
-    last_update = st.session_state.get('data_seed_ts', '최초 로드 (정적 데이터)')
-    cc1, cc2 = st.columns([4, 1])
-    with cc1:
-        st.caption(f'📡 마지막 데이터 갱신: {last_update}  ·  '
-                   f'7월 본연동 전 mock 데이터 — 새로고침 시 ±2% 변동 시뮬')
-    with cc2:
-        if st.button('🔄 데이터 새로고침', use_container_width=True, type='primary', key='ai_refresh'):
-            _trigger_data_refresh()
-            st.rerun()
-
     try:
         skus = load_data_v20()
-        K = _compute_summary_kpis(skus, seed)
+        smap = _load_style_map()
     except Exception as e:
-        st.error(f'데이터 로드 실패: {e}')
+        st.error('데이터 로드 실패: ' + str(e))
         return
 
-    # 4 KPI 카드
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric('📦 전일 주문 수', f'{K["daily_qty"]:,}장', '주판 ÷ 7')
-    k2.metric('💰 전일 주문액', f'{K["daily_amt"]/100000000:.2f}억', '정가 기준')
-    k3.metric('🏬 현 6채널 재고', f'{K["total_inv"]:,}장')
-    k4.metric('📅 재고보유일수', f'{K["woc_days"]:.1f}일', '현재고 ÷ 일평균')
+    daily_amt_total = 0.0
+    ch_daily_amt = {c: 0.0 for c in CHANNELS}
+    style_qty = {}; style_name = {}; style_price = {}
+    short_cnt = 0
+    for code, d in skus.items():
+        price = d.get('price', 0)
+        sty = code[:10]
+        for c in CHANNELS:
+            o = d['orders'].get(c, 0); i = d['inv'].get(c, 0)
+            amt = o * price
+            ch_daily_amt[c] += amt / 7
+            daily_amt_total += amt / 7
+            if o > 0 and i / o < 1:
+                short_cnt += 1
+        tot_o = sum(d['orders'].get(c, 0) for c in CHANNELS)
+        if tot_o > 0:
+            style_qty[sty] = style_qty.get(sty, 0) + tot_o
+            style_price[sty] = price
+            style_name[sty] = smap.get(sty, d.get('name', ''))
+    top_10 = sorted(style_qty.items(), key=lambda x: -x[1])[:10]
 
-    st.markdown('---')
+    preset = SCENARIOS['🛡️ 기본']
+    params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'],
+                  preset['min_move'], preset['min_recv'],
+                  _ch_excl_key(), preset['move_cap_pct'])
+    results = calc_results_v20(params_key)
+    results = _apply_exclusion(results)
+    rotation_qty = sum(sum(v for v in r['moves'].values() if v > 0) for r in results)
+    rotation_revenue = sum(r['revenue'] for r in results)
+    actual_move_amt = sum(
+        sum(v for v in r['moves'].values() if v > 0) * r['data'].get('price', 0)
+        for r in results
+    )
+    dist_qty = 0; dist_revenue = 0; dist_actual_amt = 0
+    for r in results:
+        d = skus.get(r['code'])
+        if not d:
+            continue
+        try:
+            dist, _used = calc_distribution(d, r['moves'], CHANNELS,
+                                            dist_target=preset['target_woc'], bw_name='반응과')
+        except Exception:
+            continue
+        price = d.get('price', 0)
+        for c, q in dist.items():
+            if q > 0:
+                dist_qty += q
+                dist_actual_amt += q * price
+                inv_c = d['inv'].get(c, 0)
+                ord_c = d['orders'].get(c, 0)
+                short = max(0, ord_c - inv_c - r['moves'].get(c, 0))
+                relief = min(q, short)
+                dist_revenue += relief * price
+    not_covered = max(0, short_cnt - len([r for r in results if any(v > 0 for v in r['moves'].values())]))
 
-    # 회전 + 분배 종합 카드 (2개)
-    sc1, sc2 = st.columns(2)
-    with sc1:
-        st.markdown(
-            f'<div style="background:#0d2540;border:1px solid #4a90ff;border-radius:12px;'
-            f'padding:20px 24px"><div style="color:#9fb3d9;font-size:14px;font-weight:700;'
-            f'letter-spacing:1px">🔄 회전(6채널 횡연결)으로 당겨야 할 양</div>'
-            f'<div style="color:#fff;font-size:34px;font-weight:800;margin-top:10px">'
-            f'{K["rotation_qty"]:,}<span style="font-size:18px">장</span> · '
-            f'<span style="color:#4a90ff">{K["rotation_amt"]/100000000:.2f}<span style="font-size:18px">억</span></span></div>'
-            f'<div style="color:#9ab;font-size:12px;margin-top:6px">'
-            f'결품해소 회수매출 기준 (대시보드 KPI와 동일 산식)</div></div>',
-            unsafe_allow_html=True,
-        )
-    with sc2:
-        st.markdown(
-            f'<div style="background:#0d3320;border:1px solid #7cd99c;border-radius:12px;'
-            f'padding:20px 24px"><div style="color:#9fb3d9;font-size:14px;font-weight:700;'
-            f'letter-spacing:1px">📦 반응과에서 당겨야 할 양 (회전 후 잔여 결품)</div>'
-            f'<div style="color:#fff;font-size:34px;font-weight:800;margin-top:10px">'
-            f'{K["dist_qty"]:,}<span style="font-size:18px">장</span> · '
-            f'<span style="color:#7cd99c">{K["dist_amt"]/100000000:.2f}<span style="font-size:18px">억</span></span></div>'
-            f'<div style="color:#9ab;font-size:12px;margin-top:6px">'
-            f'반응과 가용재고 → 채널 결품 보충 추정</div></div>',
-            unsafe_allow_html=True,
-        )
+    today = _dt.now()
+    yest = today - _td(days=1)
+    yest_label = yest.strftime('%m/%d')
+    daily_eok = daily_amt_total / 100000000
+    daily_man_remainder = int((daily_amt_total % 100000000) / 10000)
+    ch_strs = [f'{CH_SHORT.get(c, c)} <b>{int(ch_daily_amt[c]/10000):,}만원</b>' for c in CHANNELS]
+    actual_eok = actual_move_amt / 100000000
+    rev_eok = rotation_revenue / 100000000
+    dist_actual_eok = dist_actual_amt / 100000000
+    dist_rev_eok = dist_revenue / 100000000
 
-    st.markdown('---')
-
-    # 채널 6 카드 — 리딩/회전 대표 단품 이미지 + 회전 IN/OUT + 분배 (폰트 확대)
-    st.markdown('### 📊 채널별 리딩 + 회전·분배 당겨야 할 양')
-    smap = _load_style_map()
-    for row in [CHANNELS[:3], CHANNELS[3:]]:
-        cols = st.columns(3)
-        for col, ch in zip(cols, row):
-            with col:
-                lead = K['ch_lead'].get(ch)
-                top_in = K.get('ch_top_in_sku', {}).get(ch)
-                in_q = K['ch_in_qty'].get(ch, 0)
-                in_a = K['ch_in_amt'].get(ch, 0)
-                out_q = K['ch_out_qty'].get(ch, 0)
-                d_q = K['ch_dist_qty'].get(ch, 0)
-                d_a = K['ch_dist_amt'].get(ch, 0)
-                short_str = CH_SHORT.get(ch, ch)
-                # 리딩 스타일
-                if lead:
-                    lead_sty, lead_qty, lead_nm, lead_price = lead
-                    lead_img = _spao_img_url(lead_sty, '#ffb84d')
-                    lead_html = (
-                        f'<div style="display:flex;gap:10px;align-items:center">'
-                        f'<img src="{lead_img}" width="80" height="100" '
-                        f'style="border-radius:6px;border:1px solid #2e3b50;flex-shrink:0"/>'
-                        f'<div style="flex:1">'
-                        f'<div style="color:#fff;font-size:14px;font-weight:700">{lead_sty}</div>'
-                        f'<div style="color:#9ab;font-size:11px;margin-top:2px">{(lead_nm or "")[:18]}</div>'
-                        f'<div style="color:#ffb84d;font-size:18px;font-weight:800;margin-top:6px">'
-                        f'{lead_qty:,}<span style="font-size:11px;font-weight:600">장/주</span></div>'
-                        f'</div></div>'
-                    )
-                else:
-                    lead_html = '<div style="color:#666;font-size:13px">데이터 없음</div>'
-                # 회전 대표 단품
-                if top_in:
-                    top_sty, top_in_qty, top_nm = top_in
-                    top_img = _spao_img_url(top_sty, '#7cd99c')
-                    top_html = (
-                        f'<div style="display:flex;gap:10px;align-items:center">'
-                        f'<img src="{top_img}" width="80" height="100" '
-                        f'style="border-radius:6px;border:1px solid #2e3b50;flex-shrink:0"/>'
-                        f'<div style="flex:1">'
-                        f'<div style="color:#fff;font-size:14px;font-weight:700">{top_sty}</div>'
-                        f'<div style="color:#9ab;font-size:11px;margin-top:2px">{(top_nm or "")[:18]}</div>'
-                        f'<div style="color:#7cd99c;font-size:18px;font-weight:800;margin-top:6px">'
-                        f'IN {top_in_qty:,}<span style="font-size:11px;font-weight:600">장</span></div>'
-                        f'</div></div>'
-                    )
-                else:
-                    top_html = '<div style="color:#7cd99c;font-size:13px">🟢 결품 없음 · 회전 불필요</div>'
-                col.markdown(
-                    f'<div style="background:linear-gradient(180deg,#0f1d3a,#0a1428);'
-                    f'border:1px solid #2e3b50;border-left:4px solid #4a90ff;'
-                    f'border-radius:12px;padding:18px;min-height:520px;'
-                    f'box-shadow:0 0 20px rgba(74,144,255,.1)">'
-                    f'<div style="color:#4a90ff;font-size:22px;font-weight:800">'
-                    f'{short_str}<span style="color:#9ab;font-size:13px;font-weight:500"> · {ch}</span></div>'
-                    f'<div style="color:#9ab;font-size:12px;font-weight:700;margin-top:14px;'
-                    f'letter-spacing:1px">🏆 리딩 스타일 (주판 1위)</div>'
-                    f'<div style="margin-top:6px">{lead_html}</div>'
-                    f'<div style="color:#7cd99c;font-size:12px;font-weight:700;margin-top:14px;'
-                    f'letter-spacing:1px">🔄 회전 대표 단품 (IN 최대)</div>'
-                    f'<div style="margin-top:6px">{top_html}</div>'
-                    f'<div style="display:flex;gap:10px;margin-top:14px">'
-                    f'  <div style="flex:1;background:#0d3320;border-radius:8px;padding:10px;text-align:center">'
-                    f'    <div style="color:#9ab;font-size:11px">🔄 회전 IN</div>'
-                    f'    <div style="color:#7cd99c;font-size:18px;font-weight:800;margin-top:2px">{in_q:,}장</div>'
-                    f'    <div style="color:#7cd99c;font-size:12px">{in_a/10000:,.0f}만원</div>'
-                    f'  </div>'
-                    f'  <div style="flex:1;background:#3a1a1a;border-radius:8px;padding:10px;text-align:center">'
-                    f'    <div style="color:#9ab;font-size:11px">🔄 회전 OUT</div>'
-                    f'    <div style="color:#ff6b6b;font-size:18px;font-weight:800;margin-top:2px">{out_q:,}장</div>'
-                    f'  </div>'
-                    f'</div>'
-                    f'<div style="background:#2e2410;border-radius:8px;padding:10px;text-align:center;margin-top:10px">'
-                    f'  <div style="color:#9ab;font-size:11px">📦 분배 (반응과→)</div>'
-                    f'  <div style="color:#ffb84d;font-size:18px;font-weight:800;margin-top:2px">{d_q:,}장</div>'
-                    f'  <div style="color:#ffb84d;font-size:12px">{d_a/10000:,.0f}만원</div>'
-                    f'</div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-
-    st.markdown('---')
-
-    # AI 인사이트 한 줄
-    insight_lines = []
-    top_in_ch = max(K['ch_in_qty'].items(), key=lambda x: x[1], default=(None, 0))
-    top_out_ch = max(K['ch_out_qty'].items(), key=lambda x: x[1], default=(None, 0))
-    if top_in_ch[0] and top_out_ch[0]:
-        insight_lines.append(
-            f'🎯 오늘의 핵심 회전: <b>{CH_SHORT.get(top_out_ch[0])}</b>'
-            f'({top_out_ch[1]:,}장 OUT) → <b>{CH_SHORT.get(top_in_ch[0])}</b>'
-            f'({top_in_ch[1]:,}장 IN)')
-    if K['rotation_amt'] > 0:
-        insight_lines.append(
-            f'💰 회전 즉시 실행 시 <b style="color:#ffb84d">'
-            f'{K["rotation_amt"]/100000000:.2f}억</b> 회수 가능')
-    if K['dist_qty'] > 0:
-        insight_lines.append(
-            f'📦 반응과 분배 추가 시 <b style="color:#7cd99c">'
-            f'{K["dist_amt"]/100000000:.2f}억</b> 추가 회수')
-    insight_html = '<br>'.join(insight_lines) if insight_lines else '오늘은 결품 신호가 없습니다 · 안정 운영 중'
+    body = (
+        f'<b>[전일 온라인 주문 기준 매출 보고]</b><br>'
+        f'{yest_label}일 주문 기준 매출은 <b>{daily_eok:.2f}억 {daily_man_remainder:,}만원</b>입니다.<br>'
+        f'채널별: ' + ' / '.join(ch_strs) + '<br><br>'
+        f'<b>[회전·분배 추천]</b><br>'
+        f'현재 6채널 결품 <b>{short_cnt:,}건</b> 발생하여 '
+        f'총 회전량 <b>{rotation_qty:,}장</b> 재배치 필요 — '
+        f'실제 이동금액 <b>{actual_eok:.2f}억</b> / 기대매출 <b>{rev_eok:.2f}억</b>.<br>'
+        f'회전으로 채우지 못하는 <b>{not_covered:,}건</b>에 대해서는 '
+        f'반응과에서 <b>{dist_qty:,}장</b> 필업 필요 — '
+        f'실제 이동금액 <b>{dist_actual_eok:.2f}억</b> / 기대매출 <b>{dist_rev_eok:.2f}억</b>.'
+    )
     st.markdown(
-        f'<div style="background:#1a1f2e;border-left:4px solid #c4a8ff;border-radius:8px;'
-        f'padding:14px 18px;margin-top:6px">'
-        f'<div style="color:#c4a8ff;font-size:13px;font-weight:700;letter-spacing:1.5px">'
-        f'💡 AICA 인사이트</div>'
-        f'<div style="color:#fff;font-size:18px;margin-top:10px;line-height:1.7">{insight_html}</div>'
+        f'<div class="aica-brief">'
+        f'<div class="aica-brief-title">📡 AICA · DAILY BRIEFING</div>'
+        f'<div class="aica-brief-body">{body}</div>'
         f'</div>',
         unsafe_allow_html=True,
     )
-    st.caption('📌 옆 탭 → 재배치(기본)에서 회전 분배판 상세 확인 + 승인. 추가 분배에서 반응과 분배 상세 + SCM 메일 발송.')
+
+    st.markdown('#### 🏆 전일 TOP 10 스타일')
+    if top_10:
+        html = '<table class="aica-top10"><tr>'
+        for i in range(1, 11):
+            html += f'<th>{i}</th>'
+        html += '</tr><tr>'
+        for sty, _ in top_10:
+            img_url = _spao_img_url(sty, '#4a90ff')
+            html += f'<td class="img-cell"><img src="{img_url}" width="80" height="100"/></td>'
+        html += '</tr><tr>'
+        for sty, _ in top_10:
+            nm = (style_name.get(sty) or '')[:14]
+            html += (f'<td><b style="color:#c4a8ff">{sty}</b><br>'
+                     f'<span style="color:#9ab;font-size:10px">{nm}</span></td>')
+        html += '</tr><tr>'
+        for sty, q in top_10:
+            daily_q = q // 7
+            html += (f'<td><b style="color:#ffb84d">{daily_q:,}</b>'
+                     f'<br><span style="color:#9ab;font-size:10px">장/일</span></td>')
+        html += '</tr><tr>'
+        for sty, q in top_10:
+            daily_q = q // 7
+            amt_man = round(daily_q * style_price.get(sty, 0) / 10000)
+            html += (f'<td><b style="color:#7cd99c">{amt_man:,}</b>'
+                     f'<br><span style="color:#9ab;font-size:10px">만원/일</span></td>')
+        html += '</tr></table>'
+        st.markdown(html, unsafe_allow_html=True)
+    else:
+        st.caption('데이터 없음')
+
+    st.markdown('---')
+    st.markdown('### 💬 자연어 질의')
+    if 'aica_chat' not in st.session_state:
+        st.session_state['aica_chat'] = []
+
+    K = {
+        'daily_amt_total': daily_amt_total,
+        'ch_daily_amt': ch_daily_amt,
+        'top_10': [(s, q // 7, style_name.get(s, '')) for s, q in top_10],
+        'short_cnt': short_cnt,
+        'rotation_qty': rotation_qty,
+        'rotation_revenue': rotation_revenue,
+        'actual_move_amt': actual_move_amt,
+        'dist_qty': dist_qty,
+        'dist_revenue': dist_revenue,
+        'dist_actual_amt': dist_actual_amt,
+        'results': results,
+        'skus': skus,
+        'smap': smap,
+    }
+
+    for msg in st.session_state['aica_chat'][-12:]:
+        if msg['role'] == 'user':
+            st.markdown(
+                f'<div style="text-align:right;margin:8px 0">'
+                f'<span class="aica-bubble-user">{msg["text"]}</span></div>',
+                unsafe_allow_html=True)
+        else:
+            st.markdown(
+                f'<div style="margin:8px 0">'
+                f'<span class="aica-bubble-ai" style="border-left:3px solid #4a90ff">'
+                f'🤖 <b style="color:#c4a8ff">AICA</b><br>{msg["text"]}</span></div>',
+                unsafe_allow_html=True)
+
+    user_q = st.chat_input('자유롭게 물어보세요 (예: 회전 TOP 5 스타일과 기대매출은?)', key='aica_chat_input')
+    if user_q:
+        st.session_state['aica_chat'].append({'role': 'user', 'text': user_q})
+        ans = _aica_answer(user_q, K)
+        st.session_state['aica_chat'].append({'role': 'ai', 'text': ans})
+        st.rerun()
+
+
+def _aica_answer(q, K):
+    import re as _re
+    num_match = _re.search(r'(\d+)\s*개|top\s*(\d+)|상위\s*(\d+)', q.lower())
+    top_n = 5
+    if num_match:
+        for g in num_match.groups():
+            if g:
+                top_n = min(int(g), 30); break
+    results = K['results']; skus = K['skus']; smap = K['smap']
+    if (('회전' in q or '재배치' in q) and
+        ('top' in q.lower() or '상위' in q or '필요' in q or '추천' in q or '큰' in q or '높' in q or '많' in q)):
+        sty_rev = {}; sty_qty = {}; sty_nm = {}
+        for r in results:
+            sty = r['code'][:10]
+            sty_rev[sty] = sty_rev.get(sty, 0) + r['revenue']
+            sty_qty[sty] = sty_qty.get(sty, 0) + sum(v for v in r['moves'].values() if v > 0)
+            sty_nm[sty] = smap.get(sty, r['data'].get('name', ''))
+        top = sorted([(s, rev) for s, rev in sty_rev.items() if rev > 0], key=lambda x: -x[1])[:top_n]
+        if not top:
+            return '회전 필요한 스타일이 없습니다 (안정 운영 중).'
+        lines = [
+            f'{i}. <b>{s}</b> {(sty_nm[s] or "")[:18]} — 이동 {sty_qty[s]:,}장 · 회수 <b style="color:#ffb84d">{round(sty_rev[s]/10000):,}만원</b>'
+            for i, (s, _) in enumerate(top, 1)
+        ]
+        total_rev_eok = sum(rev for _, rev in top) / 100000000
+        return (f'회전 필요 상위 <b>{top_n}개 스타일</b> (회수매출 기준):<br><br>' + '<br>'.join(lines) +
+                f'<br><br>📊 상위 {top_n}개 합계 회수: <b style="color:#ffb84d">{total_rev_eok:.2f}억</b>')
+    if (('top' in q.lower() or '상위' in q or '베스트' in q) and ('스타일' in q or '판매' in q or '매출' in q)):
+        top = K['top_10'][:top_n]
+        if not top:
+            return '데이터 없음'
+        lines = [f'{i}. <b>{s}</b> {(nm or "")[:18]} — <b>{daily_q:,}장/일</b>'
+                 for i, (s, daily_q, nm) in enumerate(top, 1)]
+        return f'전일 매출 TOP {top_n} 스타일:<br><br>' + '<br>'.join(lines)
+    for c in CHANNELS:
+        short = CH_SHORT.get(c, c)
+        if (c in q or short in q) and '결품' in q:
+            shorts = []
+            for code, d in skus.items():
+                o = d['orders'].get(c, 0); i = d['inv'].get(c, 0)
+                if o > 0 and i / o < 1:
+                    sty = code[:10]
+                    shorts.append((code, i, o, i / o, smap.get(sty, '')))
+            shorts.sort(key=lambda x: x[3])
+            top_s = shorts[:top_n]
+            if not top_s:
+                return f'<b>{short}</b> 채널 결품 단품 없음 (모두 ≥ 1주).'
+            lines = [
+                f'{i}. <b>{c0}</b> {(nm or "")[:14]} — 재고 {inv:,} · 주판 {o:,} · <b style="color:#ff6b6b">{w:.1f}주</b>'
+                for i, (c0, inv, o, w, nm) in enumerate(top_s, 1)
+            ]
+            return f'<b>{short}</b> 채널 결품 상위 {top_n}건:<br><br>' + '<br>'.join(lines)
+    if any(k in q for k in ['기대매출', '회수', '효과', '얼마']) and '회전' in q:
+        return (f'회전 기대매출: <b style="color:#ffb84d">{K["rotation_revenue"]/100000000:.2f}억</b><br>'
+                f'(실제 이동금액 {K["actual_move_amt"]/100000000:.2f}억, 총 이동량 {K["rotation_qty"]:,}장)')
+    if any(k in q for k in ['반응과', '분배', '필업']):
+        return (f'반응과 분배 추천: <b>{K["dist_qty"]:,}장</b><br>'
+                f'실제 이동금액 <b>{K["dist_actual_amt"]/100000000:.2f}억</b> / '
+                f'기대매출 <b>{K["dist_revenue"]/100000000:.2f}억</b>')
+    if '결품' in q:
+        return (f'현재 6채널 결품 단품: <b style="color:#ff6b6b">{K["short_cnt"]:,}건</b><br>'
+                f'채널명 지정하시면 상위 결품을 보여드릴게요. (예: "무신 결품 5건")')
+    if any(k in q for k in ['매출', '주문', '전일', '어제', '오늘']):
+        ch_strs = [f'{CH_SHORT.get(c, c)} {int(K["ch_daily_amt"][c]/10000):,}만원' for c in CHANNELS]
+        return (f'전일 주문 기준 매출: <b>{K["daily_amt_total"]/100000000:.2f}억</b><br>'
+                f'채널별: {" / ".join(ch_strs)}')
+    if '회전' in q or '재배치' in q:
+        return (f'회전 추천: <b>{K["rotation_qty"]:,}장</b> · '
+                f'실제 이동금액 <b>{K["actual_move_amt"]/100000000:.2f}억</b> / '
+                f'기대매출 <b>{K["rotation_revenue"]/100000000:.2f}억</b>')
+    return (
+        '도움말 — 다음 패턴으로 물어봐주세요:<br><br>'
+        '• <b>"회전 TOP 5 스타일"</b> · 회전 필요 상위 N개 스타일 + 기대매출<br>'
+        '• <b>"전일 TOP 10 스타일"</b> · 전일 매출 베스트 스타일<br>'
+        '• <b>"공홈 결품 5건"</b> · 채널별 결품 상위 N건<br>'
+        '• <b>"회전 기대매출"</b> · 회전 시 예상 회수매출<br>'
+        '• <b>"반응과 분배"</b> · 반응과 분배 추천'
+    )
 
 
 def render():
