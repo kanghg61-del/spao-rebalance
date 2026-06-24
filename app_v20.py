@@ -247,14 +247,28 @@ SCENARIOS = {
 }
 
 
+# CSV 파일 mtime을 캐시 키로 (사용자 6/25 — 새 데이터 자동 인식)
+def _csv_cache_key():
+    import os as _os
+    from mock_data import CSV_PATH as _P
+    try:
+        return f'{_P}|{int(_os.path.getmtime(_P))}'
+    except Exception:
+        return _P
+
+
 @st.cache_data(show_spinner=False)
-def load_data_v20():
+def load_data_v20(cache_key=None):
+    # 캐시 무효화 — CSV mtime 키 변경 시 자동 재로드. 모듈 캐시도 함께 비움.
+    import mock_data as _md
+    _md._cache.pop('raw', None)
+    _md._cache.pop('merged', None)
     return get_combined_data('v2')
 
 
 @st.cache_data(show_spinner=False)
-def calc_results_v20(params_key):
-    skus = load_data_v20()
+def calc_results_v20(params_key, cache_key=None):
+    skus = load_data_v20(_csv_cache_key())
     ch_excl = {}
     if len(params_key) > 5 and params_key[5]:
         for ch, direction, pats in params_key[5]:
@@ -532,7 +546,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
 
     with st.spinner('계산 중...'):
         params_key = (shortage_th, target_woc, ship_th, min_move, min_recv, _ch_excl_key(), move_cap_pct)
-        results = calc_results_v20(params_key)
+        results = calc_results_v20(params_key, _csv_cache_key())
     results = _apply_exclusion(results)
     results = _apply_overrides(results)
     # v0.9 — AI 일일 요약에서 '새로고침' 클릭 시 데이터 ±2% 변동 (mock 시각효과)
@@ -961,7 +975,7 @@ def render_excluded_tab():
                '시작일/종료일 비워두면 영구 제외. 입력 후 다른 탭으로 이동하면 재배치에 반영됩니다.')
 
     try:
-        skus = load_data_v20()
+        skus = load_data_v20(_csv_cache_key())
     except Exception:
         skus = None
 
@@ -1135,7 +1149,7 @@ def render_export_tab():
     params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'],
                   preset['min_move'], preset['min_recv'], _ch_excl_key(), preset['move_cap_pct'])
     try:
-        results = calc_results_v20(params_key)
+        results = calc_results_v20(params_key, _csv_cache_key())
     except Exception as e:
         st.error(f'회전 계산 실패: {e}')
         return
@@ -1515,7 +1529,7 @@ def render_channel_tab():
     preset = SCENARIOS['🛡️ 기본']
     params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'],
                   preset['min_move'], preset.get('min_recv', 4), _ch_excl_key())
-    results_ch = _apply_exclusion(calc_results_v20(params_key))
+    results_ch = _apply_exclusion(calc_results_v20(params_key, _csv_cache_key()))
 
     def g_inv(d):
         return sum(d['inv'].get(c, 0) for c in CHANNELS) if is_all else d['inv'].get(channel_pick, 0)
@@ -1920,7 +1934,7 @@ def _mock_int(code, salt, lo, hi):
 @st.cache_data(show_spinner=False)
 def imminent_rows():
     """결품 임박(온라인 합산 재고주수 < 1주, 주문>0) 단품 — 실데이터."""
-    skus = load_data_v20()
+    skus = load_data_v20(_csv_cache_key())
     rows = []
     for c, d in skus.items():
         ti = sum(d['inv'].get(ch, 0) for ch in CHANNELS)
@@ -1946,7 +1960,7 @@ def imminent_rows_by_channel(channel: str):
     """
     if channel == '전체':
         return imminent_rows()
-    skus = load_data_v20()
+    skus = load_data_v20(_csv_cache_key())
     rows = []
     for c, d in skus.items():
         ti = d['inv'].get(channel, 0)
@@ -1998,7 +2012,7 @@ def render_onepan_tab():
         unsafe_allow_html=True)
 
     smap = _load_style_map()
-    skus = load_data_v20()
+    skus = load_data_v20(_csv_cache_key())
     rows = []
     nX = nM = nS = 0
     fill_q = 0
@@ -2686,7 +2700,7 @@ def render_unified_tab():
     st.markdown('<div class="scenario-box">온라인 6채널 통합 재고를 한 화면에서 — <b>내부창고 vs 외부창고(FASS·이플렉스·CJ·풀필먼트) 분리</b>. '
                 '6/12 스파오 미팅 ①② 요청 반영 — "단순 회전 도구 → 온라인 통합 재고 + 의사결정 허브" 확장 방향.</div>',
                 unsafe_allow_html=True)
-    skus = load_data_v20()
+    skus = load_data_v20(_csv_cache_key())
     agg = {ch: {'inv': 0, 'ext': 0, 'inv_amt': 0, 'ext_amt': 0, 'ord_qty': 0, 'ord_amt': 0} for ch in CHANNELS}
     for d in skus.values():
         price = d.get('price', 0)
@@ -2804,7 +2818,7 @@ def _render_channel_agents_panel(_dt, _td):
     )
 
     try:
-        skus = load_data_v20()
+        skus = load_data_v20(_csv_cache_key())
     except Exception as e:
         st.error('데이터 로드 실패: ' + str(e))
         return
@@ -2968,7 +2982,7 @@ def render_v10_test_tab():
     params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'],
                   preset['min_move'], preset['min_recv'], _ch_excl_key(), preset['move_cap_pct'])
     try:
-        results = calc_results_v20(params_key)
+        results = calc_results_v20(params_key, _csv_cache_key())
         results = _apply_exclusion(results)
         results = _apply_overrides(results)
     except Exception as e:
@@ -3236,7 +3250,7 @@ def _compute_summary_kpis(skus, seed):
     params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'],
                   preset['min_move'], preset['min_recv'],
                   _ch_excl_key(), preset['move_cap_pct'])
-    results = calc_results_v20(params_key)
+    results = calc_results_v20(params_key, _csv_cache_key())
     results = _apply_exclusion(results)
     results = _apply_data_variance(results, seed)
     rotation_qty = sum(sum(v for v in r['moves'].values() if v > 0) for r in results)
@@ -3342,7 +3356,7 @@ def render_ai_summary_tab():
     )
 
     try:
-        skus = load_data_v20()
+        skus = load_data_v20(_csv_cache_key())
         smap = _load_style_map()
     except Exception as e:
         st.error('데이터 로드 실패: ' + str(e))
@@ -3392,7 +3406,7 @@ def render_ai_summary_tab():
     params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'],
                   preset['min_move'], preset['min_recv'],
                   _ch_excl_key(), preset['move_cap_pct'])
-    results = calc_results_v20(params_key)
+    results = calc_results_v20(params_key, _csv_cache_key())
     results = _apply_exclusion(results)
     rotation_qty = sum(sum(v for v in r['moves'].values() if v > 0) for r in results)
     rotation_revenue = sum(r['revenue'] for r in results)
