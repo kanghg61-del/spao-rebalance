@@ -810,7 +810,126 @@ def render_scenario(scenario_key, container, allow_slider=False):
     container.caption('💡 스파오 6/19 합의 — SAP 자동 연동 전 임시 운영: 위 ⬇️ Excel(채널별 시트)로 MD 수기 실행.')
 
 
+# ============================================================
+# 영구 저장 — GitHub Contents API 자동 commit (옵션 C)
+# 사용자 6/24 요청: 김혜인 책임 등 다중 사용자 데이터 공유 + 세션 종료 후 보존
+# Streamlit Secrets에 GITHUB_TOKEN (PAT, repo write 권한) 등록 필요
+# ============================================================
+_GH_REPO = 'kanghg61-del/spao-rebalance'
+_GH_BRANCH = 'main'
+
+
+def _gh_get_token():
+    try:
+        if hasattr(st, 'secrets'):
+            t = st.secrets.get('GITHUB_TOKEN')
+            if t:
+                return t
+    except Exception:
+        pass
+    import os as _os
+    return _os.environ.get('GITHUB_TOKEN')
+
+
+def _gh_load(path):
+    """GitHub에서 JSON 파일 읽기 → (data, sha) 또는 (None, None)"""
+    import urllib.request as _ur
+    import urllib.error as _ue
+    import json as _json
+    import base64 as _b64
+    token = _gh_get_token()
+    if not token:
+        return None, None
+    url = f'https://api.github.com/repos/{_GH_REPO}/contents/{path}?ref={_GH_BRANCH}'
+    req = _ur.Request(url, headers={
+        'Authorization': f'Bearer {token}',
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+    })
+    try:
+        with _ur.urlopen(req, timeout=10) as r:
+            meta = _json.loads(r.read().decode('utf-8'))
+        content = _b64.b64decode(meta['content']).decode('utf-8')
+        return _json.loads(content), meta.get('sha')
+    except _ue.HTTPError as e:
+        if e.code == 404:
+            return None, None  # 파일 아직 없음 (정상)
+        return None, None
+    except Exception:
+        return None, None
+
+
+def _gh_save(path, data, commit_msg=None):
+    """GitHub에 JSON 파일 commit (기존 sha 자동 조회)"""
+    import urllib.request as _ur
+    import urllib.error as _ue
+    import json as _json
+    import base64 as _b64
+    from datetime import datetime as _dtg
+    token = _gh_get_token()
+    if not token:
+        return False, '키 미설정 (Streamlit Secrets: GITHUB_TOKEN)'
+    _, sha = _gh_load(path)  # 기존 sha (없으면 신규)
+    body = {
+        'message': commit_msg or f'update {path} {_dtg.now().strftime("%Y-%m-%d %H:%M:%S")}',
+        'content': _b64.b64encode(_json.dumps(data, ensure_ascii=False, default=str, indent=2).encode('utf-8')).decode('ascii'),
+        'branch': _GH_BRANCH,
+    }
+    if sha:
+        body['sha'] = sha
+    url = f'https://api.github.com/repos/{_GH_REPO}/contents/{path}'
+    req = _ur.Request(
+        url,
+        data=_json.dumps(body).encode('utf-8'),
+        headers={
+            'Authorization': f'Bearer {token}',
+            'Accept': 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+            'Content-Type': 'application/json',
+        },
+        method='PUT',
+    )
+    try:
+        with _ur.urlopen(req, timeout=15) as r:
+            r.read()
+        return True, None
+    except _ue.HTTPError as he:
+        try:
+            err = he.read().decode('utf-8')[:200]
+        except Exception:
+            err = ''
+        return False, f'HTTP {he.code}: {err}'
+    except Exception as e:
+        return False, f'{type(e).__name__}: {str(e)[:120]}'
+
+
+def _persist_load_ch_excl():
+    """앱 시작 시 또는 명시적 refresh 시 GitHub에서 ch_excl_rows + excluded_codes 로드"""
+    if st.session_state.get('_ch_excl_loaded'):
+        return  # 한 번만 로드
+    rows, _ = _gh_load('data/ch_excl.json')
+    if rows is not None:
+        # 날짜 문자열 → date 객체 변환
+        from datetime import date as _date
+        for r in rows:
+            for k in ('시작일', '종료일'):
+                v = r.get(k)
+                if v and isinstance(v, str):
+                    try:
+                        r[k] = _date.fromisoformat(v[:10])
+                    except Exception:
+                        r[k] = None
+        st.session_state['ch_excl_rows'] = rows
+    excl, _ = _gh_load('data/excluded_codes.json')
+    if excl is not None and isinstance(excl, dict):
+        st.session_state['excluded_text'] = excl.get('text', '')
+        st.session_state['excluded_codes'] = set(excl.get('codes', []))
+    st.session_state['_ch_excl_loaded'] = True
+
+
 def render_excluded_tab():
+    # 영구 저장 자동 로드 (앱 첫 진입 시 GitHub에서 동기화)
+    _persist_load_ch_excl()
     st.markdown('### 🚫 채널별 IN·OUT 제외 관리 (채널 담당 MD)')
     st.caption('🟢 IN 제외 = 이 채널로 재고를 받지 않음(수신 차단) · '
                '🔴 OUT 제외 = 이 채널에서 재고를 빼지 않음(반출 차단). '
@@ -921,7 +1040,28 @@ def render_excluded_tab():
 
     st.session_state['ch_excl_rows'] = all_rows
 
+    # ── GitHub 영구 저장 ──
     st.markdown('---')
+    save_col1, save_col2, save_col3 = st.columns([2, 2, 6])
+    with save_col1:
+        if st.button('💾 GitHub 영구 저장', type='primary', use_container_width=True, key='gh_save_excl'):
+            ok, err = _gh_save('data/ch_excl.json', all_rows, commit_msg=f'채널 IN-OUT 제외 갱신 (사용자: 대시보드)')
+            if ok:
+                st.success('✅ GitHub 영구 저장 완료. 모든 사용자에게 반영됩니다.')
+            else:
+                st.error(f'❌ 저장 실패: {err}')
+    with save_col2:
+        if st.button('🔄 GitHub에서 다시 불러오기', use_container_width=True, key='gh_reload_excl'):
+            st.session_state.pop('_ch_excl_loaded', None)
+            st.session_state.pop('ch_excl_rows', None)
+            st.rerun()
+    with save_col3:
+        token_ok = bool(_gh_get_token())
+        if token_ok:
+            st.caption('🟢 영구 저장 활성 (GitHub 자동 commit). 변경 후 좌측 "💾 GitHub 영구 저장" 클릭')
+        else:
+            st.caption('🟡 임시 세션 저장 (브라우저 닫으면 사라짐). 영구 저장은 GITHUB_TOKEN 등록 후 활성')
+
     with st.expander('🚫 전체 이동 제외 (예약판매·기획전 등 — 모든 채널에서 이동 자체를 막음)', expanded=False):
         excluded_text = st.text_area('제외 단품코드 (줄바꿈 또는 쉼표로 구분)',
                                      value=st.session_state.get('excluded_text', ''), height=130,
@@ -931,10 +1071,20 @@ def render_excluded_tab():
         st.session_state['excluded_text'] = excluded_text
         if skus and codes_set:
             st.caption(f'매칭 단품 {sum(1 for code in skus if any(ex in code for ex in codes_set)):,}건')
-        if st.button('🗑️ 전체 이동 제외 초기화'):
-            st.session_state['excluded_text'] = ''
-            st.session_state['excluded_codes'] = set()
-            st.rerun()
+        bc1, bc2 = st.columns(2)
+        with bc1:
+            if st.button('💾 GitHub 영구 저장', type='primary', use_container_width=True, key='gh_save_excl_codes'):
+                ok, err = _gh_save('data/excluded_codes.json', {'text': excluded_text, 'codes': sorted(codes_set)},
+                                   commit_msg='전체 이동 제외 단품 갱신')
+                if ok:
+                    st.success('✅ GitHub 영구 저장 완료')
+                else:
+                    st.error(f'❌ 저장 실패: {err}')
+        with bc2:
+            if st.button('🗑️ 전체 이동 제외 초기화', use_container_width=True):
+                st.session_state['excluded_text'] = ''
+                st.session_state['excluded_codes'] = set()
+                st.rerun()
 
 
 
@@ -3634,7 +3784,6 @@ def _aica_fallback(q, K):
         return (f'현재 6채널 결품 단품: <b style="color:#ff6b6b">{K["short_cnt"]:,}건</b><br>'
                 f'채널명 지정하시면 상위 결품을 보여드릴게요. (예: "무신사 결품 5건")')
     if any(k in q for k in ['매출', '주문', '전일', '어제', '오늘']):
-        # 풀네임 사용 (사용자 6/23 요청)
         ch_strs = [f'{c} {int(K["ch_daily_amt"][c]/10000):,}만원' for c in CHANNELS]
         return (f'전일 주문 기준 매출: <b>{K["daily_amt_total"]/100000000:.2f}억</b><br>'
                 f'채널별: {" / ".join(ch_strs)}')
