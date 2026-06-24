@@ -25,10 +25,12 @@ EXT_WAREHOUSE = {
 }
 
 _DIR = os.path.dirname(__file__)
-# 사용자 6/24 업로드 실데이터 우선 — 없으면 mock으로 fallback
-_REAL = os.path.join(_DIR, 'data_spao_260624.csv')
+# 실데이터 자동 감지 — data_spao_YYMMDD.csv 중 가장 최신 (날짜 큰 것) 자동 선택
+# 매일 새 CSV만 push하면 자동 반영 (mock_data.py 수정 불필요)
+import glob as _glob
+_REALS = sorted(_glob.glob(os.path.join(_DIR, 'data_spao_*.csv')), reverse=True)
 _MOCK = os.path.join(_DIR, 'sku_master.csv')
-CSV_PATH = _REAL if os.path.exists(_REAL) else _MOCK
+CSV_PATH = _REALS[0] if _REALS else _MOCK
 REORDER_SAVE_PATH = os.path.join(_DIR, 'reorder_mapping.csv')
 
 # 리오더 매핑 파일 후보 (기존코드/리오더코드 — rsc.reorder_style_mapping_spao 추출본)
