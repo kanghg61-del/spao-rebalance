@@ -677,9 +677,10 @@ def render_scenario(scenario_key, container, allow_slider=False):
             _sum_row.append('0' if _s == 0 else f'{_s:+,}')
         for _c in CHANNELS:  # 이동 후 재고보유주수
             _sum_row.append('')
-        for _c in CHANNELS:  # 이동 후 재고량 합계 (= 이동수량 합과 동일 표시)
-            _s = sum(it['moves'].get(_c, 0) for it in filtered)
-            _sum_row.append('0' if _s == 0 else f'{_s:+,}')
+        for _c in CHANNELS:  # 이동 후 재고량 합계 = Σ (현재고 + 이동량). 변화량 같이 표시
+            _mv_s = sum(it['moves'].get(_c, 0) for it in filtered)
+            _new_inv_s = sum(it['data']['inv'].get(_c, 0) + it['moves'].get(_c, 0) for it in filtered)
+            _sum_row.append(f'{_new_inv_s:,}' if _mv_s == 0 else f'{_new_inv_s:,} ({_mv_s:+,})')
         _sum_row.append(int(sum(it['revenue'] for it in filtered) / 10000))
         _sum_df = pd.DataFrame([_sum_row], columns=columns)
         df = pd.concat([_sum_df, df], ignore_index=True)
