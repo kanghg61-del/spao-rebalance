@@ -668,15 +668,37 @@ def render_scenario(scenario_key, container, allow_slider=False):
         )
         df = pd.DataFrame(rows, columns=columns)
 
+        # ── Σ 합계 행 (사용자 6/24 요청): 채널별 이동수량 합 + 효과 합 ──
+        _sum_row = ['Σ 합계', f'{len(filtered):,}건', '', '', '', '', '']
+        for _c in CHANNELS:  # 현 재고보유주수
+            _sum_row.append('')
+        for _c in CHANNELS:  # 이동수량 합계
+            _s = sum(it['moves'].get(_c, 0) for it in filtered)
+            _sum_row.append('0' if _s == 0 else f'{_s:+,}')
+        for _c in CHANNELS:  # 이동 후 재고보유주수
+            _sum_row.append('')
+        for _c in CHANNELS:  # 이동 후 재고량 합계 (= 이동수량 합과 동일 표시)
+            _s = sum(it['moves'].get(_c, 0) for it in filtered)
+            _sum_row.append('0' if _s == 0 else f'{_s:+,}')
+        _sum_row.append(int(sum(it['revenue'] for it in filtered) / 10000))
+        _sum_df = pd.DataFrame([_sum_row], columns=columns)
+        df = pd.concat([_sum_df, df], ignore_index=True)
+
         woc_cols = [('현 재고보유주수', CH_SHORT[c]) for c in CHANNELS] + \
                    [('이동 후 재고보유주수', CH_SHORT[c]) for c in CHANNELS]
         mv_cols = [('이동수량 (장)', CH_SHORT[c]) for c in CHANNELS]
         qty_cols = [('이동 후 재고량 (장,±)', CH_SHORT[c]) for c in CHANNELS]
 
+        def _hl_sum(row):
+            if row.name == 0:
+                return ['background-color: #1E2D40; color: #4AE3B5; font-weight: bold; font-size: 13px'] * len(row)
+            return [''] * len(row)
+
         styled = (df.style
                   .map(woc_color, subset=woc_cols)
                   .map(mv_color, subset=mv_cols)
-                  .map(qty_color, subset=qty_cols))
+                  .map(qty_color, subset=qty_cols)
+                  .apply(_hl_sum, axis=1))
         styled = styled.format({('효과', '만원'): '{:,}'.format})
 
         container.caption('💡 좌측 ☑ 박스(행) 클릭 → 단품 선택 · 헤더 클릭으로 전체 선택')
@@ -3869,7 +3891,6 @@ def render():
         _safe('추가 분배', render_onepan_tab)
     with t[5]:
         _safe('리오더 요청', render_reorder_request_tab)
-
     with t[6]:
         _safe('통합 재고뷰', render_unified_tab)
     with t[7]:
