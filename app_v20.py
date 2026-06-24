@@ -3330,14 +3330,25 @@ def render_ai_summary_tab():
     total_inv_qty = 0
     total_inv_amt = 0
     total_orders_qty = 0
+    # 전일자 데이터 우선 사용 (사용자 6/25 요청: AI 일일 요약은 어제자만)
+    # daily 컬럼이 있으면 전일자 그대로 사용, 없으면 7일 평균 fallback
+    _has_daily = any(d.get('daily') for d in skus.values())
+    _last_date = next((d.get('last_date', '') for d in skus.values() if d.get('last_date')), '')
     for code, d in skus.items():
         price = d.get('price', 0)
         sty = code[:10]
+        daily_d = d.get('daily', {}) if _has_daily else None
         for c in CHANNELS:
             o = d['orders'].get(c, 0); i = d['inv'].get(c, 0)
-            amt = o * price
-            ch_daily_amt[c] += amt / 7
-            daily_amt_total += amt / 7
+            # 매출 = 전일자 판매수량 × 정상가 (daily 우선)
+            if _has_daily and daily_d:
+                dq = daily_d.get(c, 0)
+                ch_daily_amt[c] += dq * price
+                daily_amt_total += dq * price
+            else:
+                amt = o * price
+                ch_daily_amt[c] += amt / 7
+                daily_amt_total += amt / 7
             total_inv_qty += i
             total_inv_amt += i * price
             total_orders_qty += o
@@ -3388,7 +3399,14 @@ def render_ai_summary_tab():
 
     today = _dt.now()
     yest = today - _td(days=1)
-    yest_label = yest.strftime('%m/%d')
+    # 데이터의 실제 전일자 우선 사용 (CSV의 _last_date)
+    if _last_date and len(_last_date) >= 10:
+        try:
+            yest_label = _last_date[5:10].replace('-', '/')
+        except Exception:
+            yest_label = yest.strftime('%m/%d')
+    else:
+        yest_label = yest.strftime('%m/%d')
     # 매출 표기: '3억 4,067만원' (정수 억 + 나머지 만원)
     daily_eok_int = int(daily_amt_total // 100000000)
     daily_man_remainder = int((daily_amt_total % 100000000) / 10000)

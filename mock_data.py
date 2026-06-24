@@ -161,6 +161,8 @@ def _load_raw():
                     wh_col = row.get(f'wh_{ch}')
                     ext_wh[ch] = int(_num(wh_col)) if wh_col not in (None, '') else _mock_ext_wh_qty(code, ch, q)
             orders = {ch: int(_num(row.get(f'ord_{ch}', 0))) for ch in CHANNELS}
+            # 전일자 판매수량 (CSV에 daily_채널 컬럼이 있으면 사용 — 사용자 6/25 요청 AI 일일 요약은 전일만)
+            daily = {ch: int(_num(row.get(f'daily_{ch}', 0))) for ch in CHANNELS}
             skus[code] = {
                 'rank_total': int(_num(row.get('매출랭킹', 9999), 9999)),
                 'rank_online': int(_num(row.get('온라인랭킹', 9999), 9999)),
@@ -170,13 +172,15 @@ def _load_raw():
                 'online_ratio': _num(row.get('온라인비중', 0)),
                 'cum_rate': _num(row.get('누판율', 0)),
                 'wk_rate': _num(row.get('주판율', 0)),
-                'wk_sales': _num(row.get('주간외형매출', 0)),   # 메인판 온라인(외형)매출
+                'wk_sales': _num(row.get('주간외형매출', 0)),
                 'locked': False,
                 'critical': False,
                 'inv': inv,
-                'orders': orders,
-                'ext_wh': ext_wh,          # 외부창고 보관분 (채널 재고에 포함된 값)
-                'reorder_codes': [],       # 병합된 리오더 단품코드 목록 (v2 병합 시 채움)
+                'orders': orders,           # 7일 합계 — 회전 엔진 (주판)
+                'daily': daily,             # 전일자만 — AI 일일 요약 브리핑
+                'last_date': row.get('_last_date', '') or '',
+                'ext_wh': ext_wh,
+                'reorder_codes': [],
             }
     _cache['raw'] = skus
     return skus
@@ -261,6 +265,7 @@ def get_reorder_info():
 
 
 def fetch_sap_inventory(seed=None):
+    return _load_merged()
     return _load_merged()
 
 
