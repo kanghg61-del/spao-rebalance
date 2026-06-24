@@ -957,6 +957,9 @@ def render_excluded_tab():
                 if not in_rows_existing:
                     in_rows_existing = [{'스타일': '', '시작일': None, '종료일': None}]
                 df_in = _pd.DataFrame(in_rows_existing)[['스타일', '시작일', '종료일']]
+                # DateColumn 호환 보장 — string/None을 모두 datetime64로 강제 변환
+                df_in['시작일'] = _pd.to_datetime(df_in['시작일'], errors='coerce')
+                df_in['종료일'] = _pd.to_datetime(df_in['종료일'], errors='coerce')
                 edited_in = st.data_editor(
                     df_in, num_rows='dynamic', use_container_width=True,
                     key=f'excl_in_editor_{c}',
@@ -972,6 +975,9 @@ def render_excluded_tab():
                 if not out_rows_existing:
                     out_rows_existing = [{'스타일': '', '시작일': None, '종료일': None}]
                 df_out = _pd.DataFrame(out_rows_existing)[['스타일', '시작일', '종료일']]
+                # DateColumn 호환 보장
+                df_out['시작일'] = _pd.to_datetime(df_out['시작일'], errors='coerce')
+                df_out['종료일'] = _pd.to_datetime(df_out['종료일'], errors='coerce')
                 edited_out = st.data_editor(
                     df_out, num_rows='dynamic', use_container_width=True,
                     key=f'excl_out_editor_{c}',
@@ -3863,6 +3869,7 @@ def render():
         _safe('추가 분배', render_onepan_tab)
     with t[5]:
         _safe('리오더 요청', render_reorder_request_tab)
+
     with t[6]:
         _safe('통합 재고뷰', render_unified_tab)
     with t[7]:
