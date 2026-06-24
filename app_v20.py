@@ -1309,8 +1309,33 @@ def render_reorder_tab():
     else:
         st.info('등록된 매핑이 없습니다. 파일 업로드 또는 직접 입력으로 추가하세요.')
 
-    st.caption('⚠️ 웹에서 적용한 변경은 앱 **재시작·재배포 시 패키지 파일 기준으로 초기화**됩니다. '
-               '영구 반영하려면 ⬇️ CSV를 다운로드해 GitHub 레포의 reorder_mapping.csv 로 커밋하거나 Claude에게 전달하세요.')
+    # ── GitHub 영구 저장 (사용자 6/25 요청 — 휘발성 제거) ──
+    st.markdown('---')
+    gs_c1, gs_c2, gs_c3 = st.columns([2, 2, 6])
+    with gs_c1:
+        if st.button('💾 GitHub 영구 저장', type='primary', use_container_width=True, key='gh_save_reorder'):
+            ok, err = _gh_save('data/reorder_mapping.json',
+                               {'pairs': [list(p) for p in pairs]},
+                               commit_msg='리오더 매핑 갱신 (사용자: 대시보드)')
+            if ok:
+                st.success('✅ GitHub 영구 저장 완료. 재배포 후에도 유지됩니다.')
+            else:
+                st.error(f'❌ 저장 실패: {err}')
+    with gs_c2:
+        if st.button('🔄 GitHub에서 다시 불러오기', use_container_width=True, key='gh_reload_reorder'):
+            data, _ = _gh_load('data/reorder_mapping.json')
+            if data and 'pairs' in data:
+                save_reorder_mapping([tuple(p) for p in data['pairs']])
+                st.cache_data.clear()
+                st.success(f'✅ {len(data["pairs"]):,}건 로드 완료')
+                st.rerun()
+            else:
+                st.warning('GitHub에 저장된 매핑 없음 (또는 키 미설정)')
+    with gs_c3:
+        if _gh_get_token():
+            st.caption('🟢 영구 저장 활성 (GitHub 자동 commit). 변경 후 좌측 버튼 클릭')
+        else:
+            st.caption('🟡 임시 저장만 가능. GITHUB_TOKEN 등록 시 영구 저장 활성')
 
 
 def _stat_color(s):
