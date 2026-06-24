@@ -25,7 +25,10 @@ EXT_WAREHOUSE = {
 }
 
 _DIR = os.path.dirname(__file__)
-CSV_PATH = os.path.join(_DIR, 'sku_master.csv')
+# 사용자 6/24 업로드 실데이터 우선 — 없으면 mock으로 fallback
+_REAL = os.path.join(_DIR, 'data_spao_260624.csv')
+_MOCK = os.path.join(_DIR, 'sku_master.csv')
+CSV_PATH = _REAL if os.path.exists(_REAL) else _MOCK
 REORDER_SAVE_PATH = os.path.join(_DIR, 'reorder_mapping.csv')
 
 # 리오더 매핑 파일 후보 (기존코드/리오더코드 — rsc.reorder_style_mapping_spao 추출본)
@@ -141,7 +144,7 @@ def _load_raw():
     if 'raw' in _cache:
         return _cache['raw']
     skus = {}
-    with open(CSV_PATH, encoding='utf-8') as f:
+    with open(CSV_PATH, encoding='utf-8-sig') as f:
         reader = csv.DictReader(f)
         for row in reader:
             code = row['단품코드'].strip()
@@ -264,8 +267,6 @@ def fetch_channel_orders(seed=None):
 
 
 def get_last_update_time():
+    """대시보드 표시용 마지막 데이터 갱신 시각 (mock — 매일 06:00)."""
     now = datetime.now()
-    today_6am = now.replace(hour=6, minute=0, second=0, microsecond=0)
-    if now < today_6am:
-        return today_6am - timedelta(days=1)
-    return today_6am
+    return now.replace(hour=6, minute=0, second=0, microsecond=0)
