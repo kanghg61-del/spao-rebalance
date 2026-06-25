@@ -560,7 +560,12 @@ def render_scenario(scenario_key, container, allow_slider=False):
         container.caption(f'📡 데이터 상태: {_last} · 🤖 AI 일일 요약 탭의 [🔄 새로고침]으로 갱신')
 
     total_units = sum(sum(r['data']['inv'].get(c, 0) for c in CHANNELS) for r in results)
-    total_units_amt = sum(sum(r['data']['inv'].get(c, 0) for c in CHANNELS) * r['data']['price'] for r in results)
+    # 총 재고금액 — 엑셀 실 매장재고 정상가 우선 (사용자 6/25: 256억)
+    total_units_amt = sum(
+        sum(r['data'].get('inv_amt', {}).get(c, 0) for c in CHANNELS)
+        or sum(r['data']['inv'].get(c, 0) for c in CHANNELS) * r['data']['price']
+        for r in results
+    )
     total_in = sum(sum(v for v in r['moves'].values() if v > 0) for r in results)
     total_amt = sum(sum(v for v in r['moves'].values() if v > 0) * r['data']['price'] for r in results)
     total_rev = sum(r['revenue'] for r in results)
@@ -586,7 +591,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
                                 key=f'pick_{scenario_key}',
                                 placeholder='드롭다운에서 단품 다중 선택')
     with col_f3:
-        sort_by = st.selectbox('정렬', ['온라인 매출 순위 ↑', '기대효과 ↓', '이동수량 ↓', '단품코드'], key=f'sort_{scenario_key}')
+        sort_by = st.selectbox('정렬', ['기대효과 ↓', '온라인 매출 순위 ↑', '이동수량 ↓', '단품코드'], key=f'sort_{scenario_key}')
 
     filtered = list(results)
     if show_only_moved and not search_code and not picked:
@@ -623,7 +628,11 @@ def render_scenario(scenario_key, container, allow_slider=False):
     if _pre_rows:
         _base = [filtered[i] for i in _pre_rows]
         _units = sum(sum(r['data']['inv'].get(c, 0) for c in CHANNELS) for r in _base)
-        _units_amt = sum(sum(r['data']['inv'].get(c, 0) for c in CHANNELS) * r['data']['price'] for r in _base)
+        _units_amt = sum(
+            sum(r['data'].get('inv_amt', {}).get(c, 0) for c in CHANNELS)
+            or sum(r['data']['inv'].get(c, 0) for c in CHANNELS) * r['data']['price']
+            for r in _base
+        )
         _in = sum(sum(v for v in r['moves'].values() if v > 0) for r in _base)
         _amt = sum(sum(v for v in r['moves'].values() if v > 0) * r['data']['price'] for r in _base)
         _rev = sum(r['revenue'] for r in _base)
@@ -636,7 +645,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
         k1, k2, k3, k4, k5, k6 = st.columns(6)
         kpi_card(k1, '총 단품량', f'{_units:,}장', f'6채널 재고 합계 · {_sub}')
         kpi_card(k2, '총 이동량(회전)', f'{_in:,}장', f'주간 IN · {_sub}')
-        kpi_card(k3, '총 재고금액', f'{_units_amt/100000000:.1f}억', '재고수량 × 정상가')
+        kpi_card(k3, '총 재고금액', f'{_units_amt/100000000:.1f}억', '매장재고 정상가')
         kpi_card(k4, '총 이동 금액', f'{_amt/100000000:.2f}억', '이동수량 × 정상가')
         k5.markdown(
             f'<div class="kpi-card" style="min-height:120px"><div class="kpi-label">회수 매출 · 채널 구성</div>'
@@ -691,10 +700,8 @@ def render_scenario(scenario_key, container, allow_slider=False):
             _sum_row.append('0' if _s == 0 else f'{_s:+,}')
         for _c in CHANNELS:  # 이동 후 재고보유주수
             _sum_row.append('')
-        for _c in CHANNELS:  # 이동 후 재고량 합계 = Σ (현재고 + 이동량). 변화량 같이 표시
-            _mv_s = sum(it['moves'].get(_c, 0) for it in filtered)
-            _new_inv_s = sum(it['data']['inv'].get(_c, 0) + it['moves'].get(_c, 0) for it in filtered)
-            _sum_row.append(f'{_new_inv_s:,}' if _mv_s == 0 else f'{_new_inv_s:,} ({_mv_s:+,})')
+        for _c in CHANNELS:  # 이동 후 재고량 합계 — 공란 (사용자 6/25: 표 어그러짐 방지)
+            _sum_row.append('')
         _sum_row.append(int(sum(it['revenue'] for it in filtered) / 10000))
         _sum_df = pd.DataFrame([_sum_row], columns=columns)
         df = pd.concat([_sum_df, df], ignore_index=True)
@@ -1560,7 +1567,15 @@ def render_channel_tab():
     # ───────────── 재고 현황 ─────────────
     with sub_overview:
         tot_inv = sum(g_inv(r['data']) for r in results_ch)
-        tot_amt = sum(g_inv(r['data']) * r['data'].get('price', 0) for r in results_ch)
+        # 매장재고 정상가 실수치 우선 (사용자 6/25)
+        def _amt_ch(d):
+            ia = d.get('inv_amt', {})
+            if is_all:
+                s = sum(ia.values())
+                return s if s else g_inv(d) * d.get('price', 0)
+            v = ia.get(channel_pick, 0)
+            return v if v else g_inv(d) * d.get('price', 0)
+        tot_amt = sum(_amt_ch(r['data']) for r in results_ch)
         n_item = sum(1 for r in results_ch if g_ord(r['data']) > 0)
         n_urgent = sum(1 for r in results_ch if g_ord(r['data']) > 0 and g_inv(r['data']) / max(1, g_ord(r['data'])) < 1)
         rate = n_urgent / max(1, n_item) * 100
@@ -2705,13 +2720,15 @@ def render_unified_tab():
     for d in skus.values():
         price = d.get('price', 0)
         ext_wh_d = d.get('ext_wh', {})
+        inv_amt_d = d.get('inv_amt', {})
         for ch in CHANNELS:
             iv = d['inv'].get(ch, 0)
             ext = ext_wh_d.get(ch, 0)
             od = d['orders'].get(ch, 0)
             agg[ch]['inv'] += iv
             agg[ch]['ext'] += ext
-            agg[ch]['inv_amt'] += iv * price
+            # 매장재고 정상가 실수치 우선 (없으면 수량×가격 fallback)
+            agg[ch]['inv_amt'] += inv_amt_d.get(ch, 0) or (iv * price)
             agg[ch]['ext_amt'] += ext * price
             agg[ch]['ord_qty'] += od
             agg[ch]['ord_amt'] += od * price
@@ -3949,19 +3966,20 @@ def render():
     with t[2]:
         _safe('재배치(임의)', lambda: render_scenario('🎛️ 임의', st, allow_slider=True))
     with t[3]:
-        _safe('실행 효과', render_effect_tab)
+        _safe('실행 효과', render_outcome_tab)
     with t[4]:
-        _safe('추가 분배', render_onepan_tab)
+        _safe('추가 분배', render_distribute_tab)
     with t[5]:
         _safe('리오더 요청', render_reorder_request_tab)
     with t[6]:
         _safe('통합 재고뷰', render_unified_tab)
     with t[7]:
-        _safe('채널 별 세부', render_channel_tab)
+        _safe('채널 별 세부', render_channel_detail_tab)
     with t[8]:
         _safe('입고 예정', render_inbound_tab)
     with t[9]:
-        _safe('채널 IN-OUT', render_excluded_tab)
+        _safe('채널 IN-OUT (MD 기입)', render_excluded_tab)
     with t[10]:
         _safe('리오더 매핑', render_reorder_tab)
- 
+
+    st.caption('v2.0 · SPAO 온라인 재고관리 Agent · 6/12 미팅 합의 — 보수 운영')
