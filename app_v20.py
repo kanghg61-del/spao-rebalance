@@ -188,23 +188,17 @@ def _xlsx_logistics_bytes(sel_items):
         recv_code = WAREHOUSE_CODE.get(recv_ch, '-')
         recv_name = SITE_NAME.get(recv_ch, recv_ch)
         ws = wb.create_sheet(f'{recv_name}_{recv_code}'[:31])
-        # 본문 텍스트 (메일 양식)
-        out_chs = sorted({r['out_ch'] for r in rows})
-        out_label = '/'.join(SITE_NAME.get(c, c) for c in out_chs)
-        ws['A1'] = '안녕하십니까, 이커머스 이장빈입니다.'
-        ws['A3'] = f'이하 물량 {out_label} > {recv_code} 스파오 {recv_name} 빈이동 요청드립니다.'
-        ws['A5'] = '늘 많은 도움 주셔서 감사합니다.'
-        ws['A7'] = '이장빈 드림'
-        # 표 헤더 row 9
+        # 표만 노출 — 본문 텍스트 제거 (사용자 6/25)
+        # 표 헤더 row 1
         headers = ['사이트', '상품코드', '상품명', '스타일', '색상코드', '사이즈코드', '규격', '시즌', f'➤ {recv_code}']
         for i, h in enumerate(headers, 1):
-            c = ws.cell(row=9, column=i, value=h)
+            c = ws.cell(row=1, column=i, value=h)
             c.fill = hdr_fill
             c.font = hdr_font
             c.alignment = Alignment(horizontal='center', vertical='center')
             c.border = bdr
-        # 데이터 row 10~
-        for r_idx, r in enumerate(sorted(rows, key=lambda x: (x['out_ch'], x['code'])), start=10):
+        # 데이터 row 2~
+        for r_idx, r in enumerate(sorted(rows, key=lambda x: (x['out_ch'], x['code'])), start=2):
             code = r['code']
             sty = code[:10]
             color = code[10:12]
