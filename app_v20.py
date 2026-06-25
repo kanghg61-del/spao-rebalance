@@ -143,6 +143,93 @@ DEFAULT_PLAN_LIST = [
 ]
 
 
+def _xlsx_logistics_bytes(sel_items):
+    """물류용 엑셀 — 받는 채널(IN)별 시트 분리. 사용자 6/25 메일 양식.
+    시트별: 본문 텍스트 4줄 + 표(사이트/상품코드/상품명/스타일/색상코드/사이즈코드/규격/시즌/➤매장코드)
+    시즌: 상품코드 6번째 글자(1=봄,2=여름,3=가을,4=겨울,A=사계절). 규격: 일반상품 고정.
+    """
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    SEASON_MAP = {'1': '봄', '2': '여름', '3': '가을', '4': '겨울', 'A': '사계절'}
+    SITE_NAME = {
+        '공홈': '공홈', '이랜드몰': '이랜드몰', '무신사': '무신사',
+        '지그재그': '지그재그', '네이버': '네이버', '카카오선물하기': '카카오톡선물하기',
+    }
+    by_recv = {}  # recv_ch -> [{out_ch,code,name,qty}]
+    for it in sel_items:
+        moves = it.get('moves', {})
+        ins = [(c, q) for c, q in moves.items() if q > 0]
+        outs = [(c, -q) for c, q in moves.items() if q < 0]
+        if not ins or not outs:
+            continue
+        # 단품당 IN 1채널 정책 — 첫 번째만 사용 (사용자 6/25)
+        recv_ch, recv_qty = ins[0]
+        for out_ch, out_qty in outs:
+            if out_ch == recv_ch:
+                continue
+            qty = min(out_qty, recv_qty)
+            if qty <= 0:
+                continue
+            by_recv.setdefault(recv_ch, []).append({
+                'out_ch': out_ch, 'code': it['code'],
+                'name': it['data'].get('name', ''), 'qty': qty,
+            })
+
+    wb = Workbook()
+    wb.remove(wb.active)
+    hdr_fill = PatternFill('solid', fgColor='4472C4')
+    hdr_font = Font(color='FFFFFF', bold=True, size=11)
+    body_font = Font(size=10)
+    thin = Side(border_style='thin', color='888888')
+    bdr = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    for recv_ch, rows in by_recv.items():
+        recv_code = WAREHOUSE_CODE.get(recv_ch, '-')
+        recv_name = SITE_NAME.get(recv_ch, recv_ch)
+        ws = wb.create_sheet(f'{recv_name}_{recv_code}'[:31])
+        # 본문 텍스트 (메일 양식)
+        out_chs = sorted({r['out_ch'] for r in rows})
+        out_label = '/'.join(SITE_NAME.get(c, c) for c in out_chs)
+        ws['A1'] = '안녕하십니까, 이커머스 이장빈입니다.'
+        ws['A3'] = f'이하 물량 {out_label} > {recv_code} 스파오 {recv_name} 빈이동 요청드립니다.'
+        ws['A5'] = '늘 많은 도움 주셔서 감사합니다.'
+        ws['A7'] = '이장빈 드림'
+        # 표 헤더 row 9
+        headers = ['사이트', '상품코드', '상품명', '스타일', '색상코드', '사이즈코드', '규격', '시즌', f'➤ {recv_code}']
+        for i, h in enumerate(headers, 1):
+            c = ws.cell(row=9, column=i, value=h)
+            c.fill = hdr_fill
+            c.font = hdr_font
+            c.alignment = Alignment(horizontal='center', vertical='center')
+            c.border = bdr
+        # 데이터 row 10~
+        for r_idx, r in enumerate(sorted(rows, key=lambda x: (x['out_ch'], x['code'])), start=10):
+            code = r['code']
+            sty = code[:10]
+            color = code[10:12]
+            size = code[12:15]
+            season = SEASON_MAP.get(code[5:6] if len(code) >= 6 else '', '')
+            values = [SITE_NAME.get(r['out_ch'], r['out_ch']), code, r['name'], sty,
+                      color, size, '일반상품', season, r['qty']]
+            for i, v in enumerate(values, 1):
+                cell = ws.cell(row=r_idx, column=i, value=v)
+                cell.border = bdr
+                cell.font = body_font
+                if i == 9:
+                    cell.alignment = Alignment(horizontal='right')
+        widths = [18, 18, 40, 14, 9, 9, 11, 9, 12]
+        for i, w in enumerate(widths, 1):
+            from openpyxl.utils import get_column_letter
+            ws.column_dimensions[get_column_letter(i)].width = w
+    if not wb.sheetnames:
+        ws = wb.create_sheet('빈 결과')
+        ws['A1'] = '선택된 회전 결과가 없습니다.'
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def _get_mlist(key, default):
     """session_state 기반 명단 관리."""
     if key not in st.session_state:
@@ -747,9 +834,9 @@ def render_scenario(scenario_key, container, allow_slider=False):
     sel_qty = sum(sum(v for v in it['moves'].values() if v > 0) for it in sel_items)
     sel_rev = sum(it['revenue'] for it in sel_items)
 
-    # 표 위 placeholder 채우기 — [헤더 텍스트 | 승인 버튼 | Excel 다운로드 버튼]
+    # 표 위 placeholder 채우기 — [헤더 텍스트 | 승인 버튼 | Excel(회전) | Excel(물류용)]
     with actions_ph.container():
-        col_h, col_b1, col_b2 = st.columns([3, 2, 2])
+        col_h, col_b1, col_b2, col_b3 = st.columns([3, 2, 2, 2])
     with col_h:
         st.markdown(f'**단품 × 채널 매트릭스 — {len(filtered):,}건**')
     with col_b1:
@@ -851,7 +938,25 @@ def render_scenario(scenario_key, container, allow_slider=False):
                 st.button('⬇️ Excel 다운로드 (0건)', use_container_width=True, disabled=True, key=f'exp_xlsx_dis_{scenario_key}')
         except Exception as e:
             st.button(f'⬇️ Excel 다운로드 (에러)', use_container_width=True, disabled=True, key=f'exp_xlsx_err_{scenario_key}')
-    container.caption('💡 스파오 6/19 합의 — SAP 자동 연동 전 임시 운영: 위 ⬇️ Excel(채널별 시트)로 MD 수기 실행.')
+    with col_b3:
+        # 물류용 Excel — 받는 채널(IN)별 시트 분리, 메일 양식 (사용자 6/25)
+        try:
+            if sel_items:
+                from datetime import datetime as _dt2
+                logi_bytes = _xlsx_logistics_bytes(sel_items)
+                fname2 = f'물류이동요청_{_dt2.now().strftime("%y%m%d")}.xlsx'
+                st.download_button(
+                    f'📦 Excel 다운로드 (물류용 · {sel_count:,}건)',
+                    data=logi_bytes,
+                    file_name=fname2,
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    use_container_width=True, key=f'exp_xlsx_logi_{scenario_key}',
+                )
+            else:
+                st.button('📦 Excel 다운로드 (물류용 · 0건)', use_container_width=True, disabled=True, key=f'exp_xlsx_logi_dis_{scenario_key}')
+        except Exception as e:
+            st.button(f'📦 Excel 다운로드 (에러)', use_container_width=True, disabled=True, key=f'exp_xlsx_logi_err_{scenario_key}')
+    container.caption('💡 스파오 6/19 합의 — SAP 자동 연동 전 임시 운영: 위 ⬇️ Excel(채널별 시트)로 MD 수기 실행. 📦 물류용은 받는 매장 입장 양식(메일 발송용).')
 
 
 # ============================================================
@@ -3850,91 +3955,24 @@ def _aica_answer(q, K):
     return fb
 
 
+
 def _aica_fallback(q, K):
-    """규칙 기반 답변 (LLM 키 없거나 LLM 호출 실패 시)."""
-    import re as _re
-    num_match = _re.search(r'(\d+)\s*개|top\s*(\d+)|상위\s*(\d+)', q.lower())
-    top_n = 5
-    if num_match:
-        for g in num_match.groups():
-            if g:
-                top_n = min(int(g), 30); break
-    results = K['results']; skus = K['skus']; smap = K['smap']
-    if (('회전' in q or '재배치' in q) and
-        ('top' in q.lower() or '상위' in q or '필요' in q or '추천' in q or '큰' in q or '높' in q or '많' in q)):
-        sty_rev = {}; sty_qty = {}; sty_nm = {}
-        for r in results:
-            sty = r['code'][:10]
-            sty_rev[sty] = sty_rev.get(sty, 0) + r['revenue']
-            sty_qty[sty] = sty_qty.get(sty, 0) + sum(v for v in r['moves'].values() if v > 0)
-            sty_nm[sty] = smap.get(sty, r['data'].get('name', ''))
-        top = sorted([(s, rev) for s, rev in sty_rev.items() if rev > 0], key=lambda x: -x[1])[:top_n]
-        if not top:
-            return '회전 필요한 스타일이 없습니다 (안정 운영 중).'
-        lines = [
-            f'{i}. <b>{s}</b> {(sty_nm[s] or "")[:18]} — 이동 {sty_qty[s]:,}장 · 회수 <b style="color:#ffb84d">{round(sty_rev[s]/10000):,}만원</b>'
-            for i, (s, _) in enumerate(top, 1)
-        ]
-        total_rev_eok = sum(rev for _, rev in top) / 100000000
-        return (f'회전 필요 상위 <b>{top_n}개 스타일</b> (회수매출 기준):<br><br>' + '<br>'.join(lines) +
-                f'<br><br>📊 상위 {top_n}개 합계 회수: <b style="color:#ffb84d">{total_rev_eok:.2f}억</b>')
-    if (('top' in q.lower() or '상위' in q or '베스트' in q) and ('스타일' in q or '판매' in q or '매출' in q)):
-        top = K['top_10'][:top_n]
-        if not top:
-            return '데이터 없음'
-        lines = [f'{i}. <b>{s}</b> {(nm or "")[:18]} — <b>{daily_q:,}장/일</b>'
-                 for i, (s, daily_q, nm) in enumerate(top, 1)]
-        return f'전일 매출 TOP {top_n} 스타일:<br><br>' + '<br>'.join(lines)
-    for c in CHANNELS:
-        short = CH_SHORT.get(c, c)
-        # 매칭은 양쪽(풀네임/줄임말) 다 지원, 출력은 풀네임 사용 (사용자 6/23 요청)
-        if (c in q or short in q) and '결품' in q:
-            shorts = []
-            for code, d in skus.items():
-                o = d['orders'].get(c, 0); i = d['inv'].get(c, 0)
-                if o > 0 and i / o < 1:
-                    sty = code[:10]
-                    shorts.append((code, i, o, i / o, smap.get(sty, '')))
-            shorts.sort(key=lambda x: x[3])
-            top_s = shorts[:top_n]
-            if not top_s:
-                return f'<b>{c}</b> 채널 결품 단품 없음 (모두 ≥ 1주).'
-            lines = [
-                f'{i}. <b>{c0}</b> {(nm or "")[:14]} — 재고 {inv:,} · 주판 {o:,} · <b style="color:#ff6b6b">{w:.1f}주</b>'
-                for i, (c0, inv, o, w, nm) in enumerate(top_s, 1)
-            ]
-            return f'<b>{c}</b> 채널 결품 상위 {top_n}건:<br><br>' + '<br>'.join(lines)
-    if any(k in q for k in ['기대매출', '회수', '효과', '얼마']) and '회전' in q:
-        return (f'회전 기대매출: <b style="color:#ffb84d">{K["rotation_revenue"]/100000000:.2f}억</b><br>'
-                f'(실제 이동금액 {K["actual_move_amt"]/100000000:.2f}억, 총 이동량 {K["rotation_qty"]:,}장)')
-    if any(k in q for k in ['반응과', '분배', '필업']):
-        return (f'반응과 분배 추천: <b>{K["dist_qty"]:,}장</b><br>'
-                f'실제 이동금액 <b>{K["dist_actual_amt"]/100000000:.2f}억</b> / '
-                f'기대매출 <b>{K["dist_revenue"]/100000000:.2f}억</b>')
-    if '결품' in q:
-        return (f'현재 6채널 결품 단품: <b style="color:#ff6b6b">{K["short_cnt"]:,}건</b><br>'
-                f'채널명 지정하시면 상위 결품을 보여드릴게요. (예: "무신사 결품 5건")')
-    if any(k in q for k in ['매출', '주문', '전일', '어제', '오늘']):
-        ch_strs = [f'{c} {int(K["ch_daily_amt"][c]/10000):,}만원' for c in CHANNELS]
-        return (f'전일 주문 기준 매출: <b>{K["daily_amt_total"]/100000000:.2f}억</b><br>'
-                f'채널별: {" / ".join(ch_strs)}')
-    if '회전' in q or '재배치' in q:
-        return (f'회전 추천: <b>{K["rotation_qty"]:,}장</b> · '
-                f'실제 이동금액 <b>{K["actual_move_amt"]/100000000:.2f}억</b> / '
-                f'기대매출 <b>{K["rotation_revenue"]/100000000:.2f}억</b>')
-    return (
-        '도움말 — 다음 패턴으로 물어봐주세요:<br><br>'
-        '• <b>"회전 TOP 5 스타일"</b> · 회전 필요 상위 N개 스타일 + 기대매출<br>'
-        '• <b>"전일 TOP 10 스타일"</b> · 전일 매출 베스트 스타일<br>'
-        '• <b>"공홈 결품 5건"</b> · 채널별 결품 상위 N건<br>'
-        '• <b>"회전 기대매출"</b> · 회전 시 예상 회수매출<br>'
-        '• <b>"반응과 분배"</b> · 반응과 분배 추천'
-    )
+    """LLM 호출 실패 시 fallback — 키워드 기반 간단 응답."""
+    try:
+        if not K:
+            return '데이터를 불러올 수 없습니다.'
+        ch_list = ', '.join(K.get('CHANNELS', []))
+        return (f'**[로컬 폴백 답변]**\n\n'
+                f'질문: {q}\n\n'
+                f'현재 채널: {ch_list}. AI 응답은 일시 불가 — '
+                f'채널별 세부·재배치 탭에서 직접 확인해주세요.')
+    except Exception:
+        return '답변 생성 중 오류가 발생했습니다.'
 
 
 def render():
     st.markdown('<div class="title-bar">온라인 재고관리 Agent — 운영 대시보드<span class="ver-badge">v0.9</span></div>', unsafe_allow_html=True)
-    # 채널 IN-OUT 제외 — 첫 화면(재배치 기본)부터 적용되도록 진입 시 GitHub 로드 (사용자 6/25)
+    # 채널 IN-OUT 제외 — 첫 화면(재배치 기본)부터 적용 (사용자 6/25)
     try:
         _persist_load_ch_excl()
     except Exception:
@@ -3947,7 +3985,7 @@ def render():
         reorder_txt = ''
     col_a, col_b, col_c = st.columns([6, 1, 1])
     with col_a:
-        st.caption(f'<b>마지막 데이터 갱신</b>: {last}{reorder_txt}')
+        st.caption(f'<b>마지막 데이터 갱신</b>: {last}{reorder_txt}', unsafe_allow_html=True)
     with col_b:
         if st.button('🔄 새로고침', use_container_width=True):
             st.rerun()
