@@ -3936,9 +3936,9 @@ def render():
     )
 
     labels = [
-        '🤖 AI 일일 요약',
         '🛡️ 재배치(기본)',
         '🎛️ 재배치(임의)',
+        '🤖 AI 일일 요약(TEST)',
         '📈 실행 효과',
         '🧩 추가 분배',
         '🚨 리오더 요청',
@@ -3959,22 +3959,23 @@ def render():
             with st.expander('🔎 디버그 traceback'):
                 st.code(_tb.format_exc())
 
+    # 첫 화면 = 재배치(기본) (사용자 6/25 요청 — 비번 입력 후 진입 즉시)
     with t[0]:
-        _safe('AI 일일 요약', render_ai_summary_tab)
-    with t[1]:
         _safe('재배치(기본)', lambda: render_scenario('🛡️ 기본', st, allow_slider=False))
-    with t[2]:
+    with t[1]:
         _safe('재배치(임의)', lambda: render_scenario('🎛️ 임의', st, allow_slider=True))
+    with t[2]:
+        _safe('AI 일일 요약(TEST)', render_ai_summary_tab)
     with t[3]:
-        _safe('실행 효과', render_outcome_tab)
+        _safe('실행 효과', render_effect_tab)
     with t[4]:
-        _safe('추가 분배', render_distribute_tab)
+        _safe('추가 분배', render_onepan_tab)
     with t[5]:
         _safe('리오더 요청', render_reorder_request_tab)
     with t[6]:
         _safe('통합 재고뷰', render_unified_tab)
     with t[7]:
-        _safe('채널 별 세부', render_channel_detail_tab)
+        _safe('채널 별 세부', render_channel_tab)
     with t[8]:
         _safe('입고 예정', render_inbound_tab)
     with t[9]:
@@ -3982,4 +3983,4 @@ def render():
     with t[10]:
         _safe('리오더 매핑', render_reorder_tab)
 
-    st.caption('v2.0 · SPAO 온라인 재고관리 Agent · 6/12 미팅 합의 — 보수 운영')
+   
