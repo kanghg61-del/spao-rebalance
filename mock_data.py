@@ -154,12 +154,14 @@ def _load_raw():
                 continue
             inv = {BW_NAME: int(_num(row.get('inv_반응과', 0)))}
             ext_wh = {}
+            ext_wh_amt = {}
             for ch in CHANNELS:
                 q = int(_num(row.get(f'inv_{ch}', 0)))
                 inv[ch] = q
                 if ch in EXT_WAREHOUSE:
-                    wh_col = row.get(f'wh_{ch}')
-                    ext_wh[ch] = int(_num(wh_col)) if wh_col not in (None, '') else _mock_ext_wh_qty(code, ch, q)
+                    # 외부창고 실수치 (CSV 직접) — 사용자 6/25 매장코드 재분류: AENS·ADU3·ADQS
+                    ext_wh[ch] = int(_num(row.get(f'wh_{ch}', 0)))
+                    ext_wh_amt[ch] = int(_num(row.get(f'wh_amt_{ch}', 0)))
             orders = {ch: int(_num(row.get(f'ord_{ch}', 0))) for ch in CHANNELS}
             daily = {ch: int(_num(row.get(f'daily_{ch}', 0))) for ch in CHANNELS}
             # 외형매출·재고액 실수치 (CSV 직접) — 사용자 6/25 요청: 가격 추정 X
@@ -187,6 +189,7 @@ def _load_raw():
                 'wk_qty': int(_num(row.get('wk_qty', 0))),     # 기간판매량
                 'last_date': row.get('_last_date', '') or '',
                 'ext_wh': ext_wh,
+                'ext_wh_amt': ext_wh_amt,
                 'reorder_codes': [],
             }
     _cache['raw'] = skus

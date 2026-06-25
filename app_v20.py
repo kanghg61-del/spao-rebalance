@@ -2742,6 +2742,7 @@ def render_unified_tab():
     for d in skus.values():
         price = d.get('price', 0)
         ext_wh_d = d.get('ext_wh', {})
+        ext_wh_amt_d = d.get('ext_wh_amt', {})
         inv_amt_d = d.get('inv_amt', {})
         for ch in CHANNELS:
             iv = d['inv'].get(ch, 0)
@@ -2749,9 +2750,9 @@ def render_unified_tab():
             od = d['orders'].get(ch, 0)
             agg[ch]['inv'] += iv
             agg[ch]['ext'] += ext
-            # 매장재고 정상가 실수치 우선 (없으면 수량×가격 fallback)
+            # 정상가 실수치 우선 (사용자 6/25 — 매장재고/외부창고 실 액수)
             agg[ch]['inv_amt'] += inv_amt_d.get(ch, 0) or (iv * price)
-            agg[ch]['ext_amt'] += ext * price
+            agg[ch]['ext_amt'] += ext_wh_amt_d.get(ch, 0) or (ext * price)
             agg[ch]['ord_qty'] += od
             agg[ch]['ord_amt'] += od * price
     tot_inv = sum(a['inv'] for a in agg.values())
@@ -4003,5 +4004,4 @@ def render():
         _safe('채널 IN-OUT (MD 기입)', render_excluded_tab)
     with t[10]:
         _safe('리오더 매핑', render_reorder_tab)
-
     st.caption('v2.0 · SPAO 온라인 재고관리 Agent · 6/12 미팅 합의 — 보수 운영')
