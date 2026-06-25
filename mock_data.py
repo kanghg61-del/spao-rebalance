@@ -182,6 +182,9 @@ def _load_raw():
                 'daily': daily,
                 'daily_amt': daily_amt,     # 전일 외형매출 실수치 (만원·억 직접 표시용)
                 'inv_amt': inv_amt,         # 매장재고 정상가 실수치
+                'in_qty': int(_num(row.get('in_qty', 0))),     # 누적입고량 (스타일 합산용)
+                'cum_qty': int(_num(row.get('cum_qty', 0))),   # 누적판매량
+                'wk_qty': int(_num(row.get('wk_qty', 0))),     # 기간판매량
                 'last_date': row.get('_last_date', '') or '',
                 'ext_wh': ext_wh,
                 'reorder_codes': [],
@@ -277,6 +280,7 @@ def get_reorder_info():
 
 def fetch_sap_inventory(seed=None):
     return _load_merged()
+
 
 
 def fetch_channel_orders(seed=None):

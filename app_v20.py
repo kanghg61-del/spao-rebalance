@@ -1440,15 +1440,21 @@ def _ch_effect(d, mv_ch, ch):
 
 
 def _render_group(results_ch, keyfn, g_inv, g_ord, g_move, g_eff, g_ext, keycol, namefn=False):
-    """아이템별/스타일별 집계표 — 단품 상세와 동일 지표를 그룹 합산하여 렌더(맨 위 합계행)."""
+    """아이템별/스타일별 집계표 — 단품 상세와 동일 지표를 그룹 합산하여 렌더(맨 위 합계행).
+    스타일별 누판율/주판율 = Σ누판량(M)/Σ입고량(G) · Σ주판량(N)/Σ입고량(G)."""
     agg = {}
     nm = {}
     for r in results_ch:
         d = r['data']; k = keyfn(r['code']); p = d.get('price', 0)
         o = g_ord(d); i = g_inv(d)
-        a = agg.setdefault(k, dict(sku=0, ordd=0, inv=0, invamt=0, salesamt=0, ext=0, mv=0, eff=0, item=0, urg=0))
+        a = agg.setdefault(k, dict(sku=0, ordd=0, inv=0, invamt=0, salesamt=0, ext=0, mv=0, eff=0, item=0, urg=0,
+                                    in_qty=0, cum_qty=0, wk_qty=0))
         a['sku'] += 1; a['ordd'] += o; a['inv'] += i; a['invamt'] += i * p; a['salesamt'] += o * p
         a['ext'] += g_ext(d); a['mv'] += max(0, g_move(r)); a['eff'] += g_eff(r)
+        # 스타일 합산 누판/주판 — 단품 단위 누적입고량/누적판매량/기간판매량 (전 채널 합)
+        a['in_qty'] += d.get('in_qty', 0)
+        a['cum_qty'] += d.get('cum_qty', 0)
+        a['wk_qty'] += d.get('wk_qty', 0)
         if o > 0:
             a['item'] += 1
             if i / o < 1:
@@ -1460,11 +1466,16 @@ def _render_group(results_ch, keyfn, g_inv, g_ord, g_move, g_eff, g_ext, keycol,
     def mk(k, a):
         woc = a['inv'] / a['ordd'] if a['ordd'] > 0 else None
         daily = a['ordd'] / 7
+        cum_r = (a['cum_qty'] / a['in_qty'] * 100) if a['in_qty'] > 0 else 0.0
+        wk_r = (a['wk_qty'] / a['in_qty'] * 100) if a['in_qty'] > 0 else 0.0
         # 이미지는 스타일/아이템 코드 기준 mock SVG (7월 본연동 시 실 SPAO 이미지로 교체)
         row = {'이미지': _spao_img_url(k), keycol: k}
         if namefn:
             v = nm.get(k, '')
             row['대표 상품명'] = (v[:18] + '…') if len(v) > 18 else v
+        # 누판/주판 — 대표 상품명 오른쪽에 표시 (사용자 6/25 요청)
+        row['누판율(%)'] = round(cum_r, 1)
+        row['주판율(%)'] = round(wk_r, 1)
         row.update({
             '주간 판매량': a['ordd'], '일평균 판매량': round(daily, 1),
             '일평균 매출(만원)': round(a['salesamt'] / 7 / 10000), '현 재고량': a['inv'],
@@ -1484,12 +1495,16 @@ def _render_group(results_ch, keyfn, g_inv, g_ord, g_move, g_eff, g_ext, keycol,
     if not body:
         st.info('표시할 항목이 없습니다.')
         return
-    T = {f: sum(a[f] for a in agg.values()) for f in ('sku', 'ordd', 'inv', 'invamt', 'salesamt', 'ext', 'mv', 'eff', 'item', 'urg')}
+    T = {f: sum(a[f] for a in agg.values()) for f in ('sku', 'ordd', 'inv', 'invamt', 'salesamt', 'ext', 'mv', 'eff', 'item', 'urg', 'in_qty', 'cum_qty', 'wk_qty')}
     woc = T['inv'] / T['ordd'] if T['ordd'] > 0 else None
     daily = T['ordd'] / 7
+    T_cum_r = (T['cum_qty'] / T['in_qty'] * 100) if T['in_qty'] > 0 else 0.0
+    T_wk_r = (T['wk_qty'] / T['in_qty'] * 100) if T['in_qty'] > 0 else 0.0
     sumrow = {'이미지': '', keycol: '합계'}
     if namefn:
         sumrow['대표 상품명'] = f'{len(body):,}개'
+    sumrow['누판율(%)'] = round(T_cum_r, 1)
+    sumrow['주판율(%)'] = round(T_wk_r, 1)
     sumrow.update({
         '주간 판매량': T['ordd'], '일평균 판매량': round(daily, 1),
         '일평균 매출(만원)': round(T['salesamt'] / 7 / 10000), '현 재고량': T['inv'],
@@ -1511,7 +1526,8 @@ def _render_group(results_ch, keyfn, g_inv, g_ord, g_move, g_eff, g_ext, keycol,
                        '외부창고': '{:,}'.format, '현 재고주수': _woc, '이동 후 재고주수': _woc,
                        '소진예상(일)': _int0,
                        '추천이동(회전)': '{:,}'.format, '효과(만원)': '{:,}'.format,
-                       '판매량 비중(%)': '{:.2f}'.format, '결품률(%)': '{:.1f}'.format}))
+                       '판매량 비중(%)': '{:.2f}'.format, '결품률(%)': '{:.1f}'.format,
+                       '누판율(%)': '{:.1f}'.format, '주판율(%)': '{:.1f}'.format}))
     st.dataframe(styled, use_container_width=True, height=440, hide_index=True,
                  column_config={'이미지': st.column_config.ImageColumn('이미지', width='small',
                                                                        help='추후 SPAO 공홈 실 이미지로 교체')})
@@ -1736,6 +1752,9 @@ def render_channel_tab():
                 '상태': stat, '복종': _bok(r['code']),
                 '상품코드': r['code'][:10], '단품코드(SKU)': r['code'],
                 '상품명': (d['name'][:22] + '…') if len(d['name']) > 22 else d['name'],
+                # 누판/주판 — 상품명 오른쪽 (사용자 6/25 요청, CSV 단품 단위 실수치)
+                '누판율(%)': round(d.get('cum_rate', 0) * 100, 1),
+                '주판율(%)': round(d.get('wk_rate', 0) * 100, 1),
                 '일평균 판매량': round(daily, 1), '일평균 매출(만원)': round(daily * p / 10000, 1),
                 '현 재고량': i, '현 재고금액(만원)': round(i * p / 10000),
                 '내부창고': '—', '🔌항만': '—', '🔌부평': '—', '외부창고': ext,
@@ -1763,6 +1782,7 @@ def render_channel_tab():
         sumrow = {
             '이미지': '',
             '상태': '— 합계 —', '복종': '', '상품코드': '', '단품코드(SKU)': f'{len(data):,}건', '상품명': '',
+            '누판율(%)': '', '주판율(%)': '',
             '일평균 판매량': round(s_daily, 1), '일평균 매출(만원)': round(s_damt, 1),
             '현 재고량': int(s_inv), '현 재고금액(만원)': round(s_iamt),
             '내부창고': '', '🔌항만': '', '🔌부평': '', '외부창고': int(s_ext),
@@ -1782,7 +1802,9 @@ def render_channel_tab():
                                '현 재고량': '{:,}'.format, '현 재고금액(만원)': '{:,}'.format,
                                '현 재고주수': _woc, '이동 후 재고주수': _woc, '소진예상(일)': _int0,
                                '추천이동': '{:,}'.format, '이동후재고': '{:,}'.format, '외부창고': '{:,}'.format,
-                               '효과(만원)': '{:,}'.format}))
+                               '효과(만원)': '{:,}'.format,
+                               '누판율(%)': lambda x: f'{x:.1f}' if isinstance(x, (int, float)) else x,
+                               '주판율(%)': lambda x: f'{x:.1f}' if isinstance(x, (int, float)) else x}))
             st.dataframe(styled, use_container_width=True, height=520, hide_index=True,
                          column_config={
                              '이미지': st.column_config.ImageColumn('이미지', width='small',
@@ -3959,7 +3981,6 @@ def render():
             with st.expander('🔎 디버그 traceback'):
                 st.code(_tb.format_exc())
 
-    # 첫 화면 = 재배치(기본) (사용자 6/25 요청 — 비번 입력 후 진입 즉시)
     with t[0]:
         _safe('재배치(기본)', lambda: render_scenario('🛡️ 기본', st, allow_slider=False))
     with t[1]:
@@ -3983,4 +4004,4 @@ def render():
     with t[10]:
         _safe('리오더 매핑', render_reorder_tab)
 
-   
+    st.caption('v2.0 · SPAO 온라인 재고관리 Agent · 6/12 미팅 합의 — 보수 운영')
