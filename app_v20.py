@@ -3369,27 +3369,32 @@ def render_ai_summary_tab():
     total_inv_qty = 0
     total_inv_amt = 0
     total_orders_qty = 0
-    # 전일자 데이터 우선 사용 (사용자 6/25 요청: AI 일일 요약은 어제자만)
-    # daily 컬럼이 있으면 전일자 그대로 사용, 없으면 7일 평균 fallback
-    _has_daily = any(d.get('daily') for d in skus.values())
+    # 전일자 외형매출·재고액 실수치 사용 (사용자 6/25 요청 — 가격 추정 X)
+    _has_daily_amt = any(d.get('daily_amt') for d in skus.values())
+    _has_inv_amt = any(d.get('inv_amt') for d in skus.values())
     _last_date = next((d.get('last_date', '') for d in skus.values() if d.get('last_date')), '')
     for code, d in skus.items():
         price = d.get('price', 0)
         sty = code[:10]
-        daily_d = d.get('daily', {}) if _has_daily else None
+        daily_amt_d = d.get('daily_amt', {})
+        inv_amt_d = d.get('inv_amt', {})
         for c in CHANNELS:
             o = d['orders'].get(c, 0); i = d['inv'].get(c, 0)
-            # 매출 = 전일자 판매수량 × 정상가 (daily 우선)
-            if _has_daily and daily_d:
-                dq = daily_d.get(c, 0)
-                ch_daily_amt[c] += dq * price
-                daily_amt_total += dq * price
+            # 매출 = 실제 외형매출 (daily_amt 우선)
+            if _has_daily_amt and daily_amt_d:
+                amt_ch = daily_amt_d.get(c, 0)
+                ch_daily_amt[c] += amt_ch
+                daily_amt_total += amt_ch
             else:
                 amt = o * price
                 ch_daily_amt[c] += amt / 7
                 daily_amt_total += amt / 7
             total_inv_qty += i
-            total_inv_amt += i * price
+            # 재고액 = 실제 매장재고 정상가 (inv_amt 우선)
+            if _has_inv_amt and inv_amt_d:
+                total_inv_amt += inv_amt_d.get(c, 0)
+            else:
+                total_inv_amt += i * price
             total_orders_qty += o
             if o > 0 and i / o < 1:
                 short_cnt += 1
@@ -3959,5 +3964,4 @@ def render():
         _safe('채널 IN-OUT', render_excluded_tab)
     with t[10]:
         _safe('리오더 매핑', render_reorder_tab)
-    st.caption('© 2026 Fashion BG · CAIO실 AX 혁신팀 · 강훈구  |  온라인 재고관리 Agent v0.9 (스파오 6/19 합의 반영)')
-# end of render() — DO NOT TRUNCATE BELOW THIS LINE
+ 

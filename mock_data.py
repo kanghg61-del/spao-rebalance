@@ -161,8 +161,10 @@ def _load_raw():
                     wh_col = row.get(f'wh_{ch}')
                     ext_wh[ch] = int(_num(wh_col)) if wh_col not in (None, '') else _mock_ext_wh_qty(code, ch, q)
             orders = {ch: int(_num(row.get(f'ord_{ch}', 0))) for ch in CHANNELS}
-            # 전일자 판매수량 (CSV에 daily_채널 컬럼이 있으면 사용 — 사용자 6/25 요청 AI 일일 요약은 전일만)
             daily = {ch: int(_num(row.get(f'daily_{ch}', 0))) for ch in CHANNELS}
+            # 외형매출·재고액 실수치 (CSV 직접) — 사용자 6/25 요청: 가격 추정 X
+            daily_amt = {ch: int(_num(row.get(f'daily_amt_{ch}', 0))) for ch in CHANNELS}
+            inv_amt = {ch: int(_num(row.get(f'inv_amt_{ch}', 0))) for ch in CHANNELS}
             skus[code] = {
                 'rank_total': int(_num(row.get('매출랭킹', 9999), 9999)),
                 'rank_online': int(_num(row.get('온라인랭킹', 9999), 9999)),
@@ -176,8 +178,10 @@ def _load_raw():
                 'locked': False,
                 'critical': False,
                 'inv': inv,
-                'orders': orders,           # 7일 합계 — 회전 엔진 (주판)
-                'daily': daily,             # 전일자만 — AI 일일 요약 브리핑
+                'orders': orders,
+                'daily': daily,
+                'daily_amt': daily_amt,     # 전일 외형매출 실수치 (만원·억 직접 표시용)
+                'inv_amt': inv_amt,         # 매장재고 정상가 실수치
                 'last_date': row.get('_last_date', '') or '',
                 'ext_wh': ext_wh,
                 'reorder_codes': [],
@@ -191,6 +195,13 @@ def _merge_into(dst, src, reo_code):
     for ch in CHANNELS:
         dst['inv'][ch] += src['inv'][ch]
         dst['orders'][ch] += src['orders'][ch]
+        # daily / daily_amt / inv_amt 도 병합 (사용자 6/25 — 실수치 누락 방지)
+        if 'daily' in dst and 'daily' in src:
+            dst['daily'][ch] = dst['daily'].get(ch, 0) + src['daily'].get(ch, 0)
+        if 'daily_amt' in dst and 'daily_amt' in src:
+            dst['daily_amt'][ch] = dst['daily_amt'].get(ch, 0) + src['daily_amt'].get(ch, 0)
+        if 'inv_amt' in dst and 'inv_amt' in src:
+            dst['inv_amt'][ch] = dst['inv_amt'].get(ch, 0) + src['inv_amt'].get(ch, 0)
         if ch in dst['ext_wh']:
             dst['ext_wh'][ch] += src['ext_wh'].get(ch, 0)
     # 출고율·온라인비중은 주문량 가중 평균
@@ -265,7 +276,6 @@ def get_reorder_info():
 
 
 def fetch_sap_inventory(seed=None):
-    return _load_merged()
     return _load_merged()
 
 
