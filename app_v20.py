@@ -3934,6 +3934,11 @@ def _aica_fallback(q, K):
 
 def render():
     st.markdown('<div class="title-bar">온라인 재고관리 Agent — 운영 대시보드<span class="ver-badge">v0.9</span></div>', unsafe_allow_html=True)
+    # 채널 IN-OUT 제외 — 첫 화면(재배치 기본)부터 적용되도록 진입 시 GitHub 로드 (사용자 6/25)
+    try:
+        _persist_load_ch_excl()
+    except Exception:
+        pass
     last = get_last_update_time()
     reorder_info = get_reorder_info()
     if reorder_info.get('file'):
@@ -4004,4 +4009,5 @@ def render():
         _safe('채널 IN-OUT (MD 기입)', render_excluded_tab)
     with t[10]:
         _safe('리오더 매핑', render_reorder_tab)
+
     st.caption('v2.0 · SPAO 온라인 재고관리 Agent · 6/12 미팅 합의 — 보수 운영')
