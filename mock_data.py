@@ -233,31 +233,30 @@ def _load_merged():
 
     merged = 0
     if reorder_map:
-        # 매핑 코드 길이별 그룹 (스타일 10자리 / 단품 15자리 혼용 지원)
+        # 사용자 6/25 — 합산 방향 반전: 원오더 → 리오더 (리오더코드를 메인 노출).
+        # 원오더는 이미 다 팔려 재고 0이므로 재배치 의미 없음. 리오더 단품에 합산 후 리오더로 노출.
+        # by_len: {원오더 길이: {원오더 스타일: 리오더 스타일}}
         by_len = {}
         for reo, org in reorder_map.items():
-            by_len.setdefault(len(reo), {})[reo] = org
+            by_len.setdefault(len(org), {})[org] = reo
 
         for code in list(skus.keys()):
             target = None
             for L, m in by_len.items():
                 if len(code) >= L and code[:L] in m:
-                    cand = m[code[:L]] + code[L:]   # 기존스타일 + (컬러+사이즈) suffix 유지
-                    # ── 컬러코드(단품코드 11~12자리) 동일 기준(v4.3) ──
-                    # 스타일코드 매핑 후, 리오더 단품과 병합 대상의 컬러코드(11~12자리)가
-                    # 동일할 때만 병합한다. 매핑이 스타일(10자리) 단위라 컬러 suffix가
-                    # 보존되지만, 코드 길이 불일치·데이터 이상으로 컬러가 달라지면 병합하지 않는다.
+                    cand = m[code[:L]] + code[L:]   # 리오더 스타일 + (컬러+사이즈) suffix 유지
+                    # 컬러코드(11~12자리) 동일 기준 — 매핑이 스타일(10자리) 단위라 컬러 suffix 보존됨
                     if code[10:12] and code[10:12] == cand[10:12]:
                         target = cand
                     break
             if not target or target == code or code not in skus:
                 continue
-            src = skus.pop(code)
+            src = skus.pop(code)  # 원오더 단품 제거
             if target in skus:
-                # 컬러코드(11~12자리)가 동일한 기존 단품과 재고 합산 병합
+                # 리오더 단품에 원오더 데이터 합산 (재고/주문 + 누판/주판 모두)
                 _merge_into(skus[target], src, code)
             else:
-                # 기존코드 단품이 마트에 없으면 리오더 데이터를 기존코드로 승격(컬러 보존)
+                # 리오더 단품이 마트에 없으면 — 원오더 데이터를 리오더 코드로 승격
                 src['reorder_codes'] = [code]
                 skus[target] = src
             merged += 1
