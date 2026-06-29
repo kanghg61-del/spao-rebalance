@@ -625,13 +625,19 @@ def render_scenario(scenario_key, container, allow_slider=False):
 
     container.markdown(f'<div class="scenario-box">{preset["desc"]}</div>', unsafe_allow_html=True)
 
+    # 시나리오 또는 슬라이더 변경 시 사용자 단품 수정 자동 클리어 (사용자 6/29 — 결과 비결정성 fix)
+    _new_pkey = (scenario_key, shortage_th, target_woc, ship_th, min_move, min_recv, move_cap_pct)
+    _prev_pkey = st.session_state.get('_last_params_key')
+    if _prev_pkey is not None and _prev_pkey != _new_pkey:
+        st.session_state.pop('move_overrides', None)
+    st.session_state['_last_params_key'] = _new_pkey
+
     with st.spinner('계산 중...'):
         params_key = (shortage_th, target_woc, ship_th, min_move, min_recv, _ch_excl_key(), move_cap_pct)
         results = calc_results_v20(params_key, _csv_cache_key())
     results = _apply_exclusion(results)
     results = _apply_overrides(results)
-    # v0.9 — AI 일일 요약에서 '새로고침' 클릭 시 데이터 ±2% 변동 (mock 시각효과)
-    results = _apply_data_variance(results, _get_data_seed())
+    # _apply_data_variance 제거 (사용자 6/29) — ±2% mock 시각효과가 결정성 깨뜨려 동일 조건 다른 결과 발생
     # 갱신 시각 표시 (AI 일일 요약의 '새로고침' 이벤트 추적)
     _seed = _get_data_seed()
     _last = st.session_state.get('data_seed_ts', '최초 로드 (정적 데이터)')
@@ -3391,7 +3397,7 @@ def _compute_summary_kpis(skus, seed):
                   _ch_excl_key(), preset['move_cap_pct'])
     results = calc_results_v20(params_key, _csv_cache_key())
     results = _apply_exclusion(results)
-    results = _apply_data_variance(results, seed)
+    # _apply_data_variance 제거 (사용자 6/29) — 결정성 유지
     rotation_qty = sum(sum(v for v in r['moves'].values() if v > 0) for r in results)
     rotation_amt = sum(r['revenue'] for r in results)
     # 채널별 회전 IN/OUT + 회전 대표 단품(채널이 가장 많이 IN 받는 단품)
@@ -4031,15 +4037,4 @@ def render():
         _safe('추가 분배', render_onepan_tab)
     with t[5]:
         _safe('리오더 요청', render_reorder_request_tab)
-    with t[6]:
-        _safe('통합 재고뷰', render_unified_tab)
-    with t[7]:
-        _safe('채널 별 세부', render_channel_tab)
-    with t[8]:
-        _safe('입고 예정', render_inbound_tab)
-    with t[9]:
-        _safe('채널 IN-OUT (MD 기입)', render_excluded_tab)
-    with t[10]:
-        _safe('리오더 매핑', render_reorder_tab)
-
-    st.caption('v2.0 · SPAO 온라인 재고관리 Agent · 6/12 미팅 합의 — 보수 운영')
+    wi
