@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# REDEPLOY-MARKER: 2026-06-30 00:55 (force streamlit cloud rebuild — line 4040 wi cache fix)
 """
 AI 온라인 재고 자동 재배치 — 운영 대시보드 (듀얼 버전)
 """
