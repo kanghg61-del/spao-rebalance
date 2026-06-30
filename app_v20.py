@@ -4037,4 +4037,15 @@ def render():
         _safe('추가 분배', render_onepan_tab)
     with t[5]:
         _safe('리오더 요청', render_reorder_request_tab)
-    wi
+    with t[6]:
+        _safe('통합 재고뷰', render_unified_tab)
+    with t[7]:
+        _safe('채널 별 세부', render_channel_tab)
+    with t[8]:
+        _safe('입고 예정', render_inbound_tab)
+    with t[9]:
+        _safe('채널 IN-OUT (MD 기입)', render_excluded_tab)
+    with t[10]:
+        _safe('리오더 매핑', render_reorder_tab)
+
+    st.caption('v2.0 · SPAO 온라인 재고관리 Agent · 6/12 미팅 합의 — 보수 운영')
