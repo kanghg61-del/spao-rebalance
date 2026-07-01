@@ -328,14 +328,56 @@ SCENARIOS = {
 }
 
 
-# CSV 파일 mtime을 캐시 키로 (사용자 6/25 — 새 데이터 자동 인식)
+# ─────────────────────────────────────────────────────────────
+# Agent / TEST 데이터 모드 분리 (사용자 7/1)
+#   Agent  → 기존 CSV (mock_data.CSV_PATH)                — 대표 시연용 안정 버전
+#   TEST   → 신규 데이터 (data/test/*.csv 최신 or Snowflake 결과) — 데이터 업데이트 테스트용
+# ─────────────────────────────────────────────────────────────
+_REBA_MODE_KEY = 'reba_data_mode'  # session_state key
+_TEST_DATA_DIR = 'data/test'
+
+
+def _current_reba_mode() -> str:
+    """현재 렌더링 컨텍스트의 데이터 모드 (agent | test)."""
+    return st.session_state.get(_REBA_MODE_KEY, 'agent')
+
+
+def _resolve_test_csv_path() -> str:
+    """TEST 탭 데이터 경로 결정 — ① data/test/*.csv 최신 파일 → ② Snowflake 결과 → ③ Agent와 동일 fallback."""
+    import os as _os
+    # ① 사용자 업로드된 최신 CSV (수동 우선)
+    try:
+        if _os.path.isdir(_TEST_DATA_DIR):
+            csvs = [f for f in _os.listdir(_TEST_DATA_DIR) if f.lower().endswith('.csv')]
+            if csvs:
+                csvs.sort(key=lambda f: _os.path.getmtime(_os.path.join(_TEST_DATA_DIR, f)), reverse=True)
+                return _os.path.join(_TEST_DATA_DIR, csvs[0])
+    except Exception:
+        pass
+    # ② Snowflake 자동 추출 결과 (snowflake_daily 스크립트가 남긴 병합본)
+    for cand in ('snowflake_daily/output/merged_latest.csv', 'snowflake_daily/output/data_spao_latest.csv'):
+        try:
+            if _os.path.isfile(cand):
+                return cand
+        except Exception:
+            pass
+    # ③ Fallback → Agent와 동일 (TEST 소스 아직 없음)
+    from mock_data import CSV_PATH as _P
+    return _P
+
+
+# CSV 파일 mtime을 캐시 키로 (사용자 6/25 — 새 데이터 자동 인식) + mode 접미 (7/1)
 def _csv_cache_key():
     import os as _os
-    from mock_data import CSV_PATH as _P
+    mode = _current_reba_mode()
+    if mode == 'test':
+        _P = _resolve_test_csv_path()
+    else:
+        from mock_data import CSV_PATH as _P
     try:
-        return f'{_P}|{int(_os.path.getmtime(_P))}'
+        return f'{_P}|{int(_os.path.getmtime(_P))}|{mode}'
     except Exception:
-        return _P
+        return f'{_P}|{mode}'
 
 
 @st.cache_data(show_spinner=False)
@@ -344,6 +386,14 @@ def load_data_v20(cache_key=None):
     import mock_data as _md
     _md._cache.pop('raw', None)
     _md._cache.pop('merged', None)
+    # cache_key 접미가 '|test'이면 TEST 데이터 경로로 mock_data.CSV_PATH 임시 스왑
+    if cache_key and str(cache_key).endswith('|test'):
+        _orig_path = _md.CSV_PATH
+        try:
+            _md.CSV_PATH = _resolve_test_csv_path()
+            return get_combined_data('v2')
+        finally:
+            _md.CSV_PATH = _orig_path
     return get_combined_data('v2')
 
 
@@ -3970,9 +4020,51 @@ def _aica_fallback(q, K):
         return '답변 생성 중 오류가 발생했습니다.'
 
 
-def render():
-    st.markdown('<div class="title-bar">온라인 재고관리 Agent — 운영 대시보드<span class="ver-badge">v0.9</span></div>', unsafe_allow_html=True)
-    # 채널 IN-OUT 제외 — 첫 화면(재배치 기본)부터 적용 (사용자 6/25)
+class _KeyIsolator:
+    """Streamlit widget의 명시적 key에 mode suffix를 자동 부여해 Agent/TEST 상태를 격리."""
+
+    _WIDGET_FNS = (
+        'button', 'download_button', 'form_submit_button', 'toggle', 'checkbox',
+        'radio', 'selectbox', 'multiselect', 'slider', 'select_slider',
+        'text_input', 'text_area', 'number_input', 'date_input', 'time_input',
+        'file_uploader', 'color_picker', 'data_editor',
+    )
+
+    def __init__(self, suffix: str) -> None:
+        self.suffix = suffix
+        self._orig: dict = {}
+
+    def __enter__(self):
+        suffix = self.suffix
+        for fn_name in self._WIDGET_FNS:
+            orig = getattr(st, fn_name, None)
+            if orig is None:
+                continue
+            self._orig[fn_name] = orig
+
+            def _make(o):
+                def _wrapped(*args, **kwargs):
+                    k = kwargs.get('key')
+                    if isinstance(k, str) and not k.endswith(f'__{suffix}'):
+                        kwargs['key'] = f'{k}__{suffix}'
+                    return o(*args, **kwargs)
+                return _wrapped
+
+            setattr(st, fn_name, _make(orig))
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        for fn_name, orig in self._orig.items():
+            setattr(st, fn_name, orig)
+
+
+def _render_dashboard_body(mode: str) -> None:
+    """Agent / TEST 공통 대시보드 body — 데이터 소스만 mode에 따라 다르게 물림."""
+    st.session_state[_REBA_MODE_KEY] = mode
+
+    if mode == 'test':
+        _render_test_source_panel()
+
     try:
         _persist_load_ch_excl()
     except Exception:
@@ -3987,7 +4079,8 @@ def render():
     with col_a:
         st.caption(f'<b>마지막 데이터 갱신</b>: {last}{reorder_txt}', unsafe_allow_html=True)
     with col_b:
-        if st.button('🔄 새로고침', use_container_width=True):
+        if st.button('🔄 새로고침', use_container_width=True, key=f'refresh_{mode}'):
+            st.cache_data.clear()
             st.rerun()
     with col_c:
         st.caption('v0.9')
@@ -4047,5 +4140,65 @@ def render():
         _safe('채널 IN-OUT (MD 기입)', render_excluded_tab)
     with t[10]:
         _safe('리오더 매핑', render_reorder_tab)
+
+
+def _render_test_source_panel() -> None:
+    """TEST 탭 상단 — 현재 데이터 소스 표시 + CSV 업로드 위젯."""
+    import os as _os
+
+    current = _resolve_test_csv_path()
+    from mock_data import CSV_PATH as _AGENT_CSV
+    source_kind = '① 업로드' if current.startswith(_TEST_DATA_DIR) else (
+        '② Snowflake' if 'snowflake_daily' in current else '③ Agent와 동일 (신규 없음)'
+    )
+    try:
+        mtime = _os.path.getmtime(current)
+        import datetime as _dt
+        mtime_str = _dt.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')
+    except Exception:
+        mtime_str = '-'
+
+    with st.container(border=True):
+        st.markdown(
+            f"**🧪 TEST 데이터 소스** — {source_kind}<br>"
+            f"경로 `{current}` · 수정 {mtime_str}",
+            unsafe_allow_html=True,
+        )
+        c1, c2 = st.columns([4, 1])
+        with c1:
+            up = st.file_uploader(
+                '신규 CSV 업로드 (data/test/에 저장 · 업로드 즉시 반영)',
+                type=['csv'], key='test_csv_upload',
+                help='업로드된 CSV가 있으면 최우선으로 사용. Snowflake 결과보다 우선.',
+            )
+            if up is not None:
+                try:
+                    _os.makedirs(_TEST_DATA_DIR, exist_ok=True)
+                    save_path = _os.path.join(_TEST_DATA_DIR, up.name)
+                    with open(save_path, 'wb') as f:
+                        f.write(up.getvalue())
+                    st.success(f'저장 완료 → `{save_path}` · 새로고침하면 반영됩니다.')
+                    st.cache_data.clear()
+                except Exception as e:
+                    st.error(f'업로드 저장 실패: {e}')
+        with c2:
+            if st.button('🗑️ TEST 캐시 비우기', use_container_width=True, key='test_cache_clear'):
+                st.cache_data.clear()
+                st.success('캐시 비움 — 다시 로드합니다.')
+                st.rerun()
+
+
+def render():
+    st.markdown('<div class="title-bar">온라인 재고관리 Agent — 운영 대시보드<span class="ver-badge">v0.9</span></div>', unsafe_allow_html=True)
+
+    outer = st.tabs(['🚀 Agent (운영·시연)', '🧪 TEST (신규 데이터)'])
+
+    with outer[0]:
+        with _KeyIsolator('agent'):
+            _render_dashboard_body('agent')
+
+    with outer[1]:
+        with _KeyIsolator('test'):
+            _render_dashboard_body('test')
 
     st.caption('v2.0 · SPAO 온라인 재고관리 Agent · 6/12 미팅 합의 — 보수 운영')
