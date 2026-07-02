@@ -4113,6 +4113,203 @@ class _KeyIsolator:
             setattr(st, fn_name, orig)
 
 
+def render_summary_tab():
+    """📋 요약 — 김혜인 팀장 요청 5건 통합 뷰.
+    Phase A(실데이터): ③급등·결품 알람 ④랭킹 표기 ⑤이허브내 과재고 ①채널 한판.
+    Phase B(연동 예정): ②사전 리오더 예측 ①밀셀 실분배율 ⑤외부센터 과재고.
+    """
+    from collections import defaultdict
+
+    st.markdown('<div class="title-bar">📋 요약 — 결품 방어 &amp; 물량 확보 한 판'
+                '<span class="ver-badge">A+B</span></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="scenario-box">'
+        '<b>Phase A</b> (실데이터 즉시): 급등·결품 알람 · 랭킹 표기 · 이허브 내 과재고 · 채널 한판'
+        ' &nbsp;|&nbsp; <b>Phase B</b> (데이터 연동 예정): 사전 리오더 예측 · 밀셀 목표 대비 실분배율 · 외부센터 과재고'
+        '</div>', unsafe_allow_html=True)
+
+    skus = load_data_v20(_csv_cache_key())
+    preset = SCENARIOS['🛡️ 기본']
+    params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'],
+                  preset['min_move'], preset['min_recv'], _ch_excl_key(), preset['move_cap_pct'])
+    results = _apply_exclusion(calc_results_v20(params_key, _csv_cache_key()))
+    smap = _load_style_map()
+    LEAD_WEEKS = 6.0    # 리오더 리드타임 가정(약 1.5개월)
+    OVER_WOC = 8.0      # 과재고 기준(재고주수)
+    RANK_TOP = 30       # 밀셀(랭킹) 후보 기준 — 온라인순위 상위
+
+    def _eok(v):
+        return f'{v/1e8:.2f}억'
+
+    ch_ord = defaultdict(int); ch_inv = defaultdict(int)
+    ch_in = defaultdict(int); ch_out = defaultdict(int); ch_short = defaultdict(int)
+    alarms, overs_int, overs_ext, ranks, reorders = [], [], [], [], []
+    total_loss = 0; imminent_n = 0; rank_short_n = 0; reorder_urgent = 0
+
+    for r in results:
+        d = r['data']; code = r['code']; price = d.get('price', 0)
+        name = smap.get(code[:10], d.get('name', '')) or d.get('name', '') or code[:10]
+        ti = sum(d['inv'].get(c, 0) for c in CHANNELS)
+        to = sum(d['orders'].get(c, 0) for c in CHANNELS)
+        woc = (ti / to) if to > 0 else None
+        ro = int(d.get('rank_online', 9999) or 9999)
+        for c in CHANNELS:
+            o = d['orders'].get(c, 0); i = d['inv'].get(c, 0)
+            ch_ord[c] += o; ch_inv[c] += i
+            mv = r['moves'].get(c, 0)
+            if mv > 0: ch_in[c] += mv
+            elif mv < 0: ch_out[c] += -mv
+            if o > 0 and i / o < 1.0: ch_short[c] += 1
+
+        if to > 0 and woc is not None and woc < 1.0:
+            imminent_n += 1
+            short = max(0, int(to * 4 - ti)); loss = short * price
+            total_loss += loss
+            tag = '🔴 결품'
+            if ro <= 50:
+                tag = '🔺 핵심결품'; rank_short_n += 1
+            alarms.append({'태그': tag, '온라인순위': ro, '단품': name, '재고주수': round(woc, 2),
+                           '주간주문': to, '부족(4주)': short, '잠재손실(만원)': loss // 10000})
+
+        if ro <= RANK_TOP:
+            in_mv = sum(v for v in r['moves'].values() if v > 0)
+            short_ch = sum(1 for c in CHANNELS
+                           if d['orders'].get(c, 0) > 0 and
+                           d['inv'].get(c, 0) / max(1, d['orders'].get(c, 0)) < 1.0)
+            ranks.append({'온라인순위': ro, '단품': name,
+                          '재고주수': round(woc, 2) if woc is not None else 0.0,
+                          '결품채널': short_ch, '회전IN(추천)': in_mv})
+
+        if woc is not None and woc >= OVER_WOC and ti >= 50:
+            surplus = int(max(0, (woc - preset['target_woc']) * to))
+            overs_int.append({'단품': name, '재고주수': round(woc, 2), '총재고': ti,
+                              '분배가능(잉여)': surplus, '권고': '자동 회전'})
+
+        if to >= 10 and woc is not None and woc < LEAD_WEEKS + 4:
+            reorder_at = round(woc - LEAD_WEEKS, 1)
+            if reorder_at <= 0:
+                reorder_urgent += 1
+            need = max(0, int(to * (LEAD_WEEKS + preset['target_woc']) - ti))
+            reorders.append({'온라인순위': ro, '단품': name, '재고주수': round(woc, 2),
+                             '예상소진(주)': round(woc, 1),
+                             '리오더시점': '지금' if reorder_at <= 0 else f'{reorder_at}주 후',
+                             '권장수량': need})
+
+        ext = d.get('ext_wh', {}) or {}
+        for c in EXT_CHANNELS:
+            eq = ext.get(c, 0); oc = d['orders'].get(c, 0)
+            if eq >= 30:
+                ewoc = (eq / oc) if oc > 0 else 999.0
+                if ewoc >= OVER_WOC:
+                    overs_ext.append({'채널': CH_SHORT.get(c, c), '단품': name, '외부재고': eq,
+                                      '재고주수(외부)': (round(ewoc, 1) if ewoc < 900 else '판매0'),
+                                      '권고': ('반출' if ewoc >= 12 else '프로모션'), '_s': ewoc})
+
+    rot_amt = sum(r['revenue'] for r in results)
+
+    st.markdown('##### 🎯 오늘의 핵심 지표')
+    k = st.columns(5)
+    _kpi(k[0], '결품 임박 단품', f'{imminent_n:,}개', f'핵심(순위≤50) {rank_short_n}개')
+    _kpi(k[1], '결품 노출액', _eok(total_loss), '4주 부족분 기준')
+    _kpi(k[2], '회전 회수(주)', _eok(rot_amt), f'연환산 {_eok(rot_amt*52)}')
+    _kpi(k[3], '리오더 시급', f'{reorder_urgent:,}개', f'예상소진<{LEAD_WEEKS:.0f}주')
+    _kpi(k[4], '과재고(내/외)', f'{len(overs_int):,}/{len(overs_ext):,}', '회전·프로모션·반출')
+    st.markdown(
+        f'<div class="scenario-box">📌 <b>오늘의 액션</b> — 결품 임박 <b>{imminent_n:,}개</b>'
+        f'(노출액 {_eok(total_loss)}) → 회전으로 <b>{_eok(rot_amt)}/주</b> 회수'
+        f'(연 {_eok(rot_amt*52)}) · 리오더 시급 <b>{reorder_urgent:,}개</b> · '
+        f'과재고 내부 {len(overs_int):,} · 외부 {len(overs_ext):,}</div>',
+        unsafe_allow_html=True)
+
+    def _show(df_rows, woc_cols=(), sort_key=None, ascending=True, drop=(), height=300, fmt=None):
+        if not df_rows:
+            st.info('해당 대상 없음.')
+            return
+        df = pd.DataFrame(df_rows)
+        if sort_key and sort_key in df.columns:
+            df = df.sort_values(sort_key, ascending=ascending)
+        for cdrop in drop:
+            if cdrop in df.columns:
+                df = df.drop(columns=[cdrop])
+        if len(df) > 50:
+            st.caption(f'상위 50건 표시 (전체 {len(df):,}건)')
+        df = df.head(50).reset_index(drop=True)
+        sty = df.style
+        for cc in woc_cols:
+            if cc in df.columns:
+                sty = sty.applymap(woc_color, subset=[cc])
+        if fmt:
+            sty = sty.format(fmt)
+        st.dataframe(sty, use_container_width=True, hide_index=True, height=height)
+
+    st.markdown('---')
+    st.markdown('#### 🚨 ③ 급등·결품 알람 '
+                '<span class="ver-badge" style="background:#1B4D3E;color:#4AE3B5;border-color:#4AE3B5">A</span>',
+                unsafe_allow_html=True)
+    st.caption('온라인 합산 재고주수 < 1주(주문>0) · 잠재손실 큰 순 · 순위≤50 = 핵심결품 🔺')
+    _show(alarms, woc_cols=['재고주수'], sort_key='잠재손실(만원)', ascending=False,
+          height=340, fmt={'잠재손실(만원)': '{:,}', '부족(4주)': '{:,}', '주간주문': '{:,}'})
+    if alarms:
+        try:
+            _adf = pd.DataFrame(sorted(alarms, key=lambda x: -x['잠재손실(만원)']))
+            st.download_button('⬇️ 결품 알람 엑셀', data=_xlsx_bytes({'결품알람': _adf}),
+                               file_name='결품_급등_알람.xlsx', key=f'sum_dl_alarm_{_current_reba_mode()}')
+        except Exception:
+            pass
+
+    st.markdown('#### ⭐ ④ 랭킹상품(밀셀) 현황 '
+                '<span class="ver-badge" style="background:#1B4D3E;color:#4AE3B5;border-color:#4AE3B5">A</span>',
+                unsafe_allow_html=True)
+    st.caption(f'온라인순위 상위 {RANK_TOP} · 랭킹은 급등 잦아 별도 관리 (전 탭 상단 노출 대상)')
+    _show(ranks, woc_cols=['재고주수'], sort_key='온라인순위', ascending=True, height=300)
+
+    st.markdown('#### 📦 ⑤ 이허브 내 과재고 '
+                '<span class="ver-badge" style="background:#1B4D3E;color:#4AE3B5;border-color:#4AE3B5">A</span>',
+                unsafe_allow_html=True)
+    st.caption(f'재고주수 ≥ {OVER_WOC:.0f}주 · 자동 회전(재배치)으로 부족 채널 보충 권고')
+    _show(overs_int, woc_cols=['재고주수'], sort_key='분배가능(잉여)', ascending=False,
+          height=280, fmt={'총재고': '{:,}', '분배가능(잉여)': '{:,}'})
+
+    st.markdown('#### 🧩 ① 채널 한판 '
+                '<span class="ver-badge" style="background:#1B4D3E;color:#4AE3B5;border-color:#4AE3B5">A</span>',
+                unsafe_allow_html=True)
+    st.caption('채널별 주간주문·총재고·재고주수·회전 IN/OUT·결품 단품수 (기본 시나리오)')
+    ch_rows = []
+    for c in CHANNELS:
+        o = ch_ord[c]; i = ch_inv[c]
+        ch_rows.append({'채널': CH_SHORT.get(c, c), '주간주문': o, '총재고': i,
+                        '재고주수': round(i / o, 2) if o > 0 else 0.0,
+                        '회전 IN': ch_in[c], '회전 OUT': ch_out[c], '결품 단품수': ch_short[c]})
+    _show(ch_rows, woc_cols=['재고주수'], sort_key=None, height=260,
+          fmt={'주간주문': '{:,}', '총재고': '{:,}', '회전 IN': '{:,}', '회전 OUT': '{:,}'})
+
+    st.markdown('---')
+    st.markdown('#### 🔮 ② 사전 리오더 예측 '
+                '<span class="ver-badge" style="background:#5A4500;color:#FFC000;border-color:#FFC000">B</span>',
+                unsafe_allow_html=True)
+    st.caption(f'주간주문 10장 이상 · 현 판매속도 기준 예상소진 · 리드타임 {LEAD_WEEKS:.0f}주 역산 → 리오더 시점 '
+               '(PLC·판매가속 반영은 데이터 연동 시 정교화)')
+    _show(reorders, woc_cols=['재고주수'], sort_key='재고주수', ascending=True, height=320,
+          fmt={'권장수량': '{:,}'})
+
+    st.markdown('#### 🎯 ① 밀셀 목표 대비 실분배율 '
+                '<span class="ver-badge" style="background:#5A4500;color:#FFC000;border-color:#FFC000">B</span>',
+                unsafe_allow_html=True)
+    st.info('주차별 목표·플랜트 기준 분배 데이터 연동 필요 (스파오 제공 대기). 아래는 예시 화면입니다.')
+    _demo = pd.DataFrame([
+        {'단품': '(예시) 헬로키티 티', '채널': '무신', '주차목표': 8000, '실분배(플랜트)': 6200, '실분배율': '78%', '판매율': '71%'},
+        {'단품': '(예시) 시그니처 볼캡', '채널': '지재', '주차목표': 5000, '실분배(플랜트)': 4800, '실분배율': '96%', '판매율': '88%'},
+    ])
+    st.dataframe(_demo, use_container_width=True, hide_index=True)
+
+    st.markdown('#### 🏬 ⑤ 외부센터 과재고 '
+                '<span class="ver-badge" style="background:#5A4500;color:#FFC000;border-color:#FFC000">B</span>',
+                unsafe_allow_html=True)
+    st.caption('외부창고(무신 AENS·지재 ADU3·네이 ADQS) 재고주수 과다 → 프로모션(≥8주)·반출(≥12주). 회전 불가분.')
+    _show(overs_ext, woc_cols=[], sort_key='_s', ascending=False, drop=['_s'], height=300,
+          fmt={'외부재고': '{:,}'})
+
+
 def _render_dashboard_body(mode: str) -> None:
     """Agent / TEST 공통 대시보드 body — 데이터 소스만 mode에 따라 다르게 물림."""
     st.session_state[_REBA_MODE_KEY] = mode
@@ -4161,6 +4358,7 @@ def _render_dashboard_body(mode: str) -> None:
         '📊 채널 별 세부',
         '🚫 채널 IN-OUT (MD 기입)',
         '🔁 리오더 매핑 (SCM 기입)',
+        '📋 요약',
     ]
     t = st.tabs(labels)
 
@@ -4193,6 +4391,8 @@ def _render_dashboard_body(mode: str) -> None:
         _safe('채널 IN-OUT (MD 기입)', render_excluded_tab)
     with t[9]:
         _safe('리오더 매핑', render_reorder_tab)
+    with t[10]:
+        _safe('요약', render_summary_tab)
 
 
 def _render_test_source_panel() -> None:
