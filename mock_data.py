@@ -11,7 +11,7 @@
   · 웹에서 갱신 가능: save_reorder_mapping() / parse_reorder_bytes() (앱 '🔁 리오더 매핑' 탭)
 """
 import copy
-import csv, io, os, hashlib
+import csv, io, os, gzip, hashlib
 from datetime import datetime, timedelta
 
 CHANNELS = ['공홈', '이랜드몰', '무신사', '지그재그', '네이버', '카카오선물하기']
@@ -25,12 +25,23 @@ EXT_WAREHOUSE = {
 }
 
 _DIR = os.path.dirname(__file__)
-# 실데이터 자동 감지 — data_spao_YYMMDD.csv 중 가장 최신 (날짜 큰 것) 자동 선택
+# 실데이터 자동 감지 — data_spao_YYMMDD.csv[.gz] 중 가장 최신 (날짜 큰 것) 자동 선택
 # 매일 새 CSV만 push하면 자동 반영 (mock_data.py 수정 불필요)
 import glob as _glob
-_REALS = sorted(_glob.glob(os.path.join(_DIR, 'data_spao_*.csv')), reverse=True)
+_REALS = sorted(
+    _glob.glob(os.path.join(_DIR, 'data_spao_*.csv'))
+    + _glob.glob(os.path.join(_DIR, 'data_spao_*.csv.gz')),
+    reverse=True,
+)
 _MOCK = os.path.join(_DIR, 'sku_master.csv')
 CSV_PATH = _REALS[0] if _REALS else _MOCK
+
+
+def _open_csv(path):
+    """CSV 열기 — .gz면 gzip.open으로 자동 처리 (사용자 7/2)."""
+    if str(path).lower().endswith('.gz'):
+        return gzip.open(path, 'rt', encoding='utf-8-sig')
+    return open(path, encoding='utf-8-sig')
 REORDER_SAVE_PATH = os.path.join(_DIR, 'reorder_mapping.csv')
 
 # 리오더 매핑 파일 후보 (기존코드/리오더코드 — rsc.reorder_style_mapping_spao 추출본)
@@ -146,7 +157,7 @@ def _load_raw():
     if 'raw' in _cache:
         return _cache['raw']
     skus = {}
-    with open(CSV_PATH, encoding='utf-8-sig') as f:
+    with _open_csv(CSV_PATH) as f:
         reader = csv.DictReader(f)
         for row in reader:
             code = row['단품코드'].strip()

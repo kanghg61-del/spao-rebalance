@@ -343,19 +343,30 @@ def _current_reba_mode() -> str:
 
 
 def _resolve_test_csv_path() -> str:
-    """TEST 탭 데이터 경로 결정 — ① data/test/*.csv 최신 파일 → ② Snowflake 결과 → ③ Agent와 동일 fallback."""
+    """TEST 탭 데이터 경로 결정 — ① data/test/*.csv[.gz] 최신 파일 → ② Snowflake 결과 → ③ Agent와 동일 fallback."""
     import os as _os
-    # ① 사용자 업로드된 최신 CSV (수동 우선)
+    # ① 사용자 업로드된 최신 CSV (수동 우선) — .csv 또는 .csv.gz
     try:
-        if _os.path.isdir(_TEST_DATA_DIR):
-            csvs = [f for f in _os.listdir(_TEST_DATA_DIR) if f.lower().endswith('.csv')]
+        # 절대 경로로 변환 (Streamlit Cloud의 cwd가 리포 root인지 확인)
+        test_dir = _TEST_DATA_DIR
+        if not _os.path.isabs(test_dir):
+            # __file__ 기준 절대 경로 우선 시도
+            here = _os.path.dirname(_os.path.abspath(__file__))
+            abs_test_dir = _os.path.join(here, test_dir)
+            if _os.path.isdir(abs_test_dir):
+                test_dir = abs_test_dir
+        if _os.path.isdir(test_dir):
+            csvs = [f for f in _os.listdir(test_dir)
+                    if f.lower().endswith(('.csv', '.csv.gz'))]
             if csvs:
-                csvs.sort(key=lambda f: _os.path.getmtime(_os.path.join(_TEST_DATA_DIR, f)), reverse=True)
-                return _os.path.join(_TEST_DATA_DIR, csvs[0])
+                csvs.sort(key=lambda f: _os.path.getmtime(_os.path.join(test_dir, f)), reverse=True)
+                return _os.path.join(test_dir, csvs[0])
     except Exception:
         pass
     # ② Snowflake 자동 추출 결과 (snowflake_daily 스크립트가 남긴 병합본)
-    for cand in ('snowflake_daily/output/merged_latest.csv', 'snowflake_daily/output/data_spao_latest.csv'):
+    for cand in ('snowflake_daily/output/merged_latest.csv',
+                 'snowflake_daily/output/merged_latest.csv.gz',
+                 'snowflake_daily/output/data_spao_latest.csv'):
         try:
             if _os.path.isfile(cand):
                 return cand
