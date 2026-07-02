@@ -343,27 +343,43 @@ def _current_reba_mode() -> str:
 
 
 def _resolve_test_csv_path() -> str:
-    """TEST 탭 데이터 경로 결정 — ① data/test/*.csv[.gz] 최신 파일 → ② Snowflake 결과 → ③ Agent와 동일 fallback."""
+    """TEST 탭 데이터 경로 결정 — ① data/test/*.csv[.gz] 최신 파일 → ② Snowflake 결과 → ③ Agent와 동일 fallback.
+
+    Streamlit Cloud에서 __file__이 미스레퍼런스될 위험 대응 — 여러 base_dir 후보 순차 탐색.
+    """
     import os as _os
-    # ① 사용자 업로드된 최신 CSV (수동 우선) — .csv 또는 .csv.gz
+    from mock_data import CSV_PATH as _AGENT_CSV
+
+    # 후보 base_dir 리스트 (가장 확실한 것부터 순차 시도)
+    bases: list[str] = []
     try:
-        # 절대 경로로 변환 (Streamlit Cloud의 cwd가 리포 root인지 확인)
-        test_dir = _TEST_DATA_DIR
-        if not _os.path.isabs(test_dir):
-            # __file__ 기준 절대 경로 우선 시도
-            here = _os.path.dirname(_os.path.abspath(__file__))
-            abs_test_dir = _os.path.join(here, test_dir)
-            if _os.path.isdir(abs_test_dir):
-                test_dir = abs_test_dir
-        if _os.path.isdir(test_dir):
-            csvs = [f for f in _os.listdir(test_dir)
-                    if f.lower().endswith(('.csv', '.csv.gz'))]
-            if csvs:
-                csvs.sort(key=lambda f: _os.path.getmtime(_os.path.join(test_dir, f)), reverse=True)
-                return _os.path.join(test_dir, csvs[0])
+        bases.append(_os.path.dirname(_os.path.abspath(_AGENT_CSV)))  # Agent CSV 위치
     except Exception:
         pass
-    # ② Snowflake 자동 추출 결과 (snowflake_daily 스크립트가 남긴 병합본)
+    try:
+        bases.append(_os.path.dirname(_os.path.abspath(__file__)))  # 이 파일 위치
+    except Exception:
+        pass
+    try:
+        bases.append(_os.getcwd())  # 현재 작업 디렉토리
+    except Exception:
+        pass
+    bases.append('')  # 상대 경로 그대로
+
+    # ① 각 base_dir 아래에서 data/test/*.csv[.gz] 최신 파일 찾기
+    for base in bases:
+        try:
+            cand_dir = _os.path.join(base, _TEST_DATA_DIR) if base else _TEST_DATA_DIR
+            if _os.path.isdir(cand_dir):
+                files = [f for f in _os.listdir(cand_dir)
+                         if f.lower().endswith(('.csv', '.csv.gz')) and not f.startswith('.')]
+                if files:
+                    files.sort(key=lambda f: _os.path.getmtime(_os.path.join(cand_dir, f)), reverse=True)
+                    return _os.path.join(cand_dir, files[0])
+        except Exception:
+            continue
+
+    # ② Snowflake 자동 추출 결과
     for cand in ('snowflake_daily/output/merged_latest.csv',
                  'snowflake_daily/output/merged_latest.csv.gz',
                  'snowflake_daily/output/data_spao_latest.csv'):
@@ -372,9 +388,9 @@ def _resolve_test_csv_path() -> str:
                 return cand
         except Exception:
             pass
+
     # ③ Fallback → Agent와 동일 (TEST 소스 아직 없음)
-    from mock_data import CSV_PATH as _P
-    return _P
+    return _AGENT_CSV
 
 
 # CSV 파일 mtime을 캐시 키로 (사용자 6/25 — 새 데이터 자동 인식) + mode 접미 (7/1)
@@ -4039,6 +4055,10 @@ class _KeyIsolator:
         'radio', 'selectbox', 'multiselect', 'slider', 'select_slider',
         'text_input', 'text_area', 'number_input', 'date_input', 'time_input',
         'file_uploader', 'color_picker', 'data_editor',
+        # key 인자를 받는 표시 위젯도 반드시 격리 (사용자 7/2 — dataframe key 충돌 fix)
+        'dataframe', 'form', 'expander', 'chat_input', 'chat_message',
+        'plotly_chart', 'altair_chart', 'metric', 'pills', 'segmented_control',
+        'feedback', 'link_button', 'page_link',
     )
 
     def __init__(self, suffix: str) -> None:
