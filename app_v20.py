@@ -407,18 +407,24 @@ def _csv_cache_key():
         return f'{_P}|{mode}'
 
 
+def _filter_new_products(skus: dict) -> dict:
+    """TEST 탭 신상 필터 — 단품코드 5번째 글자(0-based idx 4)가 'G'인 단품만 유지 (사용자 7/2)."""
+    return {c: d for c, d in skus.items() if len(c) >= 5 and c[4].upper() == 'G'}
+
+
 @st.cache_data(show_spinner=False)
 def load_data_v20(cache_key=None):
     # 캐시 무효화 — CSV mtime 키 변경 시 자동 재로드. 모듈 캐시도 함께 비움.
     import mock_data as _md
     _md._cache.pop('raw', None)
     _md._cache.pop('merged', None)
-    # cache_key 접미가 '|test'이면 TEST 데이터 경로로 mock_data.CSV_PATH 임시 스왑
+    # cache_key 접미가 '|test'이면 TEST 데이터 경로로 mock_data.CSV_PATH 임시 스왑 + 신상 필터
     if cache_key and str(cache_key).endswith('|test'):
         _orig_path = _md.CSV_PATH
         try:
             _md.CSV_PATH = _resolve_test_csv_path()
-            return get_combined_data('v2')
+            skus = get_combined_data('v2')
+            return _filter_new_products(skus)
         finally:
             _md.CSV_PATH = _orig_path
     return get_combined_data('v2')
