@@ -4230,14 +4230,15 @@ def _render_test_source_panel() -> None:
 def render():
     st.markdown('<div class="title-bar">온라인 재고관리 Agent — 운영 대시보드<span class="ver-badge">v0.9</span></div>', unsafe_allow_html=True)
 
-    outer = st.tabs(['🚀 Agent (운영·시연)', '🧪 TEST (신규 데이터)'])
+    # 사용자 7/2 — TEST 탭을 첫 화면으로 (스파오팀과 수치 검증용)
+    outer = st.tabs(['🧪 TEST (신규 데이터)', '🚀 Agent (운영·시연)'])
 
     with outer[0]:
-        with _KeyIsolator('agent'):
-            _render_dashboard_body('agent')
-
-    with outer[1]:
         with _KeyIsolator('test'):
             _render_dashboard_body('test')
+
+    with outer[1]:
+        with _KeyIsolator('agent'):
+            _render_dashboard_body('agent')
 
     st.caption('v2.0 · SPAO 온라인 재고관리 Agent · 6/12 미팅 합의 — 보수 운영')
