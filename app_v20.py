@@ -2245,6 +2245,10 @@ def render_onepan_tab():
     bw_total_qty = 0
     bw_total_amt = 0
     for code, d in skus.items():
+        # 사용자 7/2 — 반응과 재고 0인 단품은 추가 분배 대상 아님 (분배할 재고 없음)
+        bw_q_pre = d['inv'].get(BW_NAME, 0)
+        if bw_q_pre <= 0:
+            continue
         ti = sum(d['inv'].get(ch, 0) for ch in CHANNELS)
         to = sum(d['orders'].get(ch, 0) for ch in CHANNELS)
         if to <= 0 and ti <= 0:
