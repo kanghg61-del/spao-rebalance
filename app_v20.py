@@ -4198,7 +4198,9 @@ def _render_test_source_panel() -> None:
     with st.container(border=True):
         st.markdown(
             f"**🧪 TEST 데이터 소스** — {source_kind}<br>"
-            f"경로 `{current}` · 수정 {mtime_str}",
+            f"경로 `{current}` · 수정 {mtime_str}<br>"
+            f"<span style='color:#4AE3B5; font-weight:bold;'>✨ 신상 필터 적용 중</span> "
+            f"<span style='color:#888;'>— 단품코드 5번째 글자가 <code>G</code>인 상품만 표시</span>",
             unsafe_allow_html=True,
         )
         c1, c2 = st.columns([4, 1])
