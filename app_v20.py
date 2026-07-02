@@ -2315,6 +2315,7 @@ def render_onepan_tab():
         sty = r['스타일코드']
         g = style_grp.setdefault(sty, {'units': [], 'amt': 0, 'qty': 0,
                                        'inv': 0, 'ord': 0,
+                                       'bw_q': 0, 'bw_amt': 0,
                                        'name': smap.get(sty, r['스타일명']),
                                        'topch': r['주력채널'],
                                        'wh_code': r['출고매장코드']})
@@ -2323,11 +2324,16 @@ def render_onepan_tab():
         g['qty'] += r['필업요청(장)']
         g['inv'] += r['현재고']
         g['ord'] += r['주판']
+        # 사용자 7/2 — SUMIF와 같은 반응과 수량·금액 합산 (전체 단품리스트 양식 정합)
+        g['bw_q'] += r['반응과 전체수량']
+        g['bw_amt'] += r['반응과 전체금액(만원)']
     top10 = sorted(style_grp.items(), key=lambda kv: -kv[1]['amt'])[:10]
     if top10 and any(g['amt'] > 0 for _, g in top10):
         top_list = []
         sum_inv = sum_ord = sum_qty = 0
         sum_amt = 0
+        sum_bw_q = 0
+        sum_bw_amt = 0
         for sty, g in top10:
             woc = (g['inv'] / g['ord']) if g['ord'] > 0 else None
             if woc is None: grade = '–'
@@ -2342,6 +2348,8 @@ def render_onepan_tab():
                 '주력채널': g['topch'],
                 '출고매장코드': g['wh_code'],
                 '현재고': g['inv'],
+                '반응과 전체수량': g['bw_q'],
+                '반응과 전체금액(만원)': g['bw_amt'],
                 '주판': g['ord'],
                 '재고주수': round(woc, 1) if woc is not None else None,
                 '필업요청(장)': g['qty'],
@@ -2350,12 +2358,16 @@ def render_onepan_tab():
                 '예상 회수매출(만원)': round(g['amt'] / 10000),
             })
             sum_inv += g['inv']; sum_ord += g['ord']; sum_qty += g['qty']; sum_amt += g['amt']
+            sum_bw_q += g['bw_q']; sum_bw_amt += g['bw_amt']
         woc_sum = (sum_inv / sum_ord) if sum_ord > 0 else None
         woc_sum_after = (sum_inv + sum_qty) / sum_ord if sum_ord > 0 else None
         sum_row = {
             '진단': '— 합계 —', '스타일코드': f'{len(top10)}개', '스타일명': '',
             '주력채널': '-', '출고매장코드': '-',
-            '현재고': sum_inv, '주판': sum_ord,
+            '현재고': sum_inv,
+            '반응과 전체수량': sum_bw_q,
+            '반응과 전체금액(만원)': sum_bw_amt,
+            '주판': sum_ord,
             '재고주수': round(woc_sum, 1) if woc_sum is not None else None,
             '필업요청(장)': sum_qty,
             '필업요청금액(만원)': round(sum_amt / 10000),
@@ -2367,6 +2379,8 @@ def render_onepan_tab():
                       .map(woc_color, subset=['재고주수', '이동 후 재고주수'])
                       .apply(_hl_sum, axis=1)
                       .format({'현재고': '{:,}'.format, '주판': '{:,}'.format,
+                               '반응과 전체수량': '{:,}'.format,
+                               '반응과 전체금액(만원)': '{:,}'.format,
                                '재고주수': lambda v: '' if v is None else f'{v:.1f}',
                                '이동 후 재고주수': lambda v: '' if v is None else f'{v:.1f}',
                                '필업요청(장)': '{:,}'.format,
@@ -4135,6 +4149,7 @@ def _render_dashboard_body(mode: str) -> None:
         unsafe_allow_html=True,
     )
 
+    # 사용자 7/2 — '📦 입고 예정' 탭 제거
     labels = [
         '🛡️ 재배치(기본)',
         '🎛️ 재배치(임의)',
@@ -4144,7 +4159,6 @@ def _render_dashboard_body(mode: str) -> None:
         '🚨 리오더 요청',
         '🏬 통합 재고뷰',
         '📊 채널 별 세부',
-        '📦 입고 예정',
         '🚫 채널 IN-OUT (MD 기입)',
         '🔁 리오더 매핑 (SCM 기입)',
     ]
@@ -4176,10 +4190,8 @@ def _render_dashboard_body(mode: str) -> None:
     with t[7]:
         _safe('채널 별 세부', render_channel_tab)
     with t[8]:
-        _safe('입고 예정', render_inbound_tab)
-    with t[9]:
         _safe('채널 IN-OUT (MD 기입)', render_excluded_tab)
-    with t[10]:
+    with t[9]:
         _safe('리오더 매핑', render_reorder_tab)
 
 
