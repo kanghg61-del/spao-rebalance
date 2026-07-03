@@ -4237,7 +4237,7 @@ def render_summary_tab():
         sty = df.style
         for cc in woc_cols:
             if cc in df.columns:
-                sty = sty.applymap(woc_color, subset=[cc])
+                sty = sty.map(woc_color, subset=[cc])
         if fmt:
             sty = sty.format(fmt)
         st.dataframe(sty, use_container_width=True, hide_index=True, height=height)
@@ -4358,7 +4358,7 @@ def _render_dashboard_body(mode: str) -> None:
         '📊 채널 별 세부',
         '🚫 채널 IN-OUT (MD 기입)',
         '🔁 리오더 매핑 (SCM 기입)',
-        '📋 요약',
+        '📋 요약(TEST)',
     ]
     t = st.tabs(labels)
 
@@ -4392,7 +4392,7 @@ def _render_dashboard_body(mode: str) -> None:
     with t[9]:
         _safe('리오더 매핑', render_reorder_tab)
     with t[10]:
-        _safe('요약', render_summary_tab)
+        _safe('요약(TEST)', render_summary_tab)
 
 
 def _render_test_source_panel() -> None:
