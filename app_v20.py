@@ -4132,7 +4132,9 @@ def render_summary_tab():
     preset = SCENARIOS['🛡️ 기본']
     params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'],
                   preset['min_move'], preset['min_recv'], _ch_excl_key(), preset['move_cap_pct'])
-    results = _apply_exclusion(calc_results_v20(params_key, _csv_cache_key()))
+    # 사용자 7/3 — 요약 탭도 재배치(기본)과 동일 후처리 (_apply_overrides 추가)
+    # 이전에는 _apply_exclusion만 적용해 재배치(기본) 탭과 총 이동량이 다르게 보이는 문제 해결
+    results = _apply_overrides(_apply_exclusion(calc_results_v20(params_key, _csv_cache_key())))
     smap = _load_style_map()
     LEAD_WEEKS = 6.0    # 리오더 리드타임 가정(약 1.5개월)
     OVER_WOC = 8.0      # 과재고 기준(재고주수)
@@ -4213,6 +4215,179 @@ def render_summary_tab():
     _kpi(k[1], '결품 노출액', _eok(total_loss), '4주 부족분 기준')
     _kpi(k[2], '회전 회수(주)', _eok(rot_amt), f'연환산 {_eok(rot_amt*52)}')
     _kpi(k[3], '리오더 시급', f'{reorder_urgent:,}개', f'예상소진<{LEAD_WEEKS:.0f}주')
+    _kpi(k[4], '과재고(내/외)', f'{len(overs_int):,}/{len(overs_ext):,}', '회전·프로모션·반출')
+
+    st.markdown('---')
+    st.markdown('#### 🚨 급등·결품 알람')
+    st.caption('온라인 합산 재고주수 < 1주(주문>0) · 잠재손실 큰 순 · 순위≤50 = 핵심결품 🔺')
+    if alarms:
+        _df = pd.DataFrame(sorted(alarms, key=lambda x: -x['잠재손실(만원)'])).head(50)
+        sty = _df.style.applymap(woc_color, subset=['재고주수']).format(
+            {'잠재손실(만원)': '{:,}', '부족(4주)': '{:,}', '주간주문': '{:,}'}
+        )
+        st.dataframe(sty, use_container_width=True, hide_index=True, height=340)
+    else:
+        st.info('해당 대상 없음.')
+
+    st.markdown('#### 🧩 채널 한판 (기본 시나리오)')
+    ch_rows = []
+    for c in CHANNELS:
+        o = ch_ord[c]; i = ch_inv[c]
+        ch_rows.append({'채널': CH_SHORT.get(c, c), '주간주문': o, '총재고': i,
+                        '재고주수': round(i / o, 2) if o > 0 else 0.0,
+                        '회전 IN': ch_in[c], '회전 OUT': ch_out[c], '결품 단품수': ch_short[c]})
+    _df = pd.DataFrame(ch_rows)
+    sty = _df.style.applymap(woc_color, subset=['재고주수']).format(
+        {'주간주문': '{:,}', '총재고': '{:,}', '회전 IN': '{:,}', '회전 OUT': '{:,}'}
+    )
+    st.dataframe(sty, use_container_width=True, hide_index=True, height=260)
+
+
+def _render_test_source_panel() -> None:
+    """TEST 탭 상단 — 현재 데이터 소스 표시 + CSV 업로드 위젯."""
+    import os as _os
+    current = _resolve_test_csv_path()
+    source_kind = '① 업로드' if current.startswith(_TEST_DATA_DIR) else (
+        '② Snowflake' if 'snowflake_daily' in current else '③ Agent와 동일 (신규 없음)'
+    )
+    try:
+        mtime = _os.path.getmtime(current)
+        import datetime as _dt
+        mtime_str = _dt.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')
+    except Exception:
+        mtime_str = '-'
+
+    with st.container(border=True):
+        st.markdown(
+            f"**🧪 TEST 데이터 소스** — {source_kind}<br>"
+            f"경로 `{current}` · 수정 {mtime_str}<br>"
+            f"<span style='color:#4AE3B5; font-weight:bold;'>✨ 신상 필터 적용 중</span> "
+            f"<span style='color:#888;'>— 단품코드 5번째 글자가 <code>G</code>인 상품만 표시</span>",
+            unsafe_allow_html=True,
+        )
+        c1, c2 = st.columns([4, 1])
+        with c1:
+            up = st.file_uploader(
+                '신규 CSV 업로드 (data/test/에 저장 · 업로드 즉시 반영)',
+                type=['csv'], key='test_csv_upload',
+                help='업로드된 CSV가 있으면 최우선으로 사용. Snowflake 결과보다 우선.',
+            )
+            if up is not None:
+                try:
+                    _os.makedirs(_TEST_DATA_DIR, exist_ok=True)
+                    save_path = _os.path.join(_TEST_DATA_DIR, up.name)
+                    with open(save_path, 'wb') as f:
+                        f.write(up.getvalue())
+                    st.success(f'저장 완료 → `{save_path}` · 새로고침하면 반영됩니다.')
+                    st.cache_data.clear()
+                except Exception as e:
+                    st.error(f'업로드 저장 실패: {e}')
+        with c2:
+            if st.button('🗑️ TEST 캐시 비우기', use_container_width=True, key='test_cache_clear'):
+                st.cache_data.clear()
+                st.success('캐시 비움 — 다시 로드합니다.')
+                st.rerun()
+
+
+def _render_dashboard_body(mode: str) -> None:
+    """Agent / TEST 공통 대시보드 body — 데이터 소스만 mode에 따라 다르게 물림."""
+    st.session_state[_REBA_MODE_KEY] = mode
+
+    if mode == 'test':
+        _render_test_source_panel()
+
+    try:
+        _persist_load_ch_excl()
+    except Exception:
+        pass
+    last = get_last_update_time()
+    reorder_info = get_reorder_info()
+    if reorder_info.get('file'):
+        reorder_txt = f"  ·  리오더 매핑 <b>{reorder_info['file']}</b> ({reorder_info.get('mapping_rows', 0)}건)"
+    else:
+        reorder_txt = ''
+    col_a, col_b, col_c = st.columns([6, 1, 1])
+    with col_a:
+        st.caption(f'<b>마지막 데이터 갱신</b>: {last}{reorder_txt}', unsafe_allow_html=True)
+    with col_b:
+        if st.button('🔄 새로고침', use_container_width=True, key=f'refresh_{mode}'):
+            st.cache_data.clear()
+            st.rerun()
+    with col_c:
+        st.caption('v0.9')
+
+    st.markdown(
+        '<style>'
+        'div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(6),'
+        'div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(9)'
+        '{margin-left:68px;}'
+        '</style>',
+        unsafe_allow_html=True,
+    )
+
+    labels = [
+        '🛡️ 재배치(기본)',
+        '🎛️ 재배치(임의)',
+        '🤖 AI 일일 요약(TEST)',
+        '📈 실행 효과',
+        '🧩 추가 분배',
+        '🚨 리오더 요청',
+        '🏬 통합 재고뷰',
+        '📊 채널 별 세부',
+        '🚫 채널 IN-OUT (MD 기입)',
+        '🔁 리오더 매핑 (SCM 기입)',
+        '📋 요약',
+    ]
+    t = st.tabs(labels)
+
+    def _safe(name, fn):
+        import traceback as _tb
+        try:
+            fn()
+        except Exception as e:
+            st.error(f'⚠️ **[{name}] 탭 렌더 실패** — `{type(e).__name__}: {e}`')
+            with st.expander('🔎 디버그 traceback'):
+                st.code(_tb.format_exc())
+
+    with t[0]:
+        _safe('재배치(기본)', lambda: render_scenario('🛡️ 기본', st, allow_slider=False))
+    with t[1]:
+        _safe('재배치(임의)', lambda: render_scenario('🎛️ 임의', st, allow_slider=True))
+    with t[2]:
+        _safe('AI 일일 요약(TEST)', render_ai_summary_tab)
+    with t[3]:
+        _safe('실행 효과', render_effect_tab)
+    with t[4]:
+        _safe('추가 분배', render_onepan_tab)
+    with t[5]:
+        _safe('리오더 요청', render_reorder_request_tab)
+    with t[6]:
+        _safe('통합 재고뷰', render_unified_tab)
+    with t[7]:
+        _safe('채널 별 세부', render_channel_tab)
+    with t[8]:
+        _safe('채널 IN-OUT (MD 기입)', render_excluded_tab)
+    with t[9]:
+        _safe('리오더 매핑', render_reorder_tab)
+    with t[10]:
+        _safe('요약', render_summary_tab)
+
+
+def render():
+    st.markdown('<div class="title-bar">온라인 재고관리 Agent — 운영 대시보드<span class="ver-badge">v0.9</span></div>', unsafe_allow_html=True)
+
+    # TEST 탭을 첫 화면으로 (스파오팀 수치 검증용)
+    outer = st.tabs(['🧪 TEST (신규 데이터)', '🚀 Agent (운영·시연)'])
+
+    with outer[0]:
+        with _KeyIsolator('test'):
+            _render_dashboard_body('test')
+
+    with outer[1]:
+        with _KeyIsolator('agent'):
+            _render_dashboard_body('agent')
+
+    st.caption('v2.0 · SPAO 온라인 재고관리 Agent · 6/12 미팅 합의 — 보수 운영')')
     _kpi(k[4], '과재고(내/외)', f'{len(overs_int):,}/{len(overs_ext):,}', '회전·프로모션·반출')
     st.markdown(
         f'<div class="scenario-box">📌 <b>오늘의 액션</b> — 결품 임박 <b>{imminent_n:,}개</b>'
