@@ -1604,9 +1604,23 @@ def _persist_load_ch_excl(force: bool = False):
 
     loaded_ok = False
 
+    def _extract_rows(obj):
+        """dict/list 두 형식 모두 처리 (7/8 fix — 재발 방지).
+        - list 그대로 → 반환
+        - dict with 'ch_excl_rows' → 내부 rows 반환
+        - 그 외 → None"""
+        if isinstance(obj, list) and len(obj) > 0:
+            return obj
+        if isinstance(obj, dict):
+            inner = obj.get('ch_excl_rows')
+            if isinstance(inner, list) and len(inner) > 0:
+                return inner
+        return None
+
     # 1) 로컬 파일 시도 — 앱 배포 시 함께 커밋된 파일 (100% 성공)
-    local_rows = _local_load_json('data/ch_excl.json')
-    if local_rows and isinstance(local_rows, list) and len(local_rows) > 0:
+    local_raw = _local_load_json('data/ch_excl.json')
+    local_rows = _extract_rows(local_raw)
+    if local_rows:
         st.session_state['ch_excl_rows'] = _normalize_dates(local_rows)
         loaded_ok = True
 
@@ -1616,8 +1630,9 @@ def _persist_load_ch_excl(force: bool = False):
         st.session_state['excluded_codes'] = set(local_excl.get('codes', []))
 
     # 2) GitHub API 시도 — 웹 편집 실시간 반영 (PAT 있으면 우선 사용)
-    gh_rows, _ = _gh_load('data/ch_excl.json')
-    if gh_rows is not None and isinstance(gh_rows, list) and len(gh_rows) > 0:
+    gh_raw, _ = _gh_load('data/ch_excl.json')
+    gh_rows = _extract_rows(gh_raw)
+    if gh_rows:
         st.session_state['ch_excl_rows'] = _normalize_dates(gh_rows)
         loaded_ok = True
 
