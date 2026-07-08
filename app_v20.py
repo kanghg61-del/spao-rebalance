@@ -165,9 +165,15 @@ def _xlsx_logistics_bytes(sel_items):
         '카카오선물하기': '',
     }
 
+    # 사용자 7/8 결정: 물류용 엑셀 생성 시 실재고 강제 검증.
+    # 각 OUT 이동량이 해당 채널의 실제 EHUB(내부재고) 이내인지 확인 → 초과분은 clamp.
+    # 이전: 재배치 결과 그대로 사용 → 실재고 부족한데 이동수량 요청되는 케이스 발생.
     by_from = {}
     for it in sel_items:
         moves = it.get('moves', {})
+        data = it.get('data', {})
+        inv = data.get('inv', {}) if isinstance(data, dict) else {}
+        ext = data.get('ext_wh', {}) if isinstance(data, dict) else {}
         ins = [(c, q) for c, q in moves.items() if q > 0]
         outs = [(c, -q) for c, q in moves.items() if q < 0]
         if not ins or not outs:
@@ -177,9 +183,11 @@ def _xlsx_logistics_bytes(sel_items):
         for out_ch, out_qty in outs:
             if out_ch == recv_ch:
                 continue
-            qty = min(out_qty, recv_qty)
+            # 실재고 검증: EHUB(내부재고)만 이동 가능
+            i_internal = max(0, int(inv.get(out_ch, 0)) - int(ext.get(out_ch, 0)))
+            qty = min(out_qty, recv_qty, i_internal)   # 실재고 상한 추가
             if qty <= 0:
-                continue
+                continue   # 실재고 0이면 라인 생성 안 함
             by_from.setdefault(out_ch, []).append({
                 'from_ch': out_ch,
                 'from_site': SITE_NAME.get(out_ch, ''),
