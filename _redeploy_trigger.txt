@@ -1,1 +1,2 @@
-
+Redeploy trigger — 2026-07-08T01:04:01Z
+Reason: force Streamlit Cloud full restart to pick up new _xlsx_logistics_bytes (FROM/TO 6-column format).
