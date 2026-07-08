@@ -341,11 +341,30 @@ _MUS_OPT_RX = re.compile(r"\[(\w+)\][^\^]*\^\s*\w*\[(\w+)\]")
 def stage4_ext_wh(inv_ext: dict, name_fallback: dict, price_fallback: dict) -> None:
     log.info("Stage 4: 외부창고 로딩...")
 
-    # ── MUSINSA (KR_MUSINSA_SHIP_QTY 컬럼 사용 · 판매중 필터)
-    path = _find_by_any(["재고_외부_MUSINSA_STOCK_*.csv", "재고_외부_MUSINSA_STOCK*.csv"])
+    # ── MUSINSA (7/9 신규: EDW NAVER_STOCK_★S열 파일 사용 · S열=LOCAL_AVAIL_QTY)
+    # 사용자 7/9 확정: 무신사 재고 파일이 지그재그/네이버와 같은 EDW 형식으로 변경.
+    # 파일명은 (EDW) 재고_내부_NAVER_STOCK_★S열.csv 이지만 실질 = 무신사 위탁창고 재고.
+    # 컬럼: F열(col 5)=SUPPLIER_BARCODE 단품코드(15자리), S열(col 18)=LOCAL_AVAIL_QTY
+    path = _find_by_any([
+        "재고_내부_NAVER_STOCK_*S열*.csv",  # 7/9 신규 파일명
+        "재고_내부_NAVER_STOCK_★S열*.csv",
+        "재고_외부_MUSINSA_STOCK_*.csv",   # 이전 파일명 fallback
+        "재고_외부_MUSINSA_STOCK*.csv",
+    ])
     rows = _read_cp949_csv(path)
     per = defaultdict(int)
+    used_new_schema = False
     for r in rows:
+        # 신규 스키마: SUPPLIER_BARCODE (F열) + LOCAL_AVAIL_QTY (S열)
+        code = str(r.get("SUPPLIER_BARCODE") or "").strip().upper()
+        if code and len(code) >= 12:
+            used_new_schema = True
+            per[code] += _int(r.get("LOCAL_AVAIL_QTY", 0))
+            nm = str(r.get("PRODUCT_NAME") or "").strip()
+            if nm and code not in name_fallback:
+                name_fallback[code] = nm
+            continue
+        # 옛 스키마 fallback: STYLE_NO + OPTION_TXT + KR_MUSINSA_SHIP_QTY
         if str(r.get("USE_YN", "")).strip().lower() != "true":
             continue
         if r.get("STATUS") != "판매중":
@@ -358,13 +377,12 @@ def stage4_ext_wh(inv_ext: dict, name_fallback: dict, price_fallback: dict) -> N
         code = f"{style}{m.group(1).zfill(2)}{m.group(2).zfill(3)}"
         if len(code) < 12:
             continue
-        # ★★★ 사용자 확정: KR_MUSINSA_SHIP_QTY (R열) 사용 ★★★
         per[code] += _int(r.get("KR_MUSINSA_SHIP_QTY", 0))
         nm = str(r.get("PROD_NM") or "").strip()
         if nm and code not in name_fallback:
             name_fallback[code] = nm
     inv_ext["무신사"] = dict(per)
-    log.info(f"  MUSINSA (KR_MUSINSA_SHIP_QTY): {len(per):,}단품, 재고 {sum(per.values()):,}장 [파일: {path.name}]")
+    log.info(f"  MUSINSA ({'LOCAL_AVAIL_QTY(신규)' if used_new_schema else 'KR_MUSINSA_SHIP_QTY(옛)'}): {len(per):,}단품, 재고 {sum(per.values()):,}장 [파일: {path.name}]")
 
     # ── NAVER (ITEM_STATUS='양품' · USE_QTY)
     path = _find_by_any(["재고_외부_NAVER_STOCK_*.csv", "재고_외부_NAVER_STOCK*.csv"])
@@ -584,15 +602,27 @@ def _parse_zigzag_order_csv(path: Path, per: dict) -> None:
 def stage6_orders_ext(ord_ext: dict) -> None:
     log.info("Stage 6: 외부 주문 로딩 (EDW CSV, 7/7 신규 구조)...")
 
-    # ── MUSINSA (외부(내부포함) 파일 하나) ──
+    # ── MUSINSA (7/9 신규: 내부/외부 두 파일 합산 · 지그재그와 동일 처리)
+    # 이전: 외부(내부포함) 파일 하나. 7/9부터 지그재그처럼 내부+외부 두 파일 분리 → 합산.
     per: dict = defaultdict(int)
-    path = _find_by_any([
-        "주문_외부(내부포함)_MUSINSA_단품명필요*.csv",
-        "주문_내부+외부_무신사*.csv",
-    ])
-    _parse_musinsa_order_csv(path, per)
+    for patterns in (
+        ["주문_내부_MUSINSA_단품명필요*.csv"],
+        ["주문_외부_MUSINSA_단품명필요*.csv"],
+        # 옛 통합 파일명 fallback
+        ["주문_외부(내부포함)_MUSINSA_단품명필요*.csv"],
+        ["주문_내부+외부_무신사*.csv"],
+    ):
+        try:
+            path = _find_by_any(patterns)
+        except FileNotFoundError:
+            continue
+        before = sum(per.values())
+        _parse_musinsa_order_csv(path, per)
+        added = sum(per.values()) - before
+        if added > 0:
+            log.info(f"  MUSINSA[{path.name}]: +{added:,}주문")
     ord_ext["무신사"] = dict(per)
-    log.info(f"  MUSINSA: {sum(per.values()):,}주문 ({len(per):,}단품) [{path.name}]")
+    log.info(f"  MUSINSA 합계: {sum(per.values()):,}주문 ({len(per):,}단품)")
 
     # ── NAVER (외부(내부포함) 파일 하나) ──
     per = defaultdict(int)
@@ -645,15 +675,20 @@ def stage6b_price_fallback(price_fallback: dict) -> None:
     log.info(f"  ZIGZAG 정상가 fallback: +{add}")
 
     # MUSINSA — PRICE / 0.85 = 정상가 역산 (NORMAL_PRICE 있으면 우선 사용)
+    # 7/9 신규: 내부/외부 두 파일 지원 (지그재그와 동일 구조)
     add = 0
-    try:
-        path = _find_by_any([
-            "주문_외부(내부포함)_MUSINSA_단품명필요*.csv",
-            "주문_내부+외부_무신사*.csv",
-        ])
-    except FileNotFoundError:
-        path = None
-    if path:
+    musinsa_paths = []
+    for patterns in (
+        ["주문_내부_MUSINSA_단품명필요*.csv"],
+        ["주문_외부_MUSINSA_단품명필요*.csv"],
+        ["주문_외부(내부포함)_MUSINSA_단품명필요*.csv"],
+        ["주문_내부+외부_무신사*.csv"],
+    ):
+        try:
+            musinsa_paths.append(_find_by_any(patterns))
+        except FileNotFoundError:
+            continue
+    for path in musinsa_paths:
         for r in _read_cp949_csv(path):
             style = str(r.get("STYLE_NO") or "").strip().upper() or _extract_style(
                 str(r.get("GOODS_NM") or "")
