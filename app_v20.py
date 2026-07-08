@@ -144,78 +144,85 @@ DEFAULT_PLAN_LIST = [
 
 
 def _xlsx_logistics_bytes(sel_items):
-    """물류용 엑셀 — 받는 채널(IN)별 시트 분리. 사용자 6/25 메일 양식.
-    시트별: 본문 텍스트 4줄 + 표(사이트/상품코드/상품명/스타일/색상코드/사이즈코드/규격/시즌/➤매장코드)
-    시즌: 상품코드 6번째 글자(1=봄,2=여름,3=가을,4=겨울,A=사계절). 규격: 일반상품 고정.
+    """물류용 엑셀 — 보내는 채널(FROM)별 시트 분리. 2026-07-08 개정 양식.
+
+    컬럼: FROM 채널명 · FROM 사이트 · 상품코드 · 이동수량 · TO 채널명 · TO 사이트
+    - 시트: 보내는 채널(FROM)별 분리
+    - 사이트명: 무신사→MUSINSA, 이랜드몰→TOTAL_MALL, 나머지 공란 (SAP 매핑 확정 전).
+    - 단품당 IN 1채널 정책(6/25) 유지: ins[0] 기준.
     """
     import io
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-    SEASON_MAP = {'1': '봄', '2': '여름', '3': '가을', '4': '겨울', 'A': '사계절'}
+    from openpyxl.utils import get_column_letter
+
     SITE_NAME = {
-        '공홈': '공홈', '이랜드몰': '이랜드몰', '무신사': '무신사',
-        '지그재그': '지그재그', '네이버': '네이버', '카카오선물하기': '카카오톡선물하기',
+        '무신사': 'MUSINSA',
+        '이랜드몰': 'TOTAL_MALL',
+        '공홈': '',
+        '지그재그': '',
+        '네이버': '',
+        '카카오선물하기': '',
     }
-    by_recv = {}  # recv_ch -> [{out_ch,code,name,qty}]
+
+    by_from = {}
     for it in sel_items:
         moves = it.get('moves', {})
         ins = [(c, q) for c, q in moves.items() if q > 0]
         outs = [(c, -q) for c, q in moves.items() if q < 0]
         if not ins or not outs:
             continue
-        # 단품당 IN 1채널 정책 — 첫 번째만 사용 (사용자 6/25)
         recv_ch, recv_qty = ins[0]
+        code = it['code']
         for out_ch, out_qty in outs:
             if out_ch == recv_ch:
                 continue
             qty = min(out_qty, recv_qty)
             if qty <= 0:
                 continue
-            by_recv.setdefault(recv_ch, []).append({
-                'out_ch': out_ch, 'code': it['code'],
-                'name': it['data'].get('name', ''), 'qty': qty,
+            by_from.setdefault(out_ch, []).append({
+                'from_ch': out_ch,
+                'from_site': SITE_NAME.get(out_ch, ''),
+                'code': code,
+                'qty': qty,
+                'to_ch': recv_ch,
+                'to_site': SITE_NAME.get(recv_ch, ''),
             })
 
     wb = Workbook()
     wb.remove(wb.active)
-    hdr_fill = PatternFill('solid', fgColor='4472C4')
-    hdr_font = Font(color='FFFFFF', bold=True, size=11)
+
+    hdr_fill = PatternFill('solid', fgColor='C6EFCE')
+    hdr_font = Font(color='000000', bold=True, size=11)
     body_font = Font(size=10)
     thin = Side(border_style='thin', color='888888')
     bdr = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    for recv_ch, rows in by_recv.items():
-        recv_code = WAREHOUSE_CODE.get(recv_ch, '-')
-        recv_name = SITE_NAME.get(recv_ch, recv_ch)
-        ws = wb.create_sheet(f'{recv_name}_{recv_code}'[:31])
-        # 표만 노출 — 본문 텍스트 제거 (사용자 6/25)
-        # 표 헤더 row 1
-        headers = ['사이트', '상품코드', '상품명', '스타일', '색상코드', '사이즈코드', '규격', '시즌', f'➤ {recv_code}']
+    headers = ['FROM 채널명', 'FROM 사이트', '상품코드', '이동수량', 'TO 채널명', 'TO 사이트']
+    widths = [14, 16, 20, 12, 14, 16]
+
+    for from_ch in sorted(by_from.keys()):
+        rows = by_from[from_ch]
+        ws = wb.create_sheet(from_ch[:31])
         for i, h in enumerate(headers, 1):
             c = ws.cell(row=1, column=i, value=h)
             c.fill = hdr_fill
             c.font = hdr_font
             c.alignment = Alignment(horizontal='center', vertical='center')
             c.border = bdr
-        # 데이터 row 2~
-        for r_idx, r in enumerate(sorted(rows, key=lambda x: (x['out_ch'], x['code'])), start=2):
-            code = r['code']
-            sty = code[:10]
-            color = code[10:12]
-            size = code[12:15]
-            season = SEASON_MAP.get(code[5:6] if len(code) >= 6 else '', '')
-            values = [SITE_NAME.get(r['out_ch'], r['out_ch']), code, r['name'], sty,
-                      color, size, '일반상품', season, r['qty']]
+        for r_idx, r in enumerate(sorted(rows, key=lambda x: (x['to_ch'], x['code'])), start=2):
+            values = [r['from_ch'], r['from_site'], r['code'], r['qty'], r['to_ch'], r['to_site']]
             for i, v in enumerate(values, 1):
                 cell = ws.cell(row=r_idx, column=i, value=v)
                 cell.border = bdr
                 cell.font = body_font
-                if i == 9:
-                    cell.alignment = Alignment(horizontal='right')
-        widths = [18, 18, 40, 14, 9, 9, 11, 9, 12]
+                cell.alignment = Alignment(
+                    horizontal='right' if i == 4 else 'center',
+                    vertical='center',
+                )
         for i, w in enumerate(widths, 1):
-            from openpyxl.utils import get_column_letter
             ws.column_dimensions[get_column_letter(i)].width = w
+
     if not wb.sheetnames:
         ws = wb.create_sheet('빈 결과')
         ws['A1'] = '선택된 회전 결과가 없습니다.'
@@ -4132,7 +4139,9 @@ def render_summary_tab():
     preset = SCENARIOS['🛡️ 기본']
     params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'],
                   preset['min_move'], preset['min_recv'], _ch_excl_key(), preset['move_cap_pct'])
-    results = _apply_exclusion(calc_results_v20(params_key, _csv_cache_key()))
+    # 사용자 7/3 — 요약 탭도 재배치(기본)과 동일 후처리 (_apply_overrides 추가)
+    # 이전에는 _apply_exclusion만 적용해 재배치(기본) 탭과 총 이동량이 다르게 보이는 문제 해결
+    results = _apply_overrides(_apply_exclusion(calc_results_v20(params_key, _csv_cache_key())))
     smap = _load_style_map()
     LEAD_WEEKS = 6.0    # 리오더 리드타임 가정(약 1.5개월)
     OVER_WOC = 8.0      # 과재고 기준(재고주수)
@@ -4214,193 +4223,37 @@ def render_summary_tab():
     _kpi(k[2], '회전 회수(주)', _eok(rot_amt), f'연환산 {_eok(rot_amt*52)}')
     _kpi(k[3], '리오더 시급', f'{reorder_urgent:,}개', f'예상소진<{LEAD_WEEKS:.0f}주')
     _kpi(k[4], '과재고(내/외)', f'{len(overs_int):,}/{len(overs_ext):,}', '회전·프로모션·반출')
-    st.markdown(
-        f'<div class="scenario-box">📌 <b>오늘의 액션</b> — 결품 임박 <b>{imminent_n:,}개</b>'
-        f'(노출액 {_eok(total_loss)}) → 회전으로 <b>{_eok(rot_amt)}/주</b> 회수'
-        f'(연 {_eok(rot_amt*52)}) · 리오더 시급 <b>{reorder_urgent:,}개</b> · '
-        f'과재고 내부 {len(overs_int):,} · 외부 {len(overs_ext):,}</div>',
-        unsafe_allow_html=True)
-
-    def _show(df_rows, woc_cols=(), sort_key=None, ascending=True, drop=(), height=300, fmt=None):
-        if not df_rows:
-            st.info('해당 대상 없음.')
-            return
-        df = pd.DataFrame(df_rows)
-        if sort_key and sort_key in df.columns:
-            df = df.sort_values(sort_key, ascending=ascending)
-        for cdrop in drop:
-            if cdrop in df.columns:
-                df = df.drop(columns=[cdrop])
-        if len(df) > 50:
-            st.caption(f'상위 50건 표시 (전체 {len(df):,}건)')
-        df = df.head(50).reset_index(drop=True)
-        sty = df.style
-        for cc in woc_cols:
-            if cc in df.columns:
-                sty = sty.map(woc_color, subset=[cc])
-        if fmt:
-            sty = sty.format(fmt)
-        st.dataframe(sty, use_container_width=True, hide_index=True, height=height)
 
     st.markdown('---')
-    st.markdown('#### 🚨 ③ 급등·결품 알람 '
-                '<span class="ver-badge" style="background:#1B4D3E;color:#4AE3B5;border-color:#4AE3B5">A</span>',
-                unsafe_allow_html=True)
+    st.markdown('#### 🚨 급등·결품 알람')
     st.caption('온라인 합산 재고주수 < 1주(주문>0) · 잠재손실 큰 순 · 순위≤50 = 핵심결품 🔺')
-    _show(alarms, woc_cols=['재고주수'], sort_key='잠재손실(만원)', ascending=False,
-          height=340, fmt={'잠재손실(만원)': '{:,}', '부족(4주)': '{:,}', '주간주문': '{:,}'})
     if alarms:
-        try:
-            _adf = pd.DataFrame(sorted(alarms, key=lambda x: -x['잠재손실(만원)']))
-            st.download_button('⬇️ 결품 알람 엑셀', data=_xlsx_bytes({'결품알람': _adf}),
-                               file_name='결품_급등_알람.xlsx', key=f'sum_dl_alarm_{_current_reba_mode()}')
-        except Exception:
-            pass
+        _df = pd.DataFrame(sorted(alarms, key=lambda x: -x['잠재손실(만원)'])).head(50)
+        sty = _df.style.applymap(woc_color, subset=['재고주수']).format(
+            {'잠재손실(만원)': '{:,}', '부족(4주)': '{:,}', '주간주문': '{:,}'}
+        )
+        st.dataframe(sty, use_container_width=True, hide_index=True, height=340)
+    else:
+        st.info('해당 대상 없음.')
 
-    st.markdown('#### ⭐ ④ 랭킹상품(밀셀) 현황 '
-                '<span class="ver-badge" style="background:#1B4D3E;color:#4AE3B5;border-color:#4AE3B5">A</span>',
-                unsafe_allow_html=True)
-    st.caption(f'온라인순위 상위 {RANK_TOP} · 랭킹은 급등 잦아 별도 관리 (전 탭 상단 노출 대상)')
-    _show(ranks, woc_cols=['재고주수'], sort_key='온라인순위', ascending=True, height=300)
-
-    st.markdown('#### 📦 ⑤ 이허브 내 과재고 '
-                '<span class="ver-badge" style="background:#1B4D3E;color:#4AE3B5;border-color:#4AE3B5">A</span>',
-                unsafe_allow_html=True)
-    st.caption(f'재고주수 ≥ {OVER_WOC:.0f}주 · 자동 회전(재배치)으로 부족 채널 보충 권고')
-    _show(overs_int, woc_cols=['재고주수'], sort_key='분배가능(잉여)', ascending=False,
-          height=280, fmt={'총재고': '{:,}', '분배가능(잉여)': '{:,}'})
-
-    st.markdown('#### 🧩 ① 채널 한판 '
-                '<span class="ver-badge" style="background:#1B4D3E;color:#4AE3B5;border-color:#4AE3B5">A</span>',
-                unsafe_allow_html=True)
-    st.caption('채널별 주간주문·총재고·재고주수·회전 IN/OUT·결품 단품수 (기본 시나리오)')
+    st.markdown('#### 🧩 채널 한판 (기본 시나리오)')
     ch_rows = []
     for c in CHANNELS:
         o = ch_ord[c]; i = ch_inv[c]
         ch_rows.append({'채널': CH_SHORT.get(c, c), '주간주문': o, '총재고': i,
                         '재고주수': round(i / o, 2) if o > 0 else 0.0,
                         '회전 IN': ch_in[c], '회전 OUT': ch_out[c], '결품 단품수': ch_short[c]})
-    _show(ch_rows, woc_cols=['재고주수'], sort_key=None, height=260,
-          fmt={'주간주문': '{:,}', '총재고': '{:,}', '회전 IN': '{:,}', '회전 OUT': '{:,}'})
-
-    st.markdown('---')
-    st.markdown('#### 🔮 ② 사전 리오더 예측 '
-                '<span class="ver-badge" style="background:#5A4500;color:#FFC000;border-color:#FFC000">B</span>',
-                unsafe_allow_html=True)
-    st.caption(f'주간주문 10장 이상 · 현 판매속도 기준 예상소진 · 리드타임 {LEAD_WEEKS:.0f}주 역산 → 리오더 시점 '
-               '(PLC·판매가속 반영은 데이터 연동 시 정교화)')
-    _show(reorders, woc_cols=['재고주수'], sort_key='재고주수', ascending=True, height=320,
-          fmt={'권장수량': '{:,}'})
-
-    st.markdown('#### 🎯 ① 밀셀 목표 대비 실분배율 '
-                '<span class="ver-badge" style="background:#5A4500;color:#FFC000;border-color:#FFC000">B</span>',
-                unsafe_allow_html=True)
-    st.info('주차별 목표·플랜트 기준 분배 데이터 연동 필요 (스파오 제공 대기). 아래는 예시 화면입니다.')
-    _demo = pd.DataFrame([
-        {'단품': '(예시) 헬로키티 티', '채널': '무신', '주차목표': 8000, '실분배(플랜트)': 6200, '실분배율': '78%', '판매율': '71%'},
-        {'단품': '(예시) 시그니처 볼캡', '채널': '지재', '주차목표': 5000, '실분배(플랜트)': 4800, '실분배율': '96%', '판매율': '88%'},
-    ])
-    st.dataframe(_demo, use_container_width=True, hide_index=True)
-
-    st.markdown('#### 🏬 ⑤ 외부센터 과재고 '
-                '<span class="ver-badge" style="background:#5A4500;color:#FFC000;border-color:#FFC000">B</span>',
-                unsafe_allow_html=True)
-    st.caption('외부창고(무신 AENS·지재 ADU3·네이 ADQS) 재고주수 과다 → 프로모션(≥8주)·반출(≥12주). 회전 불가분.')
-    _show(overs_ext, woc_cols=[], sort_key='_s', ascending=False, drop=['_s'], height=300,
-          fmt={'외부재고': '{:,}'})
-
-
-def _render_dashboard_body(mode: str) -> None:
-    """Agent / TEST 공통 대시보드 body — 데이터 소스만 mode에 따라 다르게 물림."""
-    st.session_state[_REBA_MODE_KEY] = mode
-
-    if mode == 'test':
-        _render_test_source_panel()
-
-    try:
-        _persist_load_ch_excl()
-    except Exception:
-        pass
-    last = get_last_update_time()
-    reorder_info = get_reorder_info()
-    if reorder_info.get('file'):
-        reorder_txt = f"  ·  리오더 매핑 <b>{reorder_info['file']}</b> ({reorder_info.get('mapping_rows', 0)}건)"
-    else:
-        reorder_txt = ''
-    col_a, col_b, col_c = st.columns([6, 1, 1])
-    with col_a:
-        st.caption(f'<b>마지막 데이터 갱신</b>: {last}{reorder_txt}', unsafe_allow_html=True)
-    with col_b:
-        if st.button('🔄 새로고침', use_container_width=True, key=f'refresh_{mode}'):
-            st.cache_data.clear()
-            st.rerun()
-    with col_c:
-        st.caption('v0.9')
-
-    st.markdown(
-        '<style>'
-        'div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(6),'
-        'div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(9)'
-        '{margin-left:68px;}'
-        '</style>',
-        unsafe_allow_html=True,
+    _df = pd.DataFrame(ch_rows)
+    sty = _df.style.applymap(woc_color, subset=['재고주수']).format(
+        {'주간주문': '{:,}', '총재고': '{:,}', '회전 IN': '{:,}', '회전 OUT': '{:,}'}
     )
-
-    # 사용자 7/2 — '📦 입고 예정' 탭 제거
-    labels = [
-        '🛡️ 재배치(기본)',
-        '🎛️ 재배치(임의)',
-        '🤖 AI 일일 요약(TEST)',
-        '📈 실행 효과',
-        '🧩 추가 분배',
-        '🚨 리오더 요청',
-        '🏬 통합 재고뷰',
-        '📊 채널 별 세부',
-        '🚫 채널 IN-OUT (MD 기입)',
-        '🔁 리오더 매핑 (SCM 기입)',
-        '📋 요약(TEST)',
-    ]
-    t = st.tabs(labels)
-
-    def _safe(name, fn):
-        import traceback as _tb
-        try:
-            fn()
-        except Exception as e:
-            st.error(f'⚠️ **[{name}] 탭 렌더 실패** — `{type(e).__name__}: {e}`')
-            with st.expander('🔎 디버그 traceback'):
-                st.code(_tb.format_exc())
-
-    with t[0]:
-        _safe('재배치(기본)', lambda: render_scenario('🛡️ 기본', st, allow_slider=False))
-    with t[1]:
-        _safe('재배치(임의)', lambda: render_scenario('🎛️ 임의', st, allow_slider=True))
-    with t[2]:
-        _safe('AI 일일 요약(TEST)', render_ai_summary_tab)
-    with t[3]:
-        _safe('실행 효과', render_effect_tab)
-    with t[4]:
-        _safe('추가 분배', render_onepan_tab)
-    with t[5]:
-        _safe('리오더 요청', render_reorder_request_tab)
-    with t[6]:
-        _safe('통합 재고뷰', render_unified_tab)
-    with t[7]:
-        _safe('채널 별 세부', render_channel_tab)
-    with t[8]:
-        _safe('채널 IN-OUT (MD 기입)', render_excluded_tab)
-    with t[9]:
-        _safe('리오더 매핑', render_reorder_tab)
-    with t[10]:
-        _safe('요약(TEST)', render_summary_tab)
+    st.dataframe(sty, use_container_width=True, hide_index=True, height=260)
 
 
 def _render_test_source_panel() -> None:
     """TEST 탭 상단 — 현재 데이터 소스 표시 + CSV 업로드 위젯."""
     import os as _os
-
     current = _resolve_test_csv_path()
-    from mock_data import CSV_PATH as _AGENT_CSV
     source_kind = '① 업로드' if current.startswith(_TEST_DATA_DIR) else (
         '② Snowflake' if 'snowflake_daily' in current else '③ Agent와 동일 (신규 없음)'
     )
@@ -4443,10 +4296,94 @@ def _render_test_source_panel() -> None:
                 st.rerun()
 
 
+def _render_dashboard_body(mode: str) -> None:
+    """Agent / TEST 공통 대시보드 body — 데이터 소스만 mode에 따라 다르게 물림."""
+    st.session_state[_REBA_MODE_KEY] = mode
+
+    if mode == 'test':
+        _render_test_source_panel()
+
+    try:
+        _persist_load_ch_excl()
+    except Exception:
+        pass
+    last = get_last_update_time()
+    reorder_info = get_reorder_info()
+    if reorder_info.get('file'):
+        reorder_txt = f"  ·  리오더 매핑 <b>{reorder_info['file']}</b> ({reorder_info.get('mapping_rows', 0)}건)"
+    else:
+        reorder_txt = ''
+    col_a, col_b, col_c = st.columns([6, 1, 1])
+    with col_a:
+        st.caption(f'<b>마지막 데이터 갱신</b>: {last}{reorder_txt}', unsafe_allow_html=True)
+    with col_b:
+        if st.button('🔄 새로고침', use_container_width=True, key=f'refresh_{mode}'):
+            st.cache_data.clear()
+            st.rerun()
+    with col_c:
+        st.caption('v0.9')
+
+    st.markdown(
+        '<style>'
+        'div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(6),'
+        'div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(9)'
+        '{margin-left:68px;}'
+        '</style>',
+        unsafe_allow_html=True,
+    )
+
+    labels = [
+        '🛡️ 재배치(기본)',
+        '🎛️ 재배치(임의)',
+        '🤖 AI 일일 요약(TEST)',
+        '📈 실행 효과',
+        '🧩 추가 분배',
+        '🚨 리오더 요청',
+        '🏬 통합 재고뷰',
+        '📊 채널 별 세부',
+        '🚫 채널 IN-OUT (MD 기입)',
+        '🔁 리오더 매핑 (SCM 기입)',
+        '📋 요약',
+    ]
+    t = st.tabs(labels)
+
+    def _safe(name, fn):
+        import traceback as _tb
+        try:
+            fn()
+        except Exception as e:
+            st.error(f'⚠️ **[{name}] 탭 렌더 실패** — `{type(e).__name__}: {e}`')
+            with st.expander('🔎 디버그 traceback'):
+                st.code(_tb.format_exc())
+
+    with t[0]:
+        _safe('재배치(기본)', lambda: render_scenario('🛡️ 기본', st, allow_slider=False))
+    with t[1]:
+        _safe('재배치(임의)', lambda: render_scenario('🎛️ 임의', st, allow_slider=True))
+    with t[2]:
+        _safe('AI 일일 요약(TEST)', render_ai_summary_tab)
+    with t[3]:
+        _safe('실행 효과', render_effect_tab)
+    with t[4]:
+        _safe('추가 분배', render_onepan_tab)
+    with t[5]:
+        _safe('리오더 요청', render_reorder_request_tab)
+    with t[6]:
+        _safe('통합 재고뷰', render_unified_tab)
+    with t[7]:
+        _safe('채널 별 세부', render_channel_tab)
+    with t[8]:
+        _safe('채널 IN-OUT (MD 기입)', render_excluded_tab)
+    with t[9]:
+        _safe('리오더 매핑', render_reorder_tab)
+    with t[10]:
+        _safe('요약', render_summary_tab)
+
+
 def render():
     st.markdown('<div class="title-bar">온라인 재고관리 Agent — 운영 대시보드<span class="ver-badge">v0.9</span></div>', unsafe_allow_html=True)
 
-    # 사용자 7/2 — TEST 탭을 첫 화면으로 (스파오팀과 수치 검증용)
+    # TEST 탭을 첫 화면으로 (스파오팀 수치 검증용)
     outer = st.tabs(['🧪 TEST (신규 데이터)', '🚀 Agent (운영·시연)'])
 
     with outer[0]:
