@@ -509,15 +509,14 @@ def _apply_overrides(results):
 
 
 def _ch_excl_key():
-    """채널별 IN/OUT 제외 — ch_excl_rows 통합 구조.
-
-    사용자 7/8 최종 확정: **등록된 규칙은 무조건 활성** (날짜 필터 완전 제거).
-    스크린샷의 '오늘 활성 0/0' 이슈 근본 원인이던 date parsing 문제 제거.
-    """
+    """채널별 IN/OUT 제외 — ch_excl_rows 통합 구조 (스타일 + 시작일 + 종료일).
+    시작일/종료일이 비어 있으면 영구 적용, 둘 다 있으면 오늘 ∈ [시작, 종료] 일 때만 활성."""
+    from datetime import date as _date
+    today = _date.today()
     rows = st.session_state.get('ch_excl_rows', [])
     # 레거시: 기존 ch_excl 텍스트영역 데이터도 흡수
     legacy = st.session_state.get('ch_excl', {})
-    merged: dict = {}  # ch -> {'in': set, 'out': set}
+    merged = {}  # ch -> {'in': set, 'out': set}
     for ch in CHANNELS:
         for dr in ('in', 'out'):
             pats = set(legacy.get(ch, {}).get(dr, []))
@@ -530,7 +529,16 @@ def _ch_excl_key():
             pat = (row.get('스타일') or row.get('스타일 패턴') or '').strip()
             if not (ch and direction in ('in', 'out') and pat):
                 continue
-            # 날짜 필터 완전 제거 — 등록된 규칙은 무조건 활성 (사용자 7/8 최종 확정)
+            start = row.get('시작일')
+            end = row.get('종료일')
+            if start or end:
+                # 기간 지정 — 둘 다 있어야 활성
+                if not (start and end):
+                    continue
+                s = start if hasattr(start, 'toordinal') else _date.fromisoformat(str(start)[:10])
+                e = end if hasattr(end, 'toordinal') else _date.fromisoformat(str(end)[:10])
+                if not (s <= today <= e):
+                    continue
             merged.setdefault(ch, {}).setdefault(direction, set()).add(pat)
         except Exception:
             continue
@@ -1565,12 +1573,21 @@ def _persist_load_ch_excl(force: bool = False):
       1) 로컬 파일 (data/ch_excl.json) — 배포 리포에 포함, 100% 성공
       2) GitHub API — 사용자가 웹에서 편집한 최신 상태가 있으면 덮어씀 (PAT 필요)
     로드 실패 시 _ch_excl_loaded 를 True 로 만들지 않아 다음 렌더에서 자동 재시도.
+
+    7/8 개선 (사용자 리포트): 60초 TTL 자동 재로드 — 세션 유지 상태에서 GH 갱신
+    되어도 최대 60초 안에 반영. 이전 세션 캐시로 인해 새 규칙 놓치는 문제 근본 해결.
     """
-    # 이미 성공 로드된 세션은 skip (force=True 면 재로드)
+    import time as _time
+    _now = _time.time()
+    _last_check = st.session_state.get('_ch_excl_last_check', 0)
+    _TTL_SEC = 60
+
+    # 60초 TTL: 이미 로드됐어도 60초 지났으면 강제 재로드
     if not force and st.session_state.get('_ch_excl_loaded'):
         _rows_cached = st.session_state.get('ch_excl_rows') or []
-        if _rows_cached:
+        if _rows_cached and (_now - _last_check) < _TTL_SEC:
             return
+    st.session_state['_ch_excl_last_check'] = _now
 
     from datetime import date as _date
 
