@@ -692,6 +692,13 @@ def _chan_recovery_bar(items):
 def render_scenario(scenario_key, container, allow_slider=False):
     preset = SCENARIOS[scenario_key]
 
+    # 사용자 7/8 — ch_excl 로드 재확인 (이전 세션에서 로드 실패했다면 재시도)
+    try:
+        if not (st.session_state.get('ch_excl_rows') or []):
+            _persist_load_ch_excl()
+    except Exception:
+        pass
+
     ship_th = 0.0
     if allow_slider:
         container.markdown('### 🎛️ 사용자 정의 기준')
@@ -723,10 +730,28 @@ def render_scenario(scenario_key, container, allow_slider=False):
     st.session_state['_last_params_key'] = _new_pkey
 
     with st.spinner('계산 중...'):
-        params_key = (shortage_th, target_woc, ship_th, min_move, min_recv, _ch_excl_key(), move_cap_pct)
+        _ch_excl_active = _ch_excl_key()
+        params_key = (shortage_th, target_woc, ship_th, min_move, min_recv, _ch_excl_active, move_cap_pct)
         results = calc_results_v20(params_key, _csv_cache_key())
     results = _apply_exclusion(results)
     results = _apply_overrides(results)
+
+    # 사용자 7/8 — 채널 IN-OUT 제외 규칙 활성 여부 배지 (로딩 실패 조기 감지)
+    _rules_by_ch = {}
+    for _ch, _dir, _pats in (_ch_excl_active or ()):
+        _rules_by_ch.setdefault(_ch, {}).setdefault(_dir, 0)
+        _rules_by_ch[_ch][_dir] += len(_pats) if _pats else 0
+    if _rules_by_ch:
+        _rules_summary = ' · '.join(
+            f"{_ch} {_dir.upper()} {_n}건"
+            for _ch, _dd in sorted(_rules_by_ch.items()) for _dir, _n in _dd.items() if _n
+        )
+        container.caption(f"🚫 채널 IN-OUT 제외 규칙 활성: {_rules_summary}")
+    else:
+        container.warning(
+            "⚠️ 채널 IN-OUT 제외 규칙이 로드되지 않았습니다. "
+            "'채널 IN-OUT (MD 기입)' 탭에서 GitHub 재동기화 하거나 페이지를 새로고침 해 주세요."
+        )
     # _apply_data_variance 제거 (사용자 6/29) — ±2% mock 시각효과가 결정성 깨뜨려 동일 조건 다른 결과 발생
     # 갱신 시각 표시 (AI 일일 요약의 '새로고침' 이벤트 추적)
     _seed = _get_data_seed()
@@ -1142,13 +1167,21 @@ def _gh_save(path, data, commit_msg=None):
         return False, f'{type(e).__name__}: {str(e)[:120]}'
 
 
-def _persist_load_ch_excl():
-    """앱 시작 시 또는 명시적 refresh 시 GitHub에서 ch_excl_rows + excluded_codes 로드"""
-    if st.session_state.get('_ch_excl_loaded'):
-        return  # 한 번만 로드
+def _persist_load_ch_excl(force: bool = False):
+    """앱 시작·명시적 refresh·이전 로드 실패 시 GitHub에서 ch_excl_rows + excluded_codes 로드.
+
+    개선(사용자 7/8): 로드 실패 시 _ch_excl_loaded 를 True 로 만들지 않아 다음 렌더에서
+    자동 재시도. rows 가 실제로 비어있으면 실패로 간주.
+    """
+    # 이미 성공 로드된 세션은 skip (force=True 면 재로드)
+    if not force and st.session_state.get('_ch_excl_loaded'):
+        # 안전장치: 성공 플래그가 있는데도 rows 가 비어있으면 재시도
+        _rows_cached = st.session_state.get('ch_excl_rows') or []
+        if _rows_cached:
+            return
     rows, _ = _gh_load('data/ch_excl.json')
-    if rows is not None:
-        # 날짜 문자열 → date 객체 변환
+    loaded_ok = False
+    if rows is not None and len(rows) > 0:
         from datetime import date as _date
         for r in rows:
             for k in ('시작일', '종료일'):
@@ -1159,11 +1192,16 @@ def _persist_load_ch_excl():
                     except Exception:
                         r[k] = None
         st.session_state['ch_excl_rows'] = rows
+        loaded_ok = True
     excl, _ = _gh_load('data/excluded_codes.json')
     if excl is not None and isinstance(excl, dict):
         st.session_state['excluded_text'] = excl.get('text', '')
         st.session_state['excluded_codes'] = set(excl.get('codes', []))
-    st.session_state['_ch_excl_loaded'] = True
+    # 로드 성공했을 때만 플래그 세팅 → 실패 시 다음 렌더에서 자동 재시도
+    if loaded_ok:
+        st.session_state['_ch_excl_loaded'] = True
+    else:
+        st.session_state['_ch_excl_load_failed_at'] = st.session_state.get('_ch_excl_load_failed_at', 0) + 1
 
 
 def render_excluded_tab():
