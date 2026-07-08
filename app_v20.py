@@ -1167,23 +1167,46 @@ def _gh_save(path, data, commit_msg=None):
         return False, f'{type(e).__name__}: {str(e)[:120]}'
 
 
-def _persist_load_ch_excl(force: bool = False):
-    """앱 시작·명시적 refresh·이전 로드 실패 시 GitHub에서 ch_excl_rows + excluded_codes 로드.
+def _local_load_json(rel_path: str):
+    """앱 배포 파일 시스템에서 JSON 직접 로드 (GH API 인증 불필요).
 
-    개선(사용자 7/8): 로드 실패 시 _ch_excl_loaded 를 True 로 만들지 않아 다음 렌더에서
-    자동 재시도. rows 가 실제로 비어있으면 실패로 간주.
+    이 함수는 Streamlit Cloud 에서도 리포지토리에 커밋된 파일을 그대로 읽습니다.
+    사용자 7/8 — GH API PAT 없이도 규칙 파일이 로드되도록 함.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+    base = _Path(__file__).parent
+    candidates = [
+        base / rel_path,
+        base.parent / rel_path,
+    ]
+    for p in candidates:
+        try:
+            if p.exists():
+                return _json.loads(p.read_text(encoding='utf-8'))
+        except Exception:
+            continue
+    return None
+
+
+def _persist_load_ch_excl(force: bool = False):
+    """ch_excl_rows + excluded_codes 로드.
+
+    개선 우선순위 (사용자 7/8):
+      1) 로컬 파일 (data/ch_excl.json) — 배포 리포에 포함, 100% 성공
+      2) GitHub API — 사용자가 웹에서 편집한 최신 상태가 있으면 덮어씀 (PAT 필요)
+    로드 실패 시 _ch_excl_loaded 를 True 로 만들지 않아 다음 렌더에서 자동 재시도.
     """
     # 이미 성공 로드된 세션은 skip (force=True 면 재로드)
     if not force and st.session_state.get('_ch_excl_loaded'):
-        # 안전장치: 성공 플래그가 있는데도 rows 가 비어있으면 재시도
         _rows_cached = st.session_state.get('ch_excl_rows') or []
         if _rows_cached:
             return
-    rows, _ = _gh_load('data/ch_excl.json')
-    loaded_ok = False
-    if rows is not None and len(rows) > 0:
-        from datetime import date as _date
-        for r in rows:
+
+    from datetime import date as _date
+
+    def _normalize_dates(rows_):
+        for r in rows_ or []:
             for k in ('시작일', '종료일'):
                 v = r.get(k)
                 if v and isinstance(v, str):
@@ -1191,13 +1214,32 @@ def _persist_load_ch_excl(force: bool = False):
                         r[k] = _date.fromisoformat(v[:10])
                     except Exception:
                         r[k] = None
-        st.session_state['ch_excl_rows'] = rows
+        return rows_
+
+    loaded_ok = False
+
+    # 1) 로컬 파일 시도 — 앱 배포 시 함께 커밋된 파일 (100% 성공)
+    local_rows = _local_load_json('data/ch_excl.json')
+    if local_rows and isinstance(local_rows, list) and len(local_rows) > 0:
+        st.session_state['ch_excl_rows'] = _normalize_dates(local_rows)
         loaded_ok = True
-    excl, _ = _gh_load('data/excluded_codes.json')
-    if excl is not None and isinstance(excl, dict):
-        st.session_state['excluded_text'] = excl.get('text', '')
-        st.session_state['excluded_codes'] = set(excl.get('codes', []))
-    # 로드 성공했을 때만 플래그 세팅 → 실패 시 다음 렌더에서 자동 재시도
+
+    local_excl = _local_load_json('data/excluded_codes.json')
+    if local_excl and isinstance(local_excl, dict):
+        st.session_state['excluded_text'] = local_excl.get('text', '')
+        st.session_state['excluded_codes'] = set(local_excl.get('codes', []))
+
+    # 2) GitHub API 시도 — 웹 편집 실시간 반영 (PAT 있으면 우선 사용)
+    gh_rows, _ = _gh_load('data/ch_excl.json')
+    if gh_rows is not None and isinstance(gh_rows, list) and len(gh_rows) > 0:
+        st.session_state['ch_excl_rows'] = _normalize_dates(gh_rows)
+        loaded_ok = True
+
+    gh_excl, _ = _gh_load('data/excluded_codes.json')
+    if gh_excl is not None and isinstance(gh_excl, dict):
+        st.session_state['excluded_text'] = gh_excl.get('text', '')
+        st.session_state['excluded_codes'] = set(gh_excl.get('codes', []))
+
     if loaded_ok:
         st.session_state['_ch_excl_loaded'] = True
     else:
