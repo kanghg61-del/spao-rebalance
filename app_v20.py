@@ -509,14 +509,15 @@ def _apply_overrides(results):
 
 
 def _ch_excl_key():
-    """채널별 IN/OUT 제외 — ch_excl_rows 통합 구조 (스타일 + 시작일 + 종료일).
-    시작일/종료일이 비어 있으면 영구 적용, 둘 다 있으면 오늘 ∈ [시작, 종료] 일 때만 활성."""
-    from datetime import date as _date
-    today = _date.today()
+    """채널별 IN/OUT 제외 — ch_excl_rows 통합 구조.
+
+    사용자 7/8 최종 확정: **등록된 규칙은 무조건 활성** (날짜 필터 완전 제거).
+    스크린샷의 '오늘 활성 0/0' 이슈 근본 원인이던 date parsing 문제 제거.
+    """
     rows = st.session_state.get('ch_excl_rows', [])
     # 레거시: 기존 ch_excl 텍스트영역 데이터도 흡수
     legacy = st.session_state.get('ch_excl', {})
-    merged = {}  # ch -> {'in': set, 'out': set}
+    merged: dict = {}  # ch -> {'in': set, 'out': set}
     for ch in CHANNELS:
         for dr in ('in', 'out'):
             pats = set(legacy.get(ch, {}).get(dr, []))
@@ -529,16 +530,7 @@ def _ch_excl_key():
             pat = (row.get('스타일') or row.get('스타일 패턴') or '').strip()
             if not (ch and direction in ('in', 'out') and pat):
                 continue
-            start = row.get('시작일')
-            end = row.get('종료일')
-            if start or end:
-                # 기간 지정 — 둘 다 있어야 활성
-                if not (start and end):
-                    continue
-                s = start if hasattr(start, 'toordinal') else _date.fromisoformat(str(start)[:10])
-                e = end if hasattr(end, 'toordinal') else _date.fromisoformat(str(end)[:10])
-                if not (s <= today <= e):
-                    continue
+            # 날짜 필터 완전 제거 — 등록된 규칙은 무조건 활성 (사용자 7/8 최종 확정)
             merged.setdefault(ch, {}).setdefault(direction, set()).add(pat)
         except Exception:
             continue
