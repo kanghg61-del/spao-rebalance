@@ -219,8 +219,12 @@ def calc_rebalance_group(group, params, channels):
             i = inv.get(c, 0); o = ordd.get(c, 0)
             if o <= 0 and i <= 0:
                 continue
+            # 사용자 7/8: 이동 가능한 재고는 EHUB(내부재고)만 — 외부창고(EDW 위탁창고)는 제외
+            # 총재고 i는 WOC/결품 판정에 사용 (전체 재고 감안), 실제 OUT 상한은 내부재고 기준
+            i_internal = max(0, i - ext.get(c, 0))
             if o <= 0:
-                m = min(max(0, i - ext.get(c, 0)), _cap(i))   # 현재고 cap_pct 상한
+                # 주문 없음 → 잉여 (EHUB 재고의 cap_pct 상한)
+                m = min(i_internal, _cap(i_internal))
                 if m > 0 and not _x(code, c, 'out'):   # OUT 제외 채널은 잉여 공급 안 함
                     su[c] = int(m)
                 continue
@@ -233,7 +237,8 @@ def calc_rebalance_group(group, params, channels):
                 if need_full > 0 and not _x(code, c, 'in'):   # IN 제외 채널은 수신 안 함
                     sh[c] = need_full
             elif woc > target:
-                avail = min(int((woc - target) * o), max(0, i - ext.get(c, 0)), _cap(i))  # 현재고 cap_pct 상한
+                # 잉여량 판정: 총재고(WOC) 기준, 실제 OUT 가능: 내부재고(EHUB) 기준
+                avail = min(int((woc - target) * o), i_internal, _cap(i_internal))
                 if avail > 0 and not _x(code, c, 'out'):
                     su[c] = avail
         shortage[code] = sh
