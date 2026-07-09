@@ -381,6 +381,3 @@ def clear_log() -> None:
     """이력 초기화 (로컬 + GH push)."""
     _save([])
     _save_details([])
- 초기화 (로컬 + GH push)."""
-    _save([])
-    _save_details([])
