@@ -990,7 +990,13 @@ def render_scenario(scenario_key, container, allow_slider=False):
                         sel_amt += v * it['data']['price']
                     elif v < 0:
                         ch_out[ch] = ch_out.get(ch, 0) - v
-            exec_id = effect_log.log_execution(scenario_key, len(sel_items), sel_qty, sel_rev, details=details)
+            # 사용자 7/9 — 저장 결과 명시 표시 (silent fail 방지)
+            try:
+                exec_id = effect_log.log_execution(scenario_key, len(sel_items), sel_qty, sel_rev, details=details)
+                st.toast(f'✅ 실행 이력 저장 완료 (id={exec_id}) — 실행 효과 탭에서 확인', icon='💾')
+            except Exception as _e:
+                exec_id = -1
+                st.error(f'⚠️ 실행 이력 저장 실패: {str(_e)[:200]}')
             _approve_dialog(scenario_key, sel_count, sel_qty, sel_amt, sel_rev, ch_in, ch_out, exec_id)
     with col_b2:
         # SAP 자동 연동 전 임시 — MD가 수기 실행할 수 있도록 회전 결과 엑셀 다운로드
@@ -2602,7 +2608,7 @@ def render_channel_tab():
         sumrow = {
             '이미지': '',
             '상태': '— 합계 —', '복종': '', '상품코드': '', '단품코드(SKU)': f'{len(data):,}건', '상품명': '',
-            '누판율(%)': '', '주판율(%)': '',
+            '누판율(%)': float('nan'), '주판율(%)': float('nan'),  # 사용자 7/9 fix — dtype 통일 (pyarrow 오류 방지)
             '일평균 판매량': round(s_daily, 1), '일평균 매출(만원)': round(s_damt, 1),
             '현 재고량': int(s_inv), '현 재고금액(만원)': round(s_iamt),
             '내부창고': '', '🔌항만': '', '🔌부평': '', '외부창고': int(s_ext),
