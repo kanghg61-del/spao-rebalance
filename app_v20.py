@@ -953,9 +953,16 @@ def render_scenario(scenario_key, container, allow_slider=False):
         '효과 = 결품해소 회수매출(만원)   |   ※ 이동수량은 외부창고(AENS·ADU3·ADQS) 보관분 제외'
     )
 
+    # 사용자 7/9 fix — 승인 대상 = 전체 results (KPI 정합성).
+    # 이전: 화면 표시분(filtered=상위 2,000건)만 승인 대상 → KPI 13,329장 vs 승인 11,001장 불일치.
+    # 수정: 사용자 선택 없으면 전체 이동 발생 items 승인 (results 중 이동수량>0인 모든 SKU).
     sel_items = []
     if rows:
-        sel_items = [filtered[i] for i in selected_rows] if selected_rows else list(filtered)
+        if selected_rows:
+            sel_items = [filtered[i] for i in selected_rows]
+        else:
+            # 전체 results 중 이동 발생 SKU 모두 승인 대상
+            sel_items = [r for r in results if any(v > 0 for v in r['moves'].values())]
     sel_qty = sum(sum(v for v in it['moves'].values() if v > 0) for it in sel_items)
     sel_rev = sum(it['revenue'] for it in sel_items)
 
@@ -978,7 +985,9 @@ def render_scenario(scenario_key, container, allow_slider=False):
         )
         st.caption(f'<span style="font-size:11px;color:#888">{_ch_excl_rules_summary}</span>', unsafe_allow_html=True)
     with col_b1:
-        if st.button(f'✅ 선택 {sel_count}건 승인(회전)', use_container_width=True, type='primary', key=f'approve_{scenario_key}'):
+        # 사용자 7/9 fix — 승인 라벨을 실제 승인 대상 수(len(sel_items))로 표시 (KPI 정합성)
+        _approve_n = len(sel_items)
+        if st.button(f'✅ 선택 {_approve_n:,}건 승인(회전)', use_container_width=True, type='primary', key=f'approve_{scenario_key}'):
             details = []
             ch_in, ch_out = {}, {}
             sel_amt = 0
@@ -4996,14 +5005,6 @@ def _render_dashboard_body(mode: str) -> None:
         _safe('AI 일일 요약(TEST)', render_ai_summary_tab)
     with t[3]:
         _safe('실행 효과', render_effect_tab)
-    with t[4]:
-        _safe('추가 분배', render_onepan_tab)
-    with t[5]:
-        _safe('리오더 요청', render_reorder_request_tab)
-    with t[6]:
-        _safe('통합 재고뷰', render_unified_tab)
-    with t[7]:
-        _safe('채널 별 세부', render_channel_tab)
     with t[8]:
         _safe('채널 IN-OUT (MD 기입)', render_excluded_tab)
     with t[9]:
