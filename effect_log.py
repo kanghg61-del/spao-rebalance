@@ -16,10 +16,104 @@
 """
 import csv, io, os, hashlib
 from datetime import datetime
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+    _KST = ZoneInfo("Asia/Seoul")
+except Exception:  # 방어적 fallback
+    _KST = None
+
+
+def _now_kst_str(fmt: str = '%Y-%m-%d %H:%M') -> str:
+    """KST 기준 현재 시각 문자열. (사용자 7/9 fix — UTC → KST)"""
+    if _KST is not None:
+        return datetime.now(_KST).strftime(fmt)
+    return datetime.now().strftime(fmt)
+
 
 _DIR = os.path.dirname(__file__)
 LOG_PATH = os.path.join(_DIR, 'execution_log.csv')
 DETAILS_PATH = os.path.join(_DIR, 'execution_details.csv')
+
+# ── GitHub 영구 저장 설정 (사용자 7/9) ─────────────────────────────────
+# execution_log.csv / execution_details.csv를 GitHub 저장소에 자동 commit → 재부팅에도 유지
+_GH_OWNER = "kanghg61-del"
+_GH_REPO = "spao-rebalance"
+_GH_BRANCH = "main"
+_GH_LOG_PATH = "execution_log.csv"
+_GH_DETAILS_PATH = "execution_details.csv"
+
+
+def _gh_token():
+    try:
+        import streamlit as st  # noqa
+        t = st.secrets.get('GITHUB_TOKEN')
+        if t: return t
+    except Exception:
+        pass
+    return os.environ.get('GITHUB_TOKEN')
+
+
+def _gh_push_file(remote_path: str, content_bytes: bytes, commit_msg: str) -> tuple[bool, str]:
+    """GitHub contents API로 파일 create/update (sha 있으면 update, 없으면 create)."""
+    tok = _gh_token()
+    if not tok:
+        return False, 'no-token'
+    try:
+        import base64, json, urllib.request
+        api = f"https://api.github.com/repos/{_GH_OWNER}/{_GH_REPO}/contents/{remote_path}"
+        # 기존 sha 조회
+        sha = None
+        try:
+            req_g = urllib.request.Request(
+                f"{api}?ref={_GH_BRANCH}",
+                headers={'Authorization': f'token {tok}', 'Accept': 'application/vnd.github+json'},
+            )
+            with urllib.request.urlopen(req_g, timeout=8) as resp:
+                sha = json.loads(resp.read().decode('utf-8')).get('sha')
+        except Exception:
+            pass
+        body = {
+            'message': commit_msg,
+            'content': base64.b64encode(content_bytes).decode('ascii'),
+            'branch': _GH_BRANCH,
+        }
+        if sha:
+            body['sha'] = sha
+        req_p = urllib.request.Request(
+            api, method='PUT',
+            data=json.dumps(body).encode('utf-8'),
+            headers={'Authorization': f'token {tok}', 'Accept': 'application/vnd.github+json',
+                     'Content-Type': 'application/json'},
+        )
+        with urllib.request.urlopen(req_p, timeout=12) as resp:
+            resp.read()
+        return True, 'ok'
+    except Exception as e:
+        return False, str(e)[:120]
+
+
+def _gh_pull_file(remote_path: str) -> bytes | None:
+    """GitHub raw에서 파일 fetch (재부팅 후 최초 load 시 사용)."""
+    try:
+        import urllib.request
+        url = f"https://raw.githubusercontent.com/{_GH_OWNER}/{_GH_REPO}/{_GH_BRANCH}/{remote_path}"
+        with urllib.request.urlopen(url, timeout=8) as resp:
+            return resp.read()
+    except Exception:
+        return None
+
+
+def _ensure_local_from_gh():
+    """로컬 파일 없으면 GitHub에서 pull해서 채움 (재부팅 후 최초 load)."""
+    for local, remote in ((LOG_PATH, _GH_LOG_PATH), (DETAILS_PATH, _GH_DETAILS_PATH)):
+        if not os.path.exists(local):
+            data = _gh_pull_file(remote)
+            if data:
+                try:
+                    with open(local, 'wb') as f:
+                        f.write(data)
+                except Exception:
+                    pass
 FIELDS = ['id', '실행일시', '시나리오', '단품수', '이동량_장', '기대효과_만원',
           '실제효과_만원', '추가판매_장', '실측일', '상태', '메모']
 DETAIL_FIELDS = ['exec_id', '단품코드', '채널', '전일재고_장', '이동IN_장', '정상가',
@@ -27,6 +121,8 @@ DETAIL_FIELDS = ['exec_id', '단품코드', '채널', '전일재고_장', '이�
 
 
 def load_log():
+    # 사용자 7/9 — GH 영구저장: 로컬 파일 없으면 GitHub에서 pull (재부팅 대응)
+    _ensure_local_from_gh()
     if not os.path.exists(LOG_PATH):
         return []
     with open(LOG_PATH, encoding='utf-8-sig') as f:
@@ -34,6 +130,7 @@ def load_log():
 
 
 def load_details(exec_id=None):
+    _ensure_local_from_gh()
     if not os.path.exists(DETAILS_PATH):
         return []
     with open(DETAILS_PATH, encoding='utf-8-sig') as f:
@@ -49,6 +146,13 @@ def _save(rows):
         w.writeheader()
         for r in rows:
             w.writerow({k: r.get(k, '') for k in FIELDS})
+    # 사용자 7/9 — GitHub 영구 저장 (ch_excl.json과 동일 방식, 실패해도 로컬 저장은 유지)
+    try:
+        with open(LOG_PATH, 'rb') as f:
+            _gh_push_file(_GH_LOG_PATH, f.read(),
+                          f'실행 이력 자동 저장 (n={len(rows)}) [{_now_kst_str()}]')
+    except Exception:
+        pass
 
 
 def _save_details(rows):
@@ -57,6 +161,12 @@ def _save_details(rows):
         w.writeheader()
         for r in rows:
             w.writerow({k: r.get(k, '') for k in DETAIL_FIELDS})
+    try:
+        with open(DETAILS_PATH, 'rb') as f:
+            _gh_push_file(_GH_DETAILS_PATH, f.read(),
+                          f'실행 상세 자동 저장 (n={len(rows)}) [{_now_kst_str()}]')
+    except Exception:
+        pass
 
 
 def log_execution(scenario, sku_count, qty, expected_rev_won, details=None, memo=''):
@@ -65,7 +175,7 @@ def log_execution(scenario, sku_count, qty, expected_rev_won, details=None, memo
     rid = max([int(r['id']) for r in rows], default=0) + 1
     rows.append({
         'id': rid,
-        '실행일시': datetime.now().strftime('%Y-%m-%d %H:%M'),
+        '실행일시': _now_kst_str('%Y-%m-%d %H:%M'),
         '시나리오': scenario,
         '단품수': sku_count,
         '이동량_장': qty,
@@ -86,7 +196,7 @@ def log_execution(scenario, sku_count, qty, expected_rev_won, details=None, memo
 
 def save_rows(rows):
     """data_editor 수정분 저장 — 실제효과 수동 입력 시 상태 자동 갱신"""
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = _now_kst_str('%Y-%m-%d')
     for r in rows:
         actual = str(r.get('실제효과_만원') or '').strip()
         if actual and r.get('상태') in ('', '실측 대기'):
@@ -101,7 +211,7 @@ def mock_fill_actuals():
     → 추가판매 = min(이동IN, max(0, 실제판매 − 전일재고)) = IN × ratio"""
     rows = load_log()
     drows = load_details()
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = _now_kst_str('%Y-%m-%d')
     n = 0
     for r in rows:
         if str(r.get('실제효과_만원') or '').strip():
@@ -140,6 +250,8 @@ def mock_fill_actuals():
     return n
 
 
+
+
 def _detect_sales_cols(cols):
     code_col = next((c for c in cols if '단품' in c or 'code' in c.lower() or '코드' in c), cols[0])
     ch_col = next((c for c in cols if '채널' in c or 'channel' in c.lower()), None)
@@ -148,9 +260,7 @@ def _detect_sales_cols(cols):
 
 
 def apply_sales_bytes(data, filename):
-    """일일 매출 자료(csv/xlsx) → 실측 대기 실행의 실제효과 자동 산출 (당일 매출 기준)
-    컬럼 자동 인식: 단품코드 / 채널(선택) / 판매수량
-    채널 없으면 해당 단품의 이동IN 비중으로 채널 배분. 반환: (실측 완료 실행수, 매칭 단품수)"""
+    """일일 매출 자료(csv/xlsx) → 실측 대기 실행의 실제효과 자동 산출 (당일 매출 기준)"""
     rows = []
     if filename.lower().endswith('.csv'):
         text = data.decode('utf-8-sig', errors='replace')
@@ -182,7 +292,7 @@ def apply_sales_bytes(data, filename):
 
     log_rows = load_log()
     drows = load_details()
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = _now_kst_str('%Y-%m-%d')
     n_exec, matched = 0, 0
     for lr in log_rows:
         if str(lr.get('실제효과_만원') or '').strip():
@@ -200,24 +310,22 @@ def apply_sales_bytes(data, filename):
             prev = int(float(d['전일재고_장'] or 0))
             inq = int(float(d['이동IN_장'] or 0))
             price = int(float(d['정상가'] or 0))
-            sold = None
-            if (code, ch) in by_code_ch:
-                sold = by_code_ch[(code, ch)]
-            elif code in by_code and in_sum_by_code.get(code, 0) > 0:
-                sold = int(round(by_code[code] * inq / in_sum_by_code[code]))
-            if sold is None:
-                continue
+            sold = by_code_ch.get((code, ch), 0)
+            if sold == 0 and by_code.get(code, 0) > 0:
+                total_in = in_sum_by_code.get(code, 1) or 1
+                sold = int(by_code[code] * (inq / total_in))
             extra = min(inq, max(0, sold - prev))
             d['실제판매_장'] = sold
             d['추가판매_장'] = extra
-            won += extra * price
             extra_total += extra
-            hit += 1
-        if hit:
+            won += extra * price
+            if sold > 0:
+                hit += 1
+        if hit > 0:
             lr['실제효과_만원'] = round(won / 10000)
             lr['추가판매_장'] = extra_total
             lr['실측일'] = today
-            lr['상태'] = '실측 완료(매출연동)'
+            lr['상태'] = '실측 완료 (매출)'
             n_exec += 1
             matched += hit
     _save(log_rows)
@@ -225,34 +333,11 @@ def apply_sales_bytes(data, filename):
     return n_exec, matched
 
 
-def restore_from_bytes(data):
-    text = data.decode('utf-8-sig', errors='replace')
-    rows = list(csv.DictReader(io.StringIO(text)))
-    _save(rows)
-    return len(rows)
-
-
-def export_csv_bytes():
-    rows = load_log()
-    buf = io.StringIO()
-    w = csv.DictWriter(buf, fieldnames=FIELDS)
-    w.writeheader()
-    for r in rows:
-        w.writerow({k: r.get(k, '') for k in FIELDS})
-    return buf.getvalue().encode('utf-8-sig')
-
-
-def export_details_bytes():
-    rows = load_details()
-    buf = io.StringIO()
-    w = csv.DictWriter(buf, fieldnames=DETAIL_FIELDS)
-    w.writeheader()
-    for r in rows:
-        w.writerow({k: r.get(k, '') for k in DETAIL_FIELDS})
-    return buf.getvalue().encode('utf-8-sig')
-
-
-def clear_log():
+def reset_all():
+    """전체 이력 초기화 (테스트 용도)."""
     for p in (LOG_PATH, DETAILS_PATH):
         if os.path.exists(p):
             os.remove(p)
+    # 빈 헤더 파일 재생성 + GH push
+    _save([])
+    _save_details([])
