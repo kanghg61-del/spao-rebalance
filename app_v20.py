@@ -747,6 +747,20 @@ def render_scenario(scenario_key, container, allow_slider=False):
     with st.spinner('계산 중...'):
         # 사용자 7/8 — 라디오가 '미적용' 이면 규칙을 빈 튜플로 override
         _ch_excl_active = _ch_excl_key() if _chx_use == '적용' else ()
+        # 사용자 7/9 긴급 fix — 규칙이 있어야 하는데 빈 tuple이면 강제 재로드
+        # (승인 클릭 rerun 시 세션 상태 손실 → 규칙 무시 → 이동량 폭증 방지)
+        if _chx_use == '적용' and not _ch_excl_active:
+            try:
+                _persist_load_ch_excl(force=True)
+                _ch_excl_active = _ch_excl_key()
+            except Exception:
+                pass
+        # 안전장치: 여전히 빈 상태면 사용자에게 명시적 경고 (조용히 20,269장 저장 방지)
+        if _chx_use == '적용' and not _ch_excl_active:
+            container.error(
+                '⚠️ 채널 IN-OUT 제외 규칙 로드 실패 — 승인 실행 시 규칙이 미적용될 수 있습니다. '
+                '**"채널 IN-OUT (MD 기입)" 탭 진입 후 재시도**하거나 관리자에게 문의하세요.'
+            )
         params_key = (shortage_th, target_woc, ship_th, min_move, min_recv, _ch_excl_active, move_cap_pct)
         results = calc_results_v20(params_key, _csv_cache_key())
     results = _apply_exclusion(results)
@@ -4997,6 +5011,7 @@ def _render_dashboard_body(mode: str) -> None:
             with st.expander('🔎 디버그 traceback'):
                 st.code(_tb.format_exc())
 
+
     with t[0]:
         _safe('재배치(기본)', lambda: render_scenario('🛡️ 기본', st, allow_slider=False))
     with t[1]:
@@ -5005,6 +5020,14 @@ def _render_dashboard_body(mode: str) -> None:
         _safe('AI 일일 요약(TEST)', render_ai_summary_tab)
     with t[3]:
         _safe('실행 효과', render_effect_tab)
+    with t[4]:
+        _safe('추가 분배', render_onepan_tab)
+    with t[5]:
+        _safe('리오더 요청', render_reorder_request_tab)
+    with t[6]:
+        _safe('통합 재고뷰', render_unified_tab)
+    with t[7]:
+        _safe('채널 별 세부', render_channel_tab)
     with t[8]:
         _safe('채널 IN-OUT (MD 기입)', render_excluded_tab)
     with t[9]:
@@ -5015,14 +5038,10 @@ def _render_dashboard_body(mode: str) -> None:
 
 def render():
     st.markdown('<div class="title-bar">온라인 재고관리 Agent — 운영 대시보드<span class="ver-badge">v0.9</span></div>', unsafe_allow_html=True)
-
-    # TEST 탭을 첫 화면으로 (스파오팀 수치 검증용)
     outer = st.tabs(['🧪 TEST (신규 데이터)', '🚀 Agent (운영·시연)'])
-
     with outer[0]:
         with _KeyIsolator('test'):
             _render_dashboard_body('test')
-
     with outer[1]:
         with _KeyIsolator('agent'):
             _render_dashboard_body('agent')
