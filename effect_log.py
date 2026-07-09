@@ -341,3 +341,46 @@ def reset_all():
     # 빈 헤더 파일 재생성 + GH push
     _save([])
     _save_details([])
+
+
+# ─────────────────────────────────────────────
+# 사용자 7/9 fix — 누락 함수 복원 (파일 재구성 시 누락)
+# ─────────────────────────────────────────────
+def export_csv_bytes() -> bytes:
+    """실행 이력 CSV bytes (백업 다운로드용)."""
+    if os.path.exists(LOG_PATH):
+        with open(LOG_PATH, 'rb') as f:
+            return f.read()
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=FIELDS)
+    w.writeheader()
+    return buf.getvalue().encode('utf-8-sig')
+
+
+def export_details_bytes() -> bytes:
+    """실행 상세 CSV bytes (백업 다운로드용)."""
+    if os.path.exists(DETAILS_PATH):
+        with open(DETAILS_PATH, 'rb') as f:
+            return f.read()
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=DETAIL_FIELDS)
+    w.writeheader()
+    return buf.getvalue().encode('utf-8-sig')
+
+
+def restore_from_bytes(data: bytes) -> int:
+    """CSV bytes에서 이력 복원."""
+    text = data.decode('utf-8-sig', errors='replace')
+    rows = list(csv.DictReader(io.StringIO(text)))
+    if rows:
+        _save(rows)
+    return len(rows)
+
+
+def clear_log() -> None:
+    """이력 초기화 (로컬 + GH push)."""
+    _save([])
+    _save_details([])
+ 초기화 (로컬 + GH push)."""
+    _save([])
+    _save_details([])
