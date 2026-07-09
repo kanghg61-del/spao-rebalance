@@ -2611,9 +2611,10 @@ def render_channel_tab():
             '누판율(%)': float('nan'), '주판율(%)': float('nan'),  # 사용자 7/9 fix — dtype 통일 (pyarrow 오류 방지)
             '일평균 판매량': round(s_daily, 1), '일평균 매출(만원)': round(s_damt, 1),
             '현 재고량': int(s_inv), '현 재고금액(만원)': round(s_iamt),
-            '내부창고': '', '🔌항만': '', '🔌부평': '', '외부창고': int(s_ext),
-            '현 재고주수': '', '소진예상(일)': '', '추천이동': int(s_mv), '이동후재고': int(s_ni),
-            '이동 후 재고주수': '', '효과(만원)': round(s_eff),
+            # 사용자 7/9 fix: 숫자 컬럼은 float('nan')로 dtype 통일 (pyarrow 오류 방지)
+            '내부창고': float('nan'), '🔌항만': float('nan'), '🔌부평': float('nan'), '외부창고': int(s_ext),
+            '현 재고주수': float('nan'), '소진예상(일)': float('nan'), '추천이동': int(s_mv), '이동후재고': int(s_ni),
+            '이동 후 재고주수': float('nan'), '효과(만원)': round(s_eff),
         }
         disp = [sumrow] + data[:500]
 
@@ -5024,5 +5025,3 @@ def render():
     with outer[1]:
         with _KeyIsolator('agent'):
             _render_dashboard_body('agent')
-
-    st.caption('v2.0 · SPAO 온라인 재고관리 Agent · 6/12 미팅 합의 — 보수 운영')
