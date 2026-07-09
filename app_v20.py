@@ -707,18 +707,12 @@ def render_scenario(scenario_key, container, allow_slider=False):
     except Exception:
         pass
 
-    # 사용자 7/8 — 채널 IN-OUT 제외 규칙 '적용/미적용' 토글 (기본 '적용')
+    # 사용자 7/9 — 채널 IN-OUT 제외 라디오는 승인 버튼 왼쪽 컬럼으로 이동 (컴팩트화)
+    # 세션 상태 기본값만 여기서 초기화 · 실제 UI는 line ~976 (col_r)에서 렌더링
     _chx_key = f'chx_use_{scenario_key}'
     if _chx_key not in st.session_state:
         st.session_state[_chx_key] = '적용'
-    _chx_use = container.radio(
-        '🚫 채널 IN-OUT 제외 규칙',
-        options=['적용', '미적용'],
-        index=0 if st.session_state.get(_chx_key, '적용') == '적용' else 1,
-        horizontal=True,
-        key=_chx_key,
-        help='적용 = 사전 등록된 채널·스타일 이동 차단 규칙 반영 (기본) · 미적용 = 규칙 무시하고 원본 재배치 계산',
-    )
+    _chx_use = st.session_state.get(_chx_key, '적용')
 
     ship_th = 0.0
     if allow_slider:
@@ -758,7 +752,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
     results = _apply_exclusion(results)
     results = _apply_overrides(results)
 
-    # 사용자 7/8 — '채널 IN-OUT 적용/미적용' 라디오 배지 (기본 '적용')
+    # 사용자 7/9 — 채널 IN-OUT 규칙 요약 caption 축소 (한 줄 · placeholder에 저장하여 나중 렌더)
     _rules_by_ch: dict = {}
     for _ch, _dir, _pats in (_ch_excl_active or ()):
         _rules_by_ch.setdefault(_ch, {}).setdefault(_dir, 0)
@@ -767,13 +761,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
     _src_label = {'embed': '내장', 'file/gh': 'GH/로컬 파일'}.get(
         st.session_state.get('_ch_excl_source', 'embed'), '내장'
     )
-    _rules_summary = ' · '.join(
-        f"{_ch} {_dir.upper()} {_n}건"
-        for _ch, _dd in sorted(_rules_by_ch.items()) for _dir, _n in _dd.items() if _n
-    ) or '없음'
-    container.caption(
-        f"🚫 채널 IN-OUT 제외 규칙 {_total_rules}건 로드됨 ({_src_label}) — {_rules_summary}"
-    )
+    _ch_excl_rules_summary = f"🚫 채널 IN-OUT {_total_rules}건 ({_src_label})"
     # _apply_data_variance 제거 (사용자 6/29) — ±2% mock 시각효과가 결정성 깨뜨려 동일 조건 다른 결과 발생
     # 갱신 시각 표시 (AI 일일 요약의 '새로고침' 이벤트 추적)
     _seed = _get_data_seed()
@@ -971,11 +959,24 @@ def render_scenario(scenario_key, container, allow_slider=False):
     sel_qty = sum(sum(v for v in it['moves'].values() if v > 0) for it in sel_items)
     sel_rev = sum(it['revenue'] for it in sel_items)
 
-    # 표 위 placeholder 채우기 — [헤더 텍스트 | 승인 버튼 | Excel(회전) | Excel(물류용)]
+    # 표 위 placeholder 채우기 — [헤더 텍스트 | 채널 IN-OUT 라디오(소형) | 승인 버튼 | Excel(회전) | Excel(물류용)]
+    # 사용자 7/9 — 채널 IN-OUT 라디오를 승인 버튼 왼쪽에 컴팩트하게 배치
     with actions_ph.container():
-        col_h, col_b1, col_b2, col_b3 = st.columns([3, 2, 2, 2])
+        col_h, col_r, col_b1, col_b2, col_b3 = st.columns([2.2, 1.6, 2, 2, 2])
     with col_h:
         st.markdown(f'**단품 × 채널 매트릭스 — {len(filtered):,}건**')
+    with col_r:
+        # 소형 라디오 (horizontal) + tooltip은 규칙 요약을 담아 표시
+        st.radio(
+            '🚫 채널 IN-OUT',
+            options=['적용', '미적용'],
+            index=0 if st.session_state.get(_chx_key, '적용') == '적용' else 1,
+            horizontal=True,
+            key=_chx_key,
+            label_visibility='collapsed',
+            help=f'적용 = 사전 등록된 채널·스타일 이동 차단 규칙 반영 (기본) · 미적용 = 규칙 무시\n{_ch_excl_rules_summary}',
+        )
+        st.caption(f'<span style="font-size:11px;color:#888">{_ch_excl_rules_summary}</span>', unsafe_allow_html=True)
     with col_b1:
         if st.button(f'✅ 선택 {sel_count}건 승인(회전)', use_container_width=True, type='primary', key=f'approve_{scenario_key}'):
             details = []
@@ -1769,6 +1770,135 @@ def render_excluded_tab():
                     active_today_out.append(r['스타일'])
             mc4.metric(f'오늘({today.strftime("%m/%d")}) 활성', f'{len(active_today_in)} / {len(active_today_out)}',
                        help='IN 활성 / OUT 활성 패턴 수 (기간 없으면 영구 활성)')
+
+            # ── 사용자 7/9: CSV 업/다운로드 (각 채널 MD 편의) ──
+            st.markdown('---')
+            st.markdown(f'#### 📁 CSV 파일로 관리 ({c})')
+            csv_c1, csv_c2, csv_c3 = st.columns([2, 2, 2])
+            with csv_c1:
+                # 다운로드: 현재 채널 등록 스타일 CSV
+                import io as _io
+                import csv as _csv
+                _buf = _io.StringIO()
+                _buf.write('﻿')  # UTF-8 BOM (Excel 한글 정상 표시)
+                _w = _csv.writer(_buf)
+                _w.writerow(['채널', '방향(IN/OUT)', '스타일', '시작일', '종료일'])
+                _rows_for_dl = sorted(
+                    [r for r in all_rows if r.get('채널') == c],
+                    key=lambda x: (x.get('방향', ''), x.get('스타일', '')),
+                )
+                for _r in _rows_for_dl:
+                    _s = _r.get('시작일')
+                    _e = _r.get('종료일')
+                    _s_str = _s.isoformat() if hasattr(_s, 'isoformat') else (str(_s) if _s else '')
+                    _e_str = _e.isoformat() if hasattr(_e, 'isoformat') else (str(_e) if _e else '')
+                    _w.writerow([c, (_r.get('방향') or '').upper(), _r.get('스타일', ''), _s_str, _e_str])
+                from datetime import datetime as _dtnow
+                _fname = f"채널IN-OUT제외_{c}_{len(_rows_for_dl)}건_{_dtnow.now().strftime('%y%m%d')}.csv"
+                st.download_button(
+                    f'📥 {c} CSV 다운로드 ({len(_rows_for_dl)}건)',
+                    data=_buf.getvalue().encode('utf-8-sig'),
+                    file_name=_fname,
+                    mime='text/csv',
+                    use_container_width=True,
+                    key=f'dl_csv_{c}',
+                )
+            with csv_c2:
+                _mode = st.radio(
+                    '업로드 시 처리 방식',
+                    options=['누적 (기존 유지 + 신규 추가)', '대체 (기존 삭제 + 신규 저장)'],
+                    index=0,
+                    key=f'upload_mode_{c}',
+                    horizontal=False,
+                )
+            with csv_c3:
+                _up = st.file_uploader(
+                    f'📤 {c} CSV 업로드',
+                    type=['csv'],
+                    key=f'up_csv_{c}',
+                    help='컬럼: 스타일, 방향(IN/OUT)(옵션), 시작일(옵션), 종료일(옵션). '
+                         '방향 미지정 시 OUT으로 처리.',
+                )
+                if _up is not None:
+                    try:
+                        import csv as _csv2
+                        # UTF-8 BOM 자동 처리
+                        _raw = _up.getvalue()
+                        try:
+                            _text = _raw.decode('utf-8-sig')
+                        except Exception:
+                            _text = _raw.decode('cp949', errors='replace')
+                        _sio = _io.StringIO(_text)
+                        _reader = _csv2.DictReader(_sio)
+                        _new_rows = []
+                        _err_count = 0
+                        for _row in _reader:
+                            # 컬럼명 유연 매칭 (스타일 / Style / 스타일코드 / 코드)
+                            _style = None
+                            for _k in ('스타일', 'Style', 'style', '스타일코드', '코드', 'Code'):
+                                if _k in _row and _row[_k]:
+                                    _style = str(_row[_k]).strip().upper()
+                                    break
+                            if not _style:
+                                _err_count += 1
+                                continue
+                            # 방향 (기본 OUT)
+                            _dir_raw = ''
+                            for _k in ('방향(IN/OUT)', '방향', 'Direction', 'direction', 'IN/OUT'):
+                                if _k in _row and _row[_k]:
+                                    _dir_raw = str(_row[_k]).strip().upper()
+                                    break
+                            _dir = 'in' if _dir_raw == 'IN' else 'out'
+                            # 시작일/종료일 (기본 오늘/2999-01-01)
+                            _s_val = None
+                            _e_val = None
+                            for _k in ('시작일', 'StartDate', '시작', 'Start'):
+                                if _k in _row and _row[_k]:
+                                    try:
+                                        _s_val = _date.fromisoformat(str(_row[_k]).strip()[:10])
+                                    except Exception:
+                                        _s_val = None
+                                    break
+                            for _k in ('종료일', 'EndDate', '종료', 'End'):
+                                if _k in _row and _row[_k]:
+                                    try:
+                                        _e_val = _date.fromisoformat(str(_row[_k]).strip()[:10])
+                                    except Exception:
+                                        _e_val = None
+                                    break
+                            if _s_val is None:
+                                _s_val = _date.today()
+                            if _e_val is None:
+                                _e_val = _date(2999, 1, 1)
+                            _new_rows.append({
+                                '채널': c,
+                                '방향': _dir,
+                                '스타일': _style,
+                                '시작일': _s_val,
+                                '종료일': _e_val,
+                            })
+                        # 처리 방식 적용
+                        _is_replace = st.session_state.get(f'upload_mode_{c}', '누적 (기존 유지 + 신규 추가)').startswith('대체')
+                        if _is_replace:
+                            # 이 채널 기존 데이터 삭제 후 신규만 저장
+                            all_rows = [r for r in all_rows if r.get('채널') != c]
+                            all_rows.extend(_new_rows)
+                            _msg = f'✅ 대체 완료: {c} 신규 {len(_new_rows)}건 저장 (기존 삭제)'
+                        else:
+                            # 누적 - 중복(스타일+방향) 제외
+                            _exist_keys = {(r.get('스타일'), r.get('방향')) for r in all_rows if r.get('채널') == c}
+                            _added = [r for r in _new_rows if (r['스타일'], r['방향']) not in _exist_keys]
+                            all_rows.extend(_added)
+                            _msg = f'✅ 누적 완료: {c} 신규 추가 {len(_added)}건 (중복 {len(_new_rows) - len(_added)}건 제외)'
+                        if _err_count > 0:
+                            _msg += f' · ⚠️ 스타일 누락 {_err_count}행 건너뜀'
+                        st.session_state['ch_excl_rows'] = all_rows
+                        # 파일 업로더 초기화 (재업로드 방지)
+                        st.session_state.pop(f'up_csv_{c}', None)
+                        st.success(_msg + ' — 아래 "💾 GitHub 영구 저장" 클릭 시 반영됩니다.')
+                        st.rerun()
+                    except Exception as _e:
+                        st.error(f'❌ CSV 파싱 실패: {_e}')
 
             if st.button('🗑️ 이 채널 제외 초기화', key=f'clr_v2_{c}'):
                 all_rows = [r for r in all_rows if r.get('채널') != c]

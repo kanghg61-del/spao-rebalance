@@ -91,16 +91,27 @@ def _num(v, d=0):
 
 def _find_by_glob(pattern: str) -> Path:
     """와일드카드로 파일 찾기.
-    (EDW) / (EHUB) / (BI, SAP) 등 접두 유무 모두 허용."""
+    (EDW) / (EHUB) / (BI, SAP) 등 접두 유무 모두 허용.
+    사용자 7/9 fix: 접미 `-XXXX` (자동 rename 파일)도 매칭 대상에 포함 → 최신 mtime 우선.
+    """
     candidates: list[Path] = []
-    # 원본 패턴
+    # 원본 패턴 (정확 매칭)
     candidates.extend(UPLOAD_DIR.glob(pattern))
     # 접두 있는 경우
     for prefix in ("(EDW) ", "(EHUB) ", "(BI, SAP) "):
         candidates.extend(UPLOAD_DIR.glob(f"{prefix}{pattern}"))
     # 접두 아무거나
     candidates.extend(UPLOAD_DIR.glob(f"* {pattern}"))
-    # 중복 제거 + 최신순
+    # 접미 `-XXXX` 처리 (파일 재업로드 자동 rename 대응)
+    # 예: "단품별판매재고, 반응과.xlsx" → "단품별판매재고, 반응과*.xlsx"도 매칭
+    if pattern.endswith(".xlsx") or pattern.endswith(".csv"):
+        stem, ext = pattern.rsplit(".", 1)
+        if "*" not in stem:  # 이미 와일드카드 없을 때만
+            wide_pat = f"{stem}*.{ext}"
+            candidates.extend(UPLOAD_DIR.glob(wide_pat))
+            for prefix in ("(EDW) ", "(EHUB) ", "(BI, SAP) "):
+                candidates.extend(UPLOAD_DIR.glob(f"{prefix}{wide_pat}"))
+    # 중복 제거 + 최신 mtime 우선
     uniq: dict[str, Path] = {p.name: p for p in candidates}
     matches = sorted(uniq.values(), key=lambda p: p.stat().st_mtime, reverse=True)
     if not matches:
@@ -178,17 +189,25 @@ def stage1_master(skus: dict) -> None:
         code = str(row[0] or "").strip().upper()
         if not code or len(code) < 10:
             continue
-        buy_qty = _num(row[2])   # col 2: 발주량
-        buy_amt = _num(row[3])   # col 3: 발주액[정상가]
+        # ============================================================
+        # 사용자 7/9 확정 스펙 (내일부터 이 기준 그대로 적용):
+        # · 누판율 = S열 (col 18) — 파일 %값 그대로
+        # · 주판율 = T열 (col 19) — 파일 %값 그대로
+        # · 출고율 = K열(출고량) / G열(누적입고량) * 100 — 파일에서 역산
+        # · 주간외형매출 = P열 (col 15) — 기간 판매액[외형매출]
+        # · 정상가 = D열(발주액[정상가]) / C열(발주량) 역산
+        # ============================================================
+        buy_qty = _num(row[2])   # col 2: 발주량 (C열)
+        buy_amt = _num(row[3])   # col 3: 발주액[정상가] (D열)
         price = int(buy_amt / buy_qty) if buy_qty > 0 else 0
-        in_qty = _int(row[6])    # col 6: 누적입고량
-        ship_qty = _int(row[10]) # col 10: 출고량
-        cum_qty = _int(row[12])  # col 12: 누판량
-        wk_qty = _int(row[13])   # col 13: 주판량
-        wk_sales = _num(row[15]) # col 15: 기간 판매액[외형매출]
-        cum_rate = _num(row[18]) # col 18: 누판율 %
-        wk_rate = _num(row[19])  # col 19: 주판율 %
-        ship_rate = (ship_qty / in_qty * 100) if in_qty > 0 else 0
+        in_qty = _int(row[6])    # col 6: 누적입고량 (G열)
+        ship_qty = _int(row[10]) # col 10: 출고량 (K열)
+        cum_qty = _int(row[12])  # col 12: 누판량 (M열)
+        wk_qty = _int(row[13])   # col 13: 주판량 (N열)
+        wk_sales = _num(row[15]) # col 15: 기간 판매액[외형매출] (P열)
+        cum_rate = _num(row[18]) # col 18: 누판율 % (S열)
+        wk_rate = _num(row[19])  # col 19: 주판율 % (T열)
+        ship_rate = (ship_qty / in_qty * 100) if in_qty > 0 else 0  # K/G × 100
         skus[code] = {
             "단품명": str(row[1] or "").strip(),
             "정상가": price,
@@ -247,6 +266,10 @@ def stage2_bw(bw_qty: dict, bw_name: dict, price_fallback: dict) -> None:
     idx_price_kp = _find("결판가")
     is_new_schema = len(header) <= 12 or idx_qty_single is not None
 
+    # 사용자 7/9 fix: 순차 max(0, ...) → 라인 순수 합산 후 최종 max(0, sum)
+    # 이전 로직 결함: 음수 라인이 먼저 오면 max(0,...)로 리셋 후 양수만 누적 → 실제보다 큼
+    # (1,033개 SKU 오차, 총 10,498장 초과 발생) SPYCG37C0119090 실제 -376장 → 옛 결과 0
+    # 수정: 라인들 그대로 sum → 최종에 한 번만 max(0, sum) 적용
     for row in rows_iter:
         if not row:
             continue
@@ -258,7 +281,8 @@ def stage2_bw(bw_qty: dict, bw_name: dict, price_fallback: dict) -> None:
             qsum = _int(row[idx_qty_single])
         else:
             qsum = sum(_int(v) for v in row[10:])
-        bw_qty[code] = max(0, bw_qty.get(code, 0) + qsum)
+        # 순수 누적 (max 적용 안 함) — 각 라인 그대로 더함
+        bw_qty[code] = bw_qty.get(code, 0) + qsum
 
         if idx_name is not None and idx_name < len(row) and row[idx_name] and code not in bw_name:
             bw_name[code] = str(row[idx_name]).strip()
@@ -270,6 +294,11 @@ def stage2_bw(bw_qty: dict, bw_name: dict, price_fallback: dict) -> None:
             p = _int(row[idx_price_kp])
         if p > 0 and code not in price_fallback:
             price_fallback[code] = p
+
+    # 최종 음수 → 0 clamp (모든 라인 합산 후 딱 한 번만 적용)
+    for code in list(bw_qty.keys()):
+        if bw_qty[code] < 0:
+            bw_qty[code] = 0
 
     wb.close()
     log.info(f"  → 반응과 재고 {sum(bw_qty.values()):,}장 ({len(bw_qty):,} 단품)")
