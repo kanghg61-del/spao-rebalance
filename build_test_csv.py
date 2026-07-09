@@ -261,7 +261,8 @@ def stage2_bw(bw_qty: dict, bw_name: dict, price_fallback: dict) -> None:
     idx_name = _find("내역", "상품명") if _find("내역", "상품명") is not None else (
         6 if len(header) <= 12 else 7
     )
-    idx_qty_single = _find("수량")
+    # 사용자 7/9 fix: 신규 파일 컬럼명이 "수량" → "합계"로 변경됨
+    idx_qty_single = _find("수량", "합계")
     idx_price_std = _find("표준가")
     idx_price_kp = _find("결판가")
     is_new_schema = len(header) <= 12 or idx_qty_single is not None
@@ -989,6 +990,7 @@ def main() -> None:
     log.info(f"내부창고: {(tot_inv-tot_ext)/1e8:.1f}억")
     log.info(f"외부창고: {tot_ext/1e8:.1f}억")
     for ch in EXT_CH:
+        wq = sum(r[f"wh_{ch}"] for r in skus.values())
         wq = sum(r[f"wh_{ch}"] for r in skus.values())
         wa = sum(r[f"wh_amt_{ch}"] for r in skus.values())
         log.info(f"    {ch}: {wq:>7,}장 - {wa/1e8:.1f}억")
