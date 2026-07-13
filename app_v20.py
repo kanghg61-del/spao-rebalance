@@ -466,14 +466,12 @@ def calc_results_v20(params_key, cache_key=None):
     move_map = {}
     for color, g in groups.items():
         move_map.update(calc_rebalance_group(g, params, CHANNELS))
-    # 사용자 7/13: 회수매출을 판매가 기준으로 보수 반영 → 정상가 × 0.5
-    # (실측 검증 결과 판매가/정상가 평균 약 50% 수준. 이랜드몰·EHUB 채널은 판매가 데이터 부재로 근사)
-    REVENUE_ADJUST = 0.5
+    # 7/13: 회수매출 원복 (사용자 정책 변경 — 정상가 100% 반영)
     results = []
     for code, d in skus.items():
         moves = move_map.get(code, {c: 0 for c in CHANNELS})
         after = calc_after_woc(d, moves, CHANNELS)
-        rev = int(calc_expected_revenue(d, moves, CHANNELS, d['price']) * REVENUE_ADJUST)
+        rev = int(calc_expected_revenue(d, moves, CHANNELS, d['price']))
         mode = '제외' if d.get('locked', False) else '자동회전'
         results.append({'code': code, 'data': d, 'moves': moves,
                         'after': after, 'revenue': rev, 'mode': mode})
@@ -512,8 +510,8 @@ def _apply_overrides(results):
             moves = {c: int(o.get(c, 0)) for c in CHANNELS}
             r2['moves'] = moves
             r2['after'] = calc_after_woc(r['data'], moves, CHANNELS)
-            # 사용자 7/13: 회수매출 보수 반영 × 0.5
-            r2['revenue'] = int(calc_expected_revenue(r['data'], moves, CHANNELS, r['data']['price']) * 0.5)
+            # 7/13: 회수매출 원복 (사용자 정책 변경)
+            r2['revenue'] = int(calc_expected_revenue(r['data'], moves, CHANNELS, r['data']['price']))
             out.append(r2)
         else:
             out.append(r)
@@ -2288,9 +2286,9 @@ def _item(code):
 
 
 def _ch_effect(d, mv_ch, ch):
-    # 사용자 7/13: 채널별 효과도 보수 반영 × 0.5 (전체 revenue 로직과 정합)
+    # 7/13: 채널별 효과 원복 (정상가 100% 반영)
     o = d['orders'].get(ch, 0); i = d['inv'].get(ch, 0); p = d.get('price', 0)
-    return int((max(0, o - i) - max(0, o - (i + mv_ch))) * p * 0.5)
+    return int((max(0, o - i) - max(0, o - (i + mv_ch))) * p)
 
 
 def _render_group(results_ch, keyfn, g_inv, g_ord, g_move, g_eff, g_ext, keycol, namefn=False):
