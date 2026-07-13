@@ -2928,14 +2928,16 @@ def render_onepan_tab():
         else:
             grade = '🟢 S 정상'; nS += 1
         # v0.8: 필업 = 재고주수 < 1주 단품만, 1주 목표 - 현재고
+        # 7/13: 필업요청은 반응과 전체수량 이내로 상한 (사용자 요청)
+        bw_q = d['inv'].get(BW_NAME, 0)
         if woc is not None and woc < 1:
             fillq = max(0, round(to - ti))
+            fillq = min(fillq, bw_q)  # 반응과 재고 이내로 상한
         else:
             fillq = 0
         price = d.get('price', 0)
         fill_q += fillq
         fill_amt += fillq * price
-        bw_q = d['inv'].get(BW_NAME, 0)
         bw_amt = bw_q * price
         bw_total_qty += bw_q
         bw_total_amt += bw_amt
@@ -4291,9 +4293,9 @@ def render_ai_summary_tab():
         inv_amt_d = d.get('inv_amt', {})
         for c in CHANNELS:
             o = d['orders'].get(c, 0); i = d['inv'].get(c, 0)
-            # 매출 = 실제 외형매출 (daily_amt 우선)
+            # 매출 = 실제 외형매출 일평균 (daily_amt 우선 · 주간 누적을 /7로 환산 — 7/13 사용자 요청)
             if _has_daily_amt and daily_amt_d:
-                amt_ch = daily_amt_d.get(c, 0)
+                amt_ch = daily_amt_d.get(c, 0) / 7  # 주간→일평균
                 ch_daily_amt[c] += amt_ch
                 daily_amt_total += amt_ch
             else:
@@ -4377,8 +4379,8 @@ def render_ai_summary_tab():
     woc_days_int = int(total_inv_qty / daily_qty_avg) if daily_qty_avg > 0 else 0
 
     body = (
-        f'<b>[전일 온라인 주문 기준 매출 보고]</b><br>'
-        f'{yest_label}일 주문 기준 매출은 <b>{daily_eok_int}억 {daily_man_remainder:,}만원</b>입니다.<br>'
+        f'<b>[일평균 온라인 주문 매출 — 최근 7일 기준]</b><br>'
+        f'일평균 주문 매출은 <b>{daily_eok_int}억 {daily_man_remainder:,}만원</b>입니다.<br>'
         f'채널별: ' + ' / '.join(ch_strs) + '<br>'
         f'온라인 현 재고액은 <b>{total_inv_eok:.0f}억</b>이며, '
         f'재고보유일수는 <b>{woc_days_int}일</b>입니다.<br><br>'
