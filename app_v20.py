@@ -4286,6 +4286,26 @@ def render_ai_summary_tab():
     _has_daily_amt = any(d.get('daily_amt') for d in skus.values())
     _has_inv_amt = any(d.get('inv_amt') for d in skus.values())
     _last_date = next((d.get('last_date', '') for d in skus.values() if d.get('last_date')), '')
+    # 7/13: 최근 일자 매출 추출 — latest_daily.json (외부 3채널 실판매가 기준 단일일자)
+    # 없는 채널(공홈/이랜드몰/카카오)은 daily_amt/7 로 fallback
+    import json as _json, os as _os
+    _latest_daily = {}
+    _latest_date_str = ''
+    try:
+        _ldp = _os.path.join(_os.path.dirname(__file__), 'latest_daily.json')
+        if _os.path.exists(_ldp):
+            with open(_ldp, 'r', encoding='utf-8') as _lf:
+                _ld = _json.load(_lf)
+            _latest_daily = _ld.get('per_channel', {})
+            _dates = _ld.get('latest_date', {})
+            if _dates:
+                _latest_date_str = max(_dates.values())
+    except Exception:
+        pass
+    for c in CHANNELS:
+        if c in _latest_daily:
+            ch_daily_amt[c] = _latest_daily[c].get('amt', 0)
+            daily_amt_total += _latest_daily[c].get('amt', 0)
     for code, d in skus.items():
         price = d.get('price', 0)
         sty = code[:10]
@@ -4293,15 +4313,16 @@ def render_ai_summary_tab():
         inv_amt_d = d.get('inv_amt', {})
         for c in CHANNELS:
             o = d['orders'].get(c, 0); i = d['inv'].get(c, 0)
-            # 매출 = 실제 외형매출 일평균 (daily_amt 우선 · 주간 누적을 /7로 환산 — 7/13 사용자 요청)
-            if _has_daily_amt and daily_amt_d:
-                amt_ch = daily_amt_d.get(c, 0) / 7  # 주간→일평균
-                ch_daily_amt[c] += amt_ch
-                daily_amt_total += amt_ch
-            else:
-                amt = o * price
-                ch_daily_amt[c] += amt / 7
-                daily_amt_total += amt / 7
+            # 채널별 매출: latest_daily.json에 있으면 위에서 이미 반영, 없으면 daily_amt/7 fallback
+            if c not in _latest_daily:
+                if _has_daily_amt and daily_amt_d:
+                    amt_ch = daily_amt_d.get(c, 0) / 7  # fallback: 주간→일평균
+                    ch_daily_amt[c] += amt_ch
+                    daily_amt_total += amt_ch
+                else:
+                    amt = o * price
+                    ch_daily_amt[c] += amt / 7
+                    daily_amt_total += amt / 7
             total_inv_qty += i
             # 재고액 = 실제 매장재고 정상가 (inv_amt 우선)
             if _has_inv_amt and inv_amt_d:
@@ -4317,8 +4338,27 @@ def render_ai_summary_tab():
             style_price[sty] = price
             style_name[sty] = smap.get(sty, d.get('name', ''))
     # 매출 순위 정렬 (사용자 요청 — 판매량 → 매출 기준 변경)
-    style_amt = {s: q * style_price.get(s, 0) for s, q in style_qty.items()}
-    top_10 = sorted(style_amt.items(), key=lambda x: -x[1])[:10]
+    # 7/13: latest_daily.json의 per_style이 있으면 최신일자 실판매가 기준으로 정렬 (외부 3채널)
+    _latest_per_style = _latest_daily.get('per_style', {}) if isinstance(_latest_daily, dict) else {}
+    if not _latest_per_style:
+        try:
+            _latest_per_style = _ld.get('per_style', {})
+        except Exception:
+            _latest_per_style = {}
+    if _latest_per_style:
+        # 최신일자 실측 기준 TOP 10
+        top_10 = sorted(
+            [(s, v.get('amt', 0)) for s, v in _latest_per_style.items()],
+            key=lambda x: -x[1]
+        )[:10]
+        # style_qty에 최신일자 qty 오버라이드 (표시용)
+        for s, v in _latest_per_style.items():
+            style_qty[s] = v.get('qty', 0)
+            if s not in style_name:
+                style_name[s] = s
+    else:
+        style_amt = {s: q * style_price.get(s, 0) for s, q in style_qty.items()}
+        top_10 = sorted(style_amt.items(), key=lambda x: -x[1])[:10]
 
     preset = SCENARIOS['🛡️ 기본']
     params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'],
@@ -4370,17 +4410,18 @@ def render_ai_summary_tab():
     # AI 일일 요약 브리프는 풀네임 사용 (사용자 6/23 요청)
     ch_strs = [f'{c} <b>{int(ch_daily_amt[c]/10000):,}만원</b>' for c in CHANNELS]
     actual_eok = actual_move_amt / 100000000
-    rev_eok = rotation_revenue / 100000000
+    # 7/13: 기대매출은 최근 일자(일평균) 기준으로 환산 — 주간 rotation_revenue/dist_revenue를 /7
+    rev_eok = rotation_revenue / 100000000 / 7
     dist_actual_eok = dist_actual_amt / 100000000
-    dist_rev_eok = dist_revenue / 100000000
+    dist_rev_eok = dist_revenue / 100000000 / 7
     # 현 재고액 + 재고보유일수
     total_inv_eok = total_inv_amt / 100000000
     daily_qty_avg = total_orders_qty / 7 if total_orders_qty > 0 else 0
     woc_days_int = int(total_inv_qty / daily_qty_avg) if daily_qty_avg > 0 else 0
 
     body = (
-        f'<b>[일평균 온라인 주문 매출 — 최근 7일 기준]</b><br>'
-        f'일평균 주문 매출은 <b>{daily_eok_int}억 {daily_man_remainder:,}만원</b>입니다.<br>'
+        f'<b>[최근 일자({_latest_date_str or yest_label}) 온라인 주문 매출 보고]</b><br>'
+        f'주문 매출은 <b>{daily_eok_int}억 {daily_man_remainder:,}만원</b>입니다.<br>'
         f'채널별: ' + ' / '.join(ch_strs) + '<br>'
         f'온라인 현 재고액은 <b>{total_inv_eok:.0f}억</b>이며, '
         f'재고보유일수는 <b>{woc_days_int}일</b>입니다.<br><br>'
@@ -4452,7 +4493,7 @@ def render_ai_summary_tab():
 
     # ── TOP 10 가로 표 (마지막으로 이동) ──
     st.markdown('---')
-    st.markdown('#### 🏆 전일 TOP 10 스타일')
+    st.markdown(f'#### 🏆 최근 일자({_latest_date_str or yest_label}) TOP 10 스타일')
     if top_10:
         html = '<table class="aica-top10"><tr>'
         for i in range(1, 11):
@@ -4469,17 +4510,25 @@ def render_ai_summary_tab():
             html += (f'<td><b style="color:#c4a8ff">{sty}</b><br>'
                      f'<span style="color:#9ab;font-size:10px">{nm}</span></td>')
         html += '</tr><tr>'
-        # 판매량 (style_qty에서 조회)
+        # 판매량 · 매출 — 최신일자 실측 있으면 그대로, 없으면 주간/7 환산
+        _use_latest = bool(_latest_per_style)
+        _unit_q = '장' if _use_latest else '장/일'
+        _unit_m = '만원' if _use_latest else '만원/일'
         for sty, _amt in top_10:
-            daily_q = style_qty.get(sty, 0) // 7
+            if _use_latest and sty in _latest_per_style:
+                daily_q = _latest_per_style[sty].get('qty', 0)
+            else:
+                daily_q = style_qty.get(sty, 0) // 7
             html += (f'<td><b style="color:#ffb84d">{daily_q:,}</b>'
-                     f'<br><span style="color:#9ab;font-size:10px">장/일</span></td>')
+                     f'<br><span style="color:#9ab;font-size:10px">{_unit_q}</span></td>')
         html += '</tr><tr>'
-        # 전일매출 (amt = 주간 매출 → /7 → /10000 만원)
         for sty, amt in top_10:
-            amt_man = round(amt / 7 / 10000)
+            if _use_latest and sty in _latest_per_style:
+                amt_man = round(_latest_per_style[sty].get('amt', 0) / 10000)
+            else:
+                amt_man = round(amt / 7 / 10000)
             html += (f'<td><b style="color:#7cd99c">{amt_man:,}</b>'
-                     f'<br><span style="color:#9ab;font-size:10px">만원/일</span></td>')
+                     f'<br><span style="color:#9ab;font-size:10px">{_unit_m}</span></td>')
         html += '</tr></table>'
         st.markdown(html, unsafe_allow_html=True)
     else:
