@@ -1,17 +1,9 @@
 # -*- coding: utf-8 -*-
-# REDEPLOY-MARKER: 2026-06-30 00:55 (force streamlit cloud rebuild — line 4040 wi cache fix)
-"""
-AI 온라인 재고 자동 재배치 — 운영 대시보드 (듀얼 버전)
-"""
+"""AI 온라인 재고 자동 재배치 — 운영 대시보드"""
 import os
 import streamlit as st
 
-st.set_page_config(
-    page_title='온라인 재고관리 Agent',
-    page_icon='📊',
-    layout='wide',
-    initial_sidebar_state='collapsed',
-)
+st.set_page_config(page_title='온라인 재고관리 Agent', page_icon='📊', layout='wide', initial_sidebar_state='collapsed')
 
 
 def _check_password():
@@ -23,18 +15,7 @@ def _check_password():
     expected = expected or os.environ.get('APP_PASSWORD', 'spao')
     if st.session_state.get('auth_ok'):
         return True
-    st.markdown("""
-    <style>
-    .stApp { background-color: #0A141F; }
-    .login-box { max-width: 420px; margin: 80px auto; padding: 32px; background: #15202C; border: 1px solid #4AE3B5; border-radius: 12px; text-align: center; }
-    .login-title { color: #4AE3B5; font-size: 22px; font-weight: bold; margin-bottom: 8px; }
-    .login-sub { color: #FFFFFF; font-size: 13px; margin-bottom: 24px; }
-    </style>
-    <div class="login-box">
-        <div class="login-title">🔒 온라인 재고관리 Agent</div>
-        <div class="login-sub">운영 대시보드 · 비밀번호를 입력하세요</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown('<div style="max-width:420px;margin:80px auto;padding:32px;background:#15202C;border:1px solid #4AE3B5;border-radius:12px;text-align:center;"><div style="color:#4AE3B5;font-size:22px;font-weight:bold;margin-bottom:8px;">🔒 온라인 재고관리 Agent</div><div style="color:#FFFFFF;font-size:13px;">운영 대시보드 · 비밀번호를 입력하세요</div></div>', unsafe_allow_html=True)
     _, mid, _ = st.columns([1, 2, 1])
     with mid:
         with st.form('login_form', clear_on_submit=False):
@@ -53,50 +34,43 @@ def _check_password():
 if not _check_password():
     st.stop()
 
-st.markdown("""
-<style>
-    .stApp { background-color: #0A141F; }
-    .stSidebar { background-color: #15202C; }
-    h1, h2, h3, h4 { color: #FFFFFF; }
-    .kpi-card { background: #15202C; border: 1px solid #4AE3B5; border-radius: 8px; padding: 10px 12px; text-align: center; }
-    .kpi-label { color: #FFFFFF; font-size: 11px; }
-    .kpi-value { color: #4AE3B5; font-size: 26px; font-weight: bold; }
-    .kpi-sub   { color: #FFFFFF; font-size: 10px; }
-    .title-bar { border-left: 4px solid #4AE3B5; padding-left: 12px; color: white; font-size: 22px; font-weight: bold; margin: 4px 0 12px 0; }
-    .ver-badge { display:inline-block; background:#1C2836; color:#8AB4F8; border:1px solid #8AB4F8; border-radius:12px; padding:1px 10px; font-size:12px; margin-left:10px; vertical-align:middle; }
-    .scenario-box { background: #1C2836; border-left: 3px solid #4AE3B5; padding: 8px 12px; border-radius: 4px; color: #FFFFFF; font-size: 12px; margin-bottom: 8px; }
-    .stDataFrame { background-color: #15202C; font-size: 11px; }
-    .block-container { padding-top: 3.2rem !important; padding-bottom: 0.5rem !important; max-width: 100%; }
-    .stTabs [data-baseweb="tab-list"] { gap: 8px; background: transparent; }
-    .stTabs [data-baseweb="tab"] { background: #15202C; border-radius: 8px 8px 0 0; padding: 10px 24px; color: #FFFFFF; font-size: 16px; font-weight: bold; }
-    .stTabs [aria-selected="true"] { background: #4AE3B5 !important; color: #0A141F !important; }
-    [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p { color: #FFFFFF !important; }
-    [data-testid="stWidgetLabel"] p, [data-testid="stWidgetLabel"] label { color: #FFFFFF !important; }
-    .stCheckbox p, .stRadio p, .stMarkdown p { color: #FFFFFF !important; }
-    .stSidebar p, .stSidebar label, .stSidebar [data-testid="stWidgetLabel"] p { color: #FFFFFF !important; }
-</style>
-""", unsafe_allow_html=True)
+st.markdown("""<style>
+.stApp { background-color: #0A141F; }
+.stSidebar { background-color: #15202C; }
+h1, h2, h3, h4 { color: #FFFFFF; }
+.kpi-card { background: #15202C; border: 1px solid #4AE3B5; border-radius: 8px; padding: 10px 12px; text-align: center; }
+.kpi-label { color: #FFFFFF; font-size: 11px; }
+.kpi-value { color: #4AE3B5; font-size: 26px; font-weight: bold; }
+.kpi-sub { color: #FFFFFF; font-size: 10px; }
+.title-bar { border-left: 4px solid #4AE3B5; padding-left: 12px; color: white; font-size: 22px; font-weight: bold; margin: 4px 0 12px 0; }
+.ver-badge { display:inline-block; background:#1C2836; color:#8AB4F8; border:1px solid #8AB4F8; border-radius:12px; padding:1px 10px; font-size:12px; margin-left:10px; vertical-align:middle; }
+.scenario-box { background: #1C2836; border-left: 3px solid #4AE3B5; padding: 8px 12px; border-radius: 4px; color: #FFFFFF; font-size: 12px; margin-bottom: 8px; }
+.stDataFrame { background-color: #15202C; font-size: 11px; }
+.block-container { padding-top: 3.2rem !important; padding-bottom: 0.5rem !important; max-width: 100%; }
+.stTabs [data-baseweb="tab-list"] { gap: 8px; background: transparent; }
+.stTabs [data-baseweb="tab"] { background: #15202C; border-radius: 8px 8px 0 0; padding: 10px 24px; color: #FFFFFF; font-size: 16px; font-weight: bold; }
+.stTabs [aria-selected="true"] { background: #4AE3B5 !important; color: #0A141F !important; }
+[data-testid="stCaptionContainer"] p { color: #FFFFFF !important; }
+[data-testid="stWidgetLabel"] p, [data-testid="stWidgetLabel"] label { color: #FFFFFF !important; }
+.stCheckbox p, .stRadio p, .stMarkdown p { color: #FFFFFF !important; }
+.stSidebar p, .stSidebar label { color: #FFFFFF !important; }
+div[role="radiogroup"] { gap: 8px; }
+div[role="radiogroup"] label { background: #15202C; border: 1px solid #2E3D4E; border-radius: 10px 10px 0 0; padding: 10px 26px; margin-right: 4px; cursor: pointer; }
+div[role="radiogroup"] label:has(input:checked) { background: #4AE3B5; border-color: #4AE3B5; }
+div[role="radiogroup"] label:has(input:checked) p { color: #0A141F !important; }
+div[role="radiogroup"] label p { font-size: 16px !important; font-weight: 700; }
+</style>""", unsafe_allow_html=True)
 
-# ============================================================
-# 버전 전환 — 좌: 🤖 AI 1.0 ver (테스트) / 우: 🟢 v0.9 (최신, 기본)
-# 큰 탭 형태 노출 (라디오 기반 — 선택된 버전만 실행해 성능 유지)
-# ============================================================
-st.markdown("""
-<style>
-    div[role="radiogroup"] { gap: 8px; }
-    div[role="radiogroup"] label {
-        background: #15202C; border: 1px solid #2E3D4E;
-        border-radius: 10px 10px 0 0; padding: 10px 26px; margin-right: 4px;
-        cursor: pointer;
-    }
-    div[role="radiogroup"] label:has(input:checked) {
-        background: #4AE3B5; border-color: #4AE3B5;
-    }
-    div[role="radiogroup"] label:has(input:checked) p { color: #0A141F !important; }
-    div[role="radiogroup"] label p { font-size: 16px !important; font-weight: 700; }
-</style>
-""", unsafe_allow_html=True)
-
-# AICA Studio (TEST) 라디오는 제거됨 — v0.9 단일 진입 (사용자 6/22 요청)
-import app_v20
-app_v20.render()
+# 7/13 root-cause fix: render() 전체를 try/except로 감싸 'Oh no' 흰 화면 대신 friendly error 표시
+try:
+    import app_v20
+    app_v20.render()
+except Exception as _render_err:
+    import traceback as _tb
+    _msg = '⚠️ 앱 렌더 실패: ' + type(_render_err).__name__ + ': ' + str(_render_err)
+    st.error(_msg)
+    with st.expander('🔎 디버그 traceback', expanded=False):
+        st.code(_tb.format_exc())
+    st.caption('💡 파일 push 직후 30초 대기 후 재접속, 또는 Streamlit Cloud Manage → Reboot')
+    if st.button('🔄 재시도', type='primary'):
+        st.rerun()
