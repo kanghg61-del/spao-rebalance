@@ -14,7 +14,7 @@ import copy
 import csv, io, os, gzip, hashlib
 from datetime import datetime, timedelta
 
-CHANNELS = ['공홈', '이랜드몰', '무신사', '지그재그', '네이버', '카카오선물하기']
+CHANNELS = ['공홈', '이랜드몰', '무신사', '지그재그', '네이버']  # 7/13 카카오톡선물하기 제거
 BW_NAME = '반응과'  # v1.4 참고 모드 전용
 
 # 외부창고 정의: 채널 → (창고명, 창고코드)

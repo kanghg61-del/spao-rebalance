@@ -195,6 +195,9 @@ def calc_rebalance_group(group, params, channels):
     ch_excl = params.get('ch_excl', {})
 
     def _x(code, c, direction):
+        # 7/13 사용자 정책: 이랜드몰은 신상(G코드) IN 안 받음 (재배치 회전 대상 제외)
+        if c == '이랜드몰' and direction == 'in' and len(code) >= 5 and code[4].upper() == 'G':
+            return True
         pats = ch_excl.get(c, {}).get(direction)
         return bool(pats) and any(p and p in code for p in pats)
 

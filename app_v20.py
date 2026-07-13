@@ -4992,6 +4992,7 @@ def _render_dashboard_body(mode: str) -> None:
         unsafe_allow_html=True,
     )
 
+    # 7/13 사용자 요청: '리오더 매핑 (SCM 기입)'·'요약' 탭 제거
     labels = [
         '🛡️ 재배치(기본)',
         '🎛️ 재배치(임의)',
@@ -5002,8 +5003,6 @@ def _render_dashboard_body(mode: str) -> None:
         '🏬 통합 재고뷰',
         '📊 채널 별 세부',
         '🚫 채널 IN-OUT (MD 기입)',
-        '🔁 리오더 매핑 (SCM 기입)',
-        '📋 요약',
     ]
     t = st.tabs(labels)
 
@@ -5035,21 +5034,13 @@ def _render_dashboard_body(mode: str) -> None:
         _safe('채널 별 세부', render_channel_tab)
     with t[8]:
         _safe('채널 IN-OUT (MD 기입)', render_excluded_tab)
-    with t[9]:
-        _safe('리오더 매핑', render_reorder_tab)
-    with t[10]:
-        _safe('요약', render_summary_tab)
 
 
 def render():
     st.markdown('<div class="title-bar">온라인 재고관리 Agent — 운영 대시보드<span class="ver-badge">v0.9</span></div>', unsafe_allow_html=True)
-    outer = st.tabs(['🧪 TEST (신규 데이터)', '🚀 Agent (운영·시연)'])
-    with outer[0]:
-        with _KeyIsolator('test'):
-            _render_dashboard_body('test')
-    with outer[1]:
-        with _KeyIsolator('agent'):
-            _render_dashboard_body('agent')
+    # 7/13 사용자 요청: Agent(운영·시연) 탭 제거 — TEST(신규 데이터) 단일 진입
+    with _KeyIsolator('test'):
+        _render_dashboard_body('test')
 
 
 if __name__ == '__main__':
