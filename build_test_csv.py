@@ -849,9 +849,8 @@ def stage7_finalize(skus_master: dict, bw_qty: dict, bw_name: dict,
             r[f"daily_{ch}"] = q
         skus[code] = r
 
-    # 신상 필터 (5번째 글자 = 'G')
-    skus = {c: r for c, r in skus.items() if len(c) >= 5 and c[4].upper() == "G"}
-    log.info(f"  신상만: {len(skus):,} 단품")
+    # 7/13: 신상 필터 해제 — 이월상품 포함 (사용자 정책 변경)
+    log.info(f"  전체(신상+이월): {len(skus):,} 단품")
 
     # 매출 랭킹 (주간외형매출 순)
     sorted_codes = sorted(skus.keys(),

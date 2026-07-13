@@ -423,8 +423,8 @@ def _csv_cache_key():
 
 
 def _filter_new_products(skus: dict) -> dict:
-    """TEST 탭 신상 필터 — 단품코드 5번째 글자(0-based idx 4)가 'G'인 단품만 유지 (사용자 7/2)."""
-    return {c: d for c, d in skus.items() if len(c) >= 5 and c[4].upper() == 'G'}
+    """7/13: 신상 필터 해제 — 이월상품 포함 재배치 대상 (사용자 정책 변경)."""
+    return skus
 
 
 @st.cache_data(show_spinner=False)
@@ -4928,8 +4928,8 @@ def _render_test_source_panel() -> None:
         st.markdown(
             f"**🧪 TEST 데이터 소스** — {source_kind}<br>"
             f"경로 `{current}` · 수정 {mtime_str}<br>"
-            f"<span style='color:#4AE3B5; font-weight:bold;'>✨ 신상 필터 적용 중</span> "
-            f"<span style='color:#888;'>— 단품코드 5번째 글자가 <code>G</code>인 상품만 표시</span>",
+            f"<span style='color:#4AE3B5; font-weight:bold;'>✨ 전체 상품 재배치 대상</span> "
+            f"<span style='color:#888;'>— 신상+이월 (7/13 필터 해제)</span>",
             unsafe_allow_html=True,
         )
         c1, c2 = st.columns([4, 1])
