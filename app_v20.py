@@ -5006,180 +5006,245 @@ def _render_test_source_panel() -> None:
 
 
 def render_batch_approval_tab():
-    """🗳️ 오늘의 결재 — 배치 일괄 승인 (7/13 팀장 의사결정 허브 1차).
+    """🗳️ 오늘의 결재 — 통합 결재함 (7/13 A안 v2).
 
-    스타일 단위 승인 대신 '오늘의 배치안' 1건을 일괄 결재.
-    물류는 하루 1회 배치 운영 (SLA: 운영자 확정 8:00~8:15 → 물류 8:30 마감)이므로
-    결정 단위 = 배치. 개별 개입은 승인이 아닌 '제외 체크'로만 (management by exception).
+    v1(배치 일괄 승인 단독)은 재배치(기본)과 역할 중복 피드백으로 제거.
+    v2 = 오늘 결정할 것 4종을 한 큐로: ① 회전 배치(12:00 마감 일괄 결재)
+    ② 리오더 요청(요청서 발송 승인) ③ 추가 분배(요청서 발송 승인) ④ 예외.
+    결재함은 '결정' 전용 — 수치 조정·단품 검토는 각 탭에서 (역할 분리).
     """
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
 
     _kst = _tz(_td(hours=9))
     _now = _dt.now(_kst)
-    _deadline = _now.replace(hour=8, minute=15, second=0, microsecond=0)
     _wd = ['월', '화', '수', '목', '금', '토', '일'][_now.weekday()]
+    _deadline = _now.replace(hour=12, minute=0, second=0, microsecond=0)
     if _now <= _deadline:
         _remain = int((_deadline - _now).total_seconds())
-        _hh, _rest = divmod(_remain, 3600)
-        _mm = _rest // 60
-        _clock = f'⏱️ 물류 확정 마감(8:15)까지 <b>{_hh}시간 {_mm}분</b>'
-    elif _now.hour < 9:
-        _clock = '⚠️ 8:15 경과 — 물류 8:30 마감 임박, 즉시 확정 필요'
+        _hh, _mm = divmod(_remain // 60, 60)
+        _clock = f'⏱️ 회전 배치 확정 마감(12:00)까지 <b>{_hh}시간 {_mm}분</b>'
     else:
-        _clock = '🌙 금일 물류 마감 경과 — 내일 아침 배치 기준 검토'
+        _clock = '🌙 금일 회전 배치 마감(12:00) 경과 — 내일 배치 기준 검토'
 
     st.markdown(
-        f'<div class="scenario-box">🗳️ <b>오늘의 배치안 — {_now.strftime("%m/%d")} ({_wd})</b> · '
-        f'기본은 <b>일괄 승인</b> · 개별 개입은 아래 "제외 체크"로만 · {_clock}</div>',
+        f'<div class="scenario-box">🗳️ <b>오늘의 결재 — {_now.strftime("%m/%d")} ({_wd})</b> · '
+        f'결재함은 <b>결정 전용</b> (수치 조정·단품 검토는 각 탭에서) · {_clock}</div>',
         unsafe_allow_html=True,
     )
 
-    _done_id = st.session_state.get('batch_approved_id')
-    if _done_id:
-        st.success(f'✅ 오늘 배치 승인 완료 (실행 id={_done_id}) — 📈 실행 효과 탭에서 실측 추적 중. 아래는 참고용 현황.')
+    def _goto(label, key):
+        # 상단 라디오 탭으로 이동 — pending 키에 담아 다음 rerun에서 라디오 생성 전에 반영
+        if st.button(f'{label} 탭에서 세부 검토 →', key=key, use_container_width=True):
+            st.session_state['_reba_goto_tab'] = label
+            st.rerun()
 
-    # ── 배치안 계산 — 재배치 '기본' 프리셋 그대로 (보수 30%) ──
-    preset = SCENARIOS['🛡️ 기본']
+    def _badge(text, kind):
+        _colors = {'danger': ('#3B1220', '#FF6B6B'),
+                   'warn': ('#4A3A10', '#FFC000'),
+                   'ok': ('#123B2E', '#4AE3B5')}
+        _bg, _fg = _colors.get(kind, _colors['ok'])
+        return (f'<span style="float:right;background:{_bg};color:{_fg};border:1px solid {_fg};'
+                f'border-radius:12px;padding:2px 10px;font-size:11px;font-weight:bold">{text}</span>')
+
+    # ── ① 회전 배치 — 재배치(기본) 프리셋 · 12:00 일괄 결재 ──
+    results, sel_items = [], []
     try:
-        if not (st.session_state.get('ch_excl_rows') or []):
-            _persist_load_ch_excl()
-    except Exception:
-        pass
-    _ch_excl_active = _ch_excl_key()
-    params_key = (preset['shortage_th'], preset['target_woc'], 0.0,
-                  preset['min_move'], preset.get('min_recv', 4),
-                  _ch_excl_active, preset.get('move_cap_pct', 0.5))
-    with st.spinner('오늘의 배치안 계산 중...'):
-        results = calc_results_v20(params_key, _csv_cache_key())
-    results = _apply_exclusion(results)
-    results = _apply_overrides(results)
-    move_items = [r for r in results if any(v > 0 for v in r['moves'].values())]
-
-    # ── 가드레일 체크리스트 (일괄 승인의 신뢰 전제) ──
-    _n_rules = 0
-    for _ch, _dir, _pats in (_ch_excl_active or ()):
-        _n_rules += len(_pats) if _pats else 0
-    _cap_pct = int(round(preset.get('move_cap_pct', 0.5) * 100))
-    _pills = [
-        (f'회전 상한 {_cap_pct}% (보수)', True),
-        (f'채널 IN-OUT 규칙 {_n_rules}건 적용', bool(_ch_excl_active)),
-        (f'소액 채널 제외 (주판 {preset.get("min_recv", 4)}장 미만)', True),
-        (f'이동 {preset["min_move"]}장 이상만', True),
-        ('외부창고(AENS·ADU3·ADQS) 이동 제외', True),
-    ]
-    _pill_html = ''.join(
-        f'<span style="display:inline-block;margin:2px 6px 2px 0;padding:3px 12px;border-radius:12px;'
-        f'font-size:12px;font-weight:bold;'
-        + ('background:#123B2E;color:#4AE3B5;border:1px solid #4AE3B5;">✓ '
-           if ok else 'background:#3B1220;color:#FF6B6B;border:1px solid #FF6B6B;">✗ ')
-        + label + '</span>'
-        for label, ok in _pills
-    )
-    st.markdown(f'<div style="margin:2px 0 8px 0">{_pill_html}</div>', unsafe_allow_html=True)
-    if not _ch_excl_active:
-        st.error('⚠️ 채널 IN-OUT 규칙이 비어 있습니다 — "채널 IN-OUT (MD 기입)" 탭 진입 후 재시도하세요. 규칙 미적용 상태로 일괄 승인하면 이동량이 폭증할 수 있습니다.')
-
-    # ── 제외 체크 (스타일 단위) — 개별 개입은 여기서만 ──
-    _styles = sorted({r['code'][:10] for r in move_items})
-    col_x1, col_x2 = st.columns([3, 2])
-    with col_x1:
-        excl_styles = st.multiselect(
-            '🚫 이번 배치에서 제외할 스타일 (선택분 제외 후 나머지 일괄 승인)',
-            options=_styles, key='batch_excl_styles',
-            placeholder='기본: 제외 없음 — 전량 일괄 승인')
-    with col_x2:
-        excl_memo = st.text_input('제외 사유 메모 (이력 기록)', key='batch_excl_memo',
-                                  placeholder='예: 7/15 무신사 기획전 보호')
-    _excl_set = set(excl_styles or [])
-    sel_items = [r for r in move_items if r['code'][:10] not in _excl_set]
-    n_excluded = len(move_items) - len(sel_items)
-
-    sel_qty = sum(sum(v for v in it['moves'].values() if v > 0) for it in sel_items)
-    sel_rev = sum(it['revenue'] for it in sel_items)
-
-    # ── 배치 요약 KPI ──
-    def _kpi(col, label, value, sub=''):
-        col.markdown(
-            f'<div class="kpi-card" style="min-height:100px;display:flex;flex-direction:column;justify-content:center">'
-            f'<div class="kpi-label">{label}</div>'
-            f'<div class="kpi-value">{value}</div><div class="kpi-sub">{sub}</div></div>',
+        preset = SCENARIOS['🛡️ 기본']
+        try:
+            if not (st.session_state.get('ch_excl_rows') or []):
+                _persist_load_ch_excl()
+        except Exception:
+            pass
+        _ch_excl_active = _ch_excl_key()
+        params_key = (preset['shortage_th'], preset['target_woc'], 0.0,
+                      preset['min_move'], preset.get('min_recv', 4),
+                      _ch_excl_active, preset.get('move_cap_pct', 0.5))
+        with st.spinner('오늘의 회전 배치 계산 중...'):
+            results = calc_results_v20(params_key, _csv_cache_key())
+        results = _apply_exclusion(results)
+        results = _apply_overrides(results)
+        sel_items = [r for r in results if any(v > 0 for v in r['moves'].values())]
+        sel_qty = sum(sum(v for v in it['moves'].values() if v > 0) for it in sel_items)
+        sel_rev = sum(it['revenue'] for it in sel_items)
+        _n_rules = 0
+        for _ch, _dir, _pats in (_ch_excl_active or ()):
+            _n_rules += len(_pats) if _pats else 0
+        _done = st.session_state.get('batch_approved_id')
+        _b1 = _badge(f'승인 완료 #{_done}', 'ok') if _done else _badge('12:00 마감', 'danger')
+        st.markdown(
+            f'<div class="scenario-box">{_b1}🔁 <b>회전 배치</b> — 이동 <b>{len(sel_items):,}건 · {sel_qty:,}장</b> · '
+            f'기대 회수 <b>{sel_rev/100000000:.2f}억</b><br>'
+            f'<span style="font-size:11px;color:#9AB">출처: 재배치(기본) · 가드레일: 회전 상한 30% · '
+            f'채널 IN-OUT {_n_rules}건 · 외부창고 제외 · 컬러 그룹(아소트) 보호</span></div>',
             unsafe_allow_html=True)
-
-    k1, k2, k3, k4 = st.columns(4)
-    _kpi(k1, '이동 건수 (단품)', f'{len(sel_items):,}건',
-         f'제외 {n_excluded:,}건' if n_excluded else '제외 없음')
-    _kpi(k2, '이동 수량', f'{sel_qty:,}장', '온라인 6채널 내 회전')
-    _kpi(k3, '기대 회수 매출', f'{sel_rev/10000:.2f}억', '결품 해소 기준')
-    _kpi(k4, '시나리오', '보수 30%', '재배치(기본) 프리셋')
+        if not _ch_excl_active:
+            st.error('⚠️ 채널 IN-OUT 규칙 로드 실패 — "채널 IN-OUT (MD 기입)" 탭 진입 후 재시도하세요.')
+        cb1, cb2, cb3 = st.columns(3)
+        with cb1:
+            if st.button(f'✅ 일괄 승인 → 물류 지시서 ({len(sel_items):,}건)', type='primary',
+                         use_container_width=True, key='inbox_rot_approve',
+                         disabled=(not sel_items or bool(_done))):
+                details = []
+                for it in sel_items:
+                    for ch, v in it['moves'].items():
+                        if v > 0:
+                            details.append((it['code'], ch, it['data']['inv'].get(ch, 0), v, it['data']['price']))
+                try:
+                    exec_id = effect_log.log_execution('🗳️ 결재함·회전 배치', len(sel_items), sel_qty, sel_rev, details=details)
+                    st.session_state['batch_approved_id'] = exec_id
+                    st.toast(f'✅ 회전 배치 승인 기록 (id={exec_id}) — 실행 효과 탭에서 실측 추적', icon='💾')
+                    st.rerun()
+                except Exception as _e:
+                    st.error(f'⚠️ 실행 이력 저장 실패: {str(_e)[:200]}')
+        with cb2:
+            # 성능: 요청서 엑셀 생성은 승인 후에만 (매 rerun eager 생성 방지)
+            try:
+                if _done and sel_items:
+                    st.download_button(f'📦 물류 지시서 ({len(sel_items):,}건)',
+                                       data=_xlsx_logistics_bytes(sel_items),
+                                       file_name=f'물류이동요청_{_now.strftime("%y%m%d")}.xlsx',
+                                       mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                                       use_container_width=True, key='inbox_rot_xlsx')
+                else:
+                    st.button('📦 물류 지시서 (승인 후 생성)', disabled=True, use_container_width=True, key='inbox_rot_xlsx_dis')
+            except Exception:
+                st.button('📦 물류 지시서 (생성 오류)', disabled=True, use_container_width=True, key='inbox_rot_xlsx_err')
+        with cb3:
+            _goto('🛡️ 재배치(기본)', 'inbox_goto_rot')
+    except Exception as _e:
+        st.error(f'⚠️ 회전 배치 카드 로드 실패 — {type(_e).__name__}: {str(_e)[:150]}')
 
     st.markdown('')
 
-    # ── 일괄 승인 + 물류 지시서 ──
-    b1, b2, b3 = st.columns([2.4, 2.4, 3.2])
-    with b1:
-        if st.button(f'✅ 배치 일괄 승인 ({len(sel_items):,}건 · {sel_qty:,}장)',
-                     type='primary', use_container_width=True, key='batch_approve',
-                     disabled=(not sel_items)):
-            details = []
-            for it in sel_items:
-                for ch, v in it['moves'].items():
-                    if v > 0:
-                        details.append((it['code'], ch, it['data']['inv'].get(ch, 0), v, it['data']['price']))
-            _scn = '🗳️ 배치(기본)'
-            if _excl_set:
-                _scn += f' · 제외 {len(_excl_set)}스타일'
-                if excl_memo:
-                    _scn += f' ({excl_memo[:40]})'
-            try:
-                exec_id = effect_log.log_execution(_scn, len(sel_items), sel_qty, sel_rev, details=details)
-                st.session_state['batch_approved_id'] = exec_id
-                st.toast(f'✅ 배치 승인 기록 완료 (id={exec_id}) — 실행 효과 탭에서 실측 추적', icon='💾')
+    # ── ② 리오더 요청 — 회전으로 못 채우는 물량 (결품 임박 · 2주 수요 기준) ──
+    try:
+        _base = imminent_rows_by_channel('전체')
+        _sty_n = len({r['code'][:10] for r in _base})
+        _reord = sum(max(0, r['ord'] * 2 - r['inv']) for r in _base)
+        _exp = sum(max(0, r['ord'] * 2 - r['inv']) * r['price'] for r in _base)
+        _ok2 = st.session_state.get('inbox_reo_approved')
+        _b2 = _badge(f'발송 승인 {_ok2}', 'ok') if _ok2 else _badge('오늘 중', 'warn')
+        st.markdown(
+            f'<div class="scenario-box">{_b2}🚨 <b>리오더 요청</b> — 결품 임박 <b>{len(_base):,}단품 · {_sty_n:,}스타일</b> · '
+            f'권장 <b>{_reord:,}장</b> · 기대매출 <b>{_exp/100000000:.2f}억</b><br>'
+            f'<span style="font-size:11px;color:#9AB">출처: 리오더 요청 · 회전으로 못 채우는 물량 '
+            f'(재고주수 1주 미만 · 리오더 권장 = 2주 수요 − 현재고)</span></div>',
+            unsafe_allow_html=True)
+        rb1, rb2, rb3 = st.columns(3)
+        with rb1:
+            if st.button('✅ 요청서 발송 승인', type='primary', use_container_width=True,
+                         key='inbox_reo_approve', disabled=(not _base or bool(_ok2))):
+                st.session_state['inbox_reo_approved'] = _now.strftime('%H:%M')
+                st.toast('✅ 리오더 요청서 발송 승인 — 요청서를 내려받아 SCM에 전달하세요', icon='📨')
                 st.rerun()
-            except Exception as _e:
-                st.error(f'⚠️ 실행 이력 저장 실패: {str(_e)[:200]}')
-    with b2:
-        try:
-            if sel_items:
-                st.download_button(
-                    f'📦 물류 지시서 다운로드 ({len(sel_items):,}건)',
-                    data=_xlsx_logistics_bytes(sel_items),
-                    file_name=f'물류이동요청_{_now.strftime("%y%m%d")}.xlsx',
-                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                    use_container_width=True, key='batch_logi_xlsx')
-            else:
-                st.button('📦 물류 지시서 (0건)', use_container_width=True, disabled=True, key='batch_logi_dis')
-        except Exception:
-            st.button('📦 물류 지시서 (생성 오류)', use_container_width=True, disabled=True, key='batch_logi_err')
-    with b3:
-        st.caption('승인 → 실행 이력 자동 기록 (실행 효과 탭 실측 추적) · 물류 지시서는 FROM 채널별 시트 양식 (7/8 개정). '
-                   '세부 단품 검토가 필요하면 🛡️ 재배치(기본) 탭 사용.')
+        with rb2:
+            # 성능: 요청서 엑셀 생성은 발송 승인 후에만
+            try:
+                if _ok2 and _base:
+                    _rows = [{'단품코드': r['code'], '단품명': r['name'], '현재고': int(r['inv']),
+                              '주판': int(r['ord']),
+                              '재고주수': (round(r['woc'], 2) if r.get('woc') is not None else ''),
+                              '필업요청(장)': int(max(0, r['ord'] * 2 - r['inv'])),
+                              '기대매출(만원)': int(round(max(0, r['ord'] * 2 - r['inv']) * r['price'] / 10000))}
+                             for r in _base]
+                    _rdf = pd.DataFrame(_rows).sort_values('기대매출(만원)', ascending=False)
+                    st.download_button(f'⬇️ 리오더 요청서 ({len(_rdf):,}건)',
+                                       data=_xlsx_bytes({'리오더 요청': _rdf}),
+                                       file_name=f'리오더요청서_{_now.strftime("%y%m%d")}.xlsx',
+                                       mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                                       use_container_width=True, key='inbox_reo_xlsx')
+                else:
+                    st.button('⬇️ 리오더 요청서 (발송 승인 후 생성)', disabled=True, use_container_width=True, key='inbox_reo_xlsx_dis')
+            except Exception:
+                st.button('⬇️ 리오더 요청서 (생성 오류)', disabled=True, use_container_width=True, key='inbox_reo_xlsx_err')
+        with rb3:
+            _goto('🚨 리오더 요청', 'inbox_goto_reo')
+    except Exception as _e:
+        st.error(f'⚠️ 리오더 카드 로드 실패 — {type(_e).__name__}: {str(_e)[:150]}')
 
-    # ── 예외 큐 — 배치로 해소되지 않는 결품 임박 (별도 판단) ──
-    exc_rows = []
-    for r in results:
-        d = r['data']
-        for ch in CHANNELS:
-            o = d['orders'].get(ch, 0)
-            inv = d['inv'].get(ch, 0)
-            mv = r['moves'].get(ch, 0)
-            if o > 0 and inv < o and mv <= 0:
-                exc_rows.append({
-                    '단품코드': r['code'],
-                    '채널': CH_SHORT.get(ch, ch),
-                    '현재고': int(inv),
-                    '주간 주문': int(o),
-                    '재고주수': round(inv / o, 2),
-                    '잠재손실(만원)': int(round(max(0, o - inv) * d.get('price', 0) / 10000)),
-                })
-    if exc_rows:
-        exc_df = pd.DataFrame(exc_rows).sort_values('잠재손실(만원)', ascending=False)
-        st.markdown(f'#### 🚨 예외 큐 — 배치 회전으로 해소되지 않는 결품 임박 <b>{len(exc_rows):,}건</b> (상위 30 표시)',
-                    unsafe_allow_html=True)
-        st.caption('이번 배치에 IN이 배정되지 않은 재고주수 1주 미만 채널 — 회전으로는 못 채우는 물량. '
-                   '🚨 리오더 요청 탭에서 발주하거나 옴니 매장 당김으로 별도 판단하세요.')
-        st.dataframe(exc_df.head(30), use_container_width=True, hide_index=True, key='batch_exc_df')
-    else:
-        st.info('예외 없음 — 결품 임박 채널이 모두 이번 배치로 해소됩니다.')
+    st.markdown('')
+
+    # ── ③ 추가 분배 — 회전 후 잔여 결품을 반응과(창고) 재고로 보충 ──
+    try:
+        _d_rows = []
+        _d_qty = 0
+        _d_sty = set()
+        for r in results:
+            _dist, _used = calc_distribution(r['data'], r['moves'], CHANNELS)
+            if _used > 0:
+                _d_qty += int(_used)
+                _d_sty.add(r['code'][:10])
+                _d_rows.append({'단품코드': r['code'], '단품명': r['data'].get('name', ''),
+                                '반응과 재고': int(r['data']['inv'].get('반응과', 0)),
+                                '분배량(장)': int(_used),
+                                '분배 상세': ' / '.join(f'{CH_SHORT.get(c, c)}+{q}' for c, q in _dist.items() if q > 0)})
+        _ok3 = st.session_state.get('inbox_dist_approved')
+        _b3 = _badge(f'발송 승인 {_ok3}', 'ok') if _ok3 else _badge('이번 주', 'ok')
+        st.markdown(
+            f'<div class="scenario-box">{_b3}🧩 <b>추가 분배</b> — 반응과(창고) → 채널 '
+            f'<b>{len(_d_rows):,}단품 · {len(_d_sty):,}스타일 · {_d_qty:,}장</b><br>'
+            f'<span style="font-size:11px;color:#9AB">출처: 추가 분배 · 회전 후에도 남는 결품을 반응과 재고로 보충 (목표 2주)</span></div>',
+            unsafe_allow_html=True)
+        db1, db2, db3 = st.columns(3)
+        with db1:
+            if st.button('✅ 요청서 발송 승인 ', type='primary', use_container_width=True,
+                         key='inbox_dist_approve', disabled=(not _d_rows or bool(_ok3))):
+                st.session_state['inbox_dist_approved'] = _now.strftime('%H:%M')
+                st.toast('✅ 추가 분배 요청서 발송 승인 — 요청서를 내려받아 SCM에 전달하세요', icon='📨')
+                st.rerun()
+        with db2:
+            # 성능: 요청서 엑셀 생성은 발송 승인 후에만
+            try:
+                if _ok3 and _d_rows:
+                    _ddf = pd.DataFrame(_d_rows).sort_values('분배량(장)', ascending=False)
+                    st.download_button(f'⬇️ 분배 요청서 ({len(_ddf):,}건)',
+                                       data=_xlsx_bytes({'추가 분배 요청': _ddf}),
+                                       file_name=f'추가분배요청서_{_now.strftime("%y%m%d")}.xlsx',
+                                       mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                                       use_container_width=True, key='inbox_dist_xlsx')
+                else:
+                    st.button('⬇️ 분배 요청서 (발송 승인 후 생성)', disabled=True, use_container_width=True, key='inbox_dist_xlsx_dis')
+            except Exception:
+                st.button('⬇️ 분배 요청서 (생성 오류)', disabled=True, use_container_width=True, key='inbox_dist_xlsx_err')
+        with db3:
+            _goto('🧩 추가 분배', 'inbox_goto_dist')
+    except Exception as _e:
+        st.error(f'⚠️ 추가 분배 카드 로드 실패 — {type(_e).__name__}: {str(_e)[:150]}')
+
+    st.markdown('')
+
+    # ── ④ 예외 — 회전 배치로 해소되지 않는 결품 임박 (팀장 전결 판단) ──
+    try:
+        exc_rows = []
+        for r in results:
+            d = r['data']
+            for ch in CHANNELS:
+                o = d['orders'].get(ch, 0)
+                inv = d['inv'].get(ch, 0)
+                if o > 0 and inv < o and r['moves'].get(ch, 0) <= 0:
+                    exc_rows.append({
+                        '단품코드': r['code'],
+                        '채널': CH_SHORT.get(ch, ch),
+                        '현재고': int(inv),
+                        '주간 주문': int(o),
+                        '재고주수': round(inv / o, 2),
+                        '잠재손실(만원)': int(round(max(0, o - inv) * d.get('price', 0) / 10000)),
+                    })
+        _loss = sum(x['잠재손실(만원)'] for x in exc_rows)
+        _b4 = _badge('즉시 확인', 'danger') if exc_rows else _badge('예외 없음', 'ok')
+        st.markdown(
+            f'<div class="scenario-box">{_b4}⚠️ <b>예외</b> — 회전 배치로 해소되지 않는 결품 임박 '
+            f'<b>{len(exc_rows):,}건</b> · 잠재손실 <b>{_loss/10000:.2f}억</b><br>'
+            f'<span style="font-size:11px;color:#9AB">배치 룰 밖 물량 — 리오더·옴니 매장 당김 등 팀장 전결 판단 영역</span></div>',
+            unsafe_allow_html=True)
+        if exc_rows:
+            with st.expander(f'🔎 예외 상위 30건 보기 (전체 {len(exc_rows):,}건 · 잠재손실순)'):
+                st.dataframe(pd.DataFrame(exc_rows).sort_values('잠재손실(만원)', ascending=False).head(30),
+                             use_container_width=True, hide_index=True, key='inbox_exc_df')
+    except Exception as _e:
+        st.error(f'⚠️ 예외 카드 로드 실패 — {type(_e).__name__}: {str(_e)[:150]}')
+
+    st.caption('🗂️ 결재함 = 결정 전용 큐 · 수치 조정·단품 검토는 각 탭에서 · 회전 승인 이력은 📈 실행 효과 탭에 자동 기록')
 
 
 def _render_dashboard_body(mode: str) -> None:
@@ -5213,8 +5278,9 @@ def _render_dashboard_body(mode: str) -> None:
     # 7/13 세그폴트 root-cause fix: st.tabs는 모든 탭 바디를 eager 렌더
     # (9탭 × 13,894 SKU → 메모리 초과 → Segmentation fault).
     # 라디오 선택 후 해당 탭 1개만 렌더 — 라디오는 app.py CSS로 탭 모양 스타일링.
-    # 7/13 사용자 요청: '오늘의 결재' 탭 제거 (render_batch_approval_tab 함수는 보존 — 추후 재도입 대비)
+    # 7/13 v0.9.12: '오늘의 결재' 재도입 — A안 통합 결재함 (회전 배치·리오더·추가 분배·예외를 한 큐로)
     _tab_renderers = [
+        ('🗳️ 오늘의 결재', render_batch_approval_tab),
         ('🛡️ 재배치(기본)', lambda: render_scenario('🛡️ 기본', st, allow_slider=False)),
         ('🎛️ 재배치(임의)', lambda: render_scenario('🎛️ 임의', st, allow_slider=True)),
         ('🤖 AI 일일 요약(TEST)', render_ai_summary_tab),
@@ -5226,6 +5292,11 @@ def _render_dashboard_body(mode: str) -> None:
         ('🚫 채널 IN-OUT (MD 기입)', render_excluded_tab),
     ]
     labels = [name for name, _ in _tab_renderers]
+    # 결재함 '세부 검토 →' 탭 이동 — _KeyIsolator가 key에 '__{mode}' 접미를 붙이므로
+    # pending 키로 받아 라디오 생성 전에 위젯 상태를 직접 지정 (post-instantiation 수정 예외 회피)
+    _pending_tab = st.session_state.pop('_reba_goto_tab', None)
+    if _pending_tab in labels:
+        st.session_state[f'main_tab_{mode}__{mode}'] = _pending_tab
     sel_label = st.radio('메인 탭', labels, horizontal=True,
                          label_visibility='collapsed', key=f'main_tab_{mode}')
 
@@ -5255,3 +5326,5 @@ if __name__ == '__main__':
 
 # v0.9.10 (2026-07-13) — 세그폴트 fix(선택 탭만 렌더) + 🗳️ 오늘의 결재(배치 일괄 승인) 탭 추가
 # v0.9.11 (2026-07-13) — 사용자 요청: '오늘의 결재' 탭 제거 (함수는 보존, 노출만 해제)
+# v0.9.12 (2026-07-13) — 🗳️ 오늘의 결재 v2 재도입: A안 통합 결재함 (회전 배치 12:00 마감 일괄 결재 ·
+#                        리오더/추가 분배 '요청서 발송 승인' · 예외 큐 · 탭 이동 버튼) — 역할 중복 해소
