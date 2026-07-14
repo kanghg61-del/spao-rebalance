@@ -5111,7 +5111,7 @@ def render_batch_approval_tab():
             if not _ch_excl_active:
                 st.error('⚠️ 채널 IN-OUT 규칙 로드 실패 — "채널 IN-OUT (MD 기입)" 탭 진입 후 재시도하세요.')
             # 7/14 사용자: 재배치(기본) 탭과 동일 구성·기능 — ①승인(회전)+확인 다이얼로그
-            # ②Excel(회전 수기 실행용·채널별 시트+조건부 서식) ③Excel(물류용) 상시 제공
+            # ②Excel(물류용) 상시 제공 (7/14 후속: 회전 수기 실행용 Excel 버튼은 제거)
             if st.button(f'✅ {len(sel_items):,}건 승인(회전)', type='primary',
                          use_container_width=True, key='inbox_rot_approve',
                          disabled=(not sel_items)):
@@ -5134,80 +5134,7 @@ def render_batch_approval_tab():
                     exec_id = -1
                     st.error(f'⚠️ 실행 이력 저장 실패: {str(_e)[:200]}')
                 _approve_dialog('🗳️ 결재함·회전', len(sel_items), sel_qty, sel_amt, sel_rev, ch_in, ch_out, exec_id)
-            # ② Excel (회전 수기 실행용) — 재배치(기본) 탭과 동일 로직
-            try:
-                smap = _load_style_map()
-                out_rows = {ch: [] for ch in CHANNELS}
-                all_rows = []
-                for it in sel_items:
-                    d = it['data']
-                    code = it['code']
-                    moves = it.get('moves', {})
-                    sty = code[:10]
-                    sty_name = smap.get(sty, d.get('name', ''))
-                    in_pairs = [(ch, moves[ch]) for ch in CHANNELS if moves.get(ch, 0) > 0]
-                    in_str = ' / '.join([f'{CH_SHORT.get(ch, ch)}+{q:,}' for ch, q in in_pairs])
-                    in_wh_str = ' / '.join([WAREHOUSE_CODE.get(ch, '-') for ch, _ in in_pairs])
-                    for ch in CHANNELS:
-                        ch_move = moves.get(ch, 0)
-                        if ch_move == 0:
-                            continue
-                        out_qty = max(0, -ch_move)
-                        in_qty = max(0, ch_move)
-                        price = d.get('price', 0)
-                        inv_my = d['inv'].get(ch, 0)
-                        ord_my = d['orders'].get(ch, 0)
-                        woc_cur = round(inv_my / ord_my, 1) if ord_my > 0 else None
-                        woc_after = round((inv_my + in_qty - out_qty) / ord_my, 1) if ord_my > 0 else None
-                        out_value = round(out_qty * price / 10000) if out_qty > 0 else 0
-                        old_short_ch = max(0, ord_my - inv_my)
-                        new_short_ch = max(0, ord_my - (inv_my + in_qty - out_qty))
-                        relief = round((old_short_ch - new_short_ch) * price / 10000)
-                        row = {
-                            '단품코드': code, '스타일코드': sty, '스타일명': sty_name,
-                            '내 채널 현재고': inv_my,
-                            '내 채널 주판': ord_my,
-                            '현 재고주수': (f'{woc_cur}주' if woc_cur is not None else ''),
-                            'OUT 수량(장)': int(out_qty),
-                            'IN 수량(장)': int(in_qty),
-                            '이동 후 재고주수': (f'{woc_after}주' if woc_after is not None else ''),
-                            '받는 채널 분배': in_str,
-                            '받는 채널 매장코드': in_wh_str,
-                            '내 채널 매장코드': WAREHOUSE_CODE.get(ch, '-'),
-                            '단품 정상가(원)': price,
-                            'OUT 매출가치(만원)': out_value,
-                            '결품해소 회수(만원)': relief,
-                        }
-                        out_rows[ch].append(row)
-                        all_rows.append({**row, '채널': ch})
-                sheets = {}
-                for ch in CHANNELS:
-                    if out_rows[ch]:
-                        sheets[CH_SHORT.get(ch, ch)] = (
-                            pd.DataFrame(out_rows[ch])
-                            .sort_values('OUT 수량(장)', ascending=False)
-                            .reset_index(drop=True)
-                        )
-                if all_rows:
-                    sheets['전체 회전 매트릭스'] = pd.DataFrame(all_rows)
-                tot_qty = sum(r['OUT 수량(장)'] for r in all_rows) if all_rows else 0
-                if sheets:
-                    bar_cols = ['내 채널 현재고', '내 채널 주판', 'OUT 수량(장)']
-                    red_bar_cols = ['OUT 매출가치(만원)', '결품해소 회수(만원)']
-                    woc_cols = ['현 재고주수', '이동 후 재고주수']
-                    bold_cols = ['OUT 수량(장)', '결품해소 회수(만원)']
-                    st.download_button(
-                        f'⬇️ Excel 다운로드 (회전 수기 실행용 · {len(sel_items):,}건)',
-                        data=_xlsx_bytes_with_bars(sheets, bar_cols, red_bar_cols, woc_cols, bold_cols),
-                        file_name=f'회전결과_결재함_{_now.strftime("%Y%m%d_%H%M")}_{tot_qty}장.xlsx',
-                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                        use_container_width=True, key='inbox_rot_xlsx_manual',
-                    )
-                else:
-                    st.button('⬇️ Excel 다운로드 (회전 수기 실행용 · 0건)', use_container_width=True, disabled=True, key='inbox_rot_xlsx_manual_dis')
-            except Exception:
-                st.button('⬇️ Excel 다운로드 (회전 수기 실행용 · 에러)', use_container_width=True, disabled=True, key='inbox_rot_xlsx_manual_err')
-            # ③ Excel (물류용) — 재배치(기본) 탭과 동일 (받는 매장 입장 양식)
+            # ② Excel (물류용) — 재배치(기본) 탭과 동일 (받는 매장 입장 양식)
             try:
                 if sel_items:
                     st.download_button(f'📦 Excel 다운로드 (물류용 · {len(sel_items):,}건)',
@@ -5239,7 +5166,7 @@ def render_batch_approval_tab():
                               f'{_exp/100000000:.2f}억',
                               f'권장 {_reord:,}장 · 정상가 기준 · 리드타임 1~2개월'))
             _hcard('#FFC000', _bt2[0], _bt2[1], '🚨', '리오더 요청',
-                   '요청서 발송 승인 · 회전으로 못 채우는 물량', _nums2)
+                   '요청서 발송 승인 · 분배/회전으로 못 채우는 물량', _nums2)
             if st.button('✅ 요청서 발송 승인', type='primary', use_container_width=True,
                          key='inbox_reo_approve', disabled=(not _base or bool(_ok2))):
                 st.session_state['inbox_reo_approved'] = _now.strftime('%H:%M')
@@ -5426,4 +5353,4 @@ if __name__ == '__main__':
 #                        ② 리오더 권장 물량 2주→1주 수요 기준 (결재함 카드 + 리오더 요청 탭 동시 변경)
 #                        ③ 리오더 요청 탭 전 숫자 천단위 콤마 (핵심 10 스타일 표 · 메일 본문 표)
 #                        ④ 결재함 회전 배치 카드 = 재배치(기본)과 동일 구성·기능 (N건 승인(회전)+확인 다이얼로그 ·
-#                           Excel 회전 수기 실행용 · Excel 물류용 — 상시 제공)
+#                           Excel 물류용 상시 제공 — 회전 수기 실행용 Excel 버튼은 사용자 요청으로 미노출)
