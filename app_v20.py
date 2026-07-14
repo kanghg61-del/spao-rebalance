@@ -5006,11 +5006,11 @@ def _render_test_source_panel() -> None:
 
 
 def render_batch_approval_tab():
-    """🗳️ 오늘의 결재 — 통합 결재함 (7/13 A안 v2).
+    """🗳️ 오늘의 결재 — 통합 결재함 (7/13 A안 v3 — 세로 대형 결정 카드).
 
-    v1(배치 일괄 승인 단독)은 재배치(기본)과 역할 중복 피드백으로 제거.
-    v2 = 오늘 결정할 것 4종을 한 큐로: ① 회전 배치(12:00 마감 일괄 결재)
-    ② 리오더 요청(요청서 발송 승인) ③ 추가 분배(요청서 발송 승인) ④ 예외.
+    v3(사용자 7/13): ④ 예외 카드 제거 · 결정 3종(회전 배치/리오더/추가 분배)을
+    세로 대형 카드로 재구성 — 핵심 숫자 34px·제목 23px·큰 버튼. 팀장이 "무엇을,
+    왜 지금, 승인하면 무슨 일이 일어나는지"를 카드만 보고 결정할 수 있도록.
     결재함은 '결정' 전용 — 수치 조정·단품 검토는 각 탭에서 (역할 분리).
     """
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
@@ -5022,15 +5022,27 @@ def render_batch_approval_tab():
     if _now <= _deadline:
         _remain = int((_deadline - _now).total_seconds())
         _hh, _mm = divmod(_remain // 60, 60)
-        _clock = f'⏱️ 회전 배치 확정 마감(12:00)까지 <b>{_hh}시간 {_mm}분</b>'
+        _clock_short = f'{_hh}시간 {_mm}분'
+        _clock = f'⏱️ 회전 배치 확정 마감(12:00)까지 <b>{_clock_short}</b>'
     else:
+        _clock_short = '마감 경과'
         _clock = '🌙 금일 회전 배치 마감(12:00) 경과 — 내일 배치 기준 검토'
 
     st.markdown(
-        f'<div class="scenario-box">🗳️ <b>오늘의 결재 — {_now.strftime("%m/%d")} ({_wd})</b> · '
+        f'<div class="scenario-box" style="font-size:15px;padding:12px 16px">'
+        f'🗳️ <b>오늘의 결재 — {_now.strftime("%m/%d")} ({_wd})</b> · '
         f'결재함은 <b>결정 전용</b> (수치 조정·단품 검토는 각 탭에서) · {_clock}</div>',
         unsafe_allow_html=True,
     )
+
+    # v3 — 결정 카드 대형화: 버튼 글자 확대 (이 탭 렌더 시에만 적용)
+    st.markdown(
+        '<style>'
+        'div[data-testid="stButton"] button p, div[data-testid="stDownloadButton"] button p'
+        '{font-size:17px !important; font-weight:700 !important;}'
+        'div[data-testid="stButton"] button, div[data-testid="stDownloadButton"] button'
+        '{padding:0.65rem 1rem !important;}'
+        '</style>', unsafe_allow_html=True)
 
     def _goto(label, key):
         # 상단 라디오 탭으로 이동 — pending 키에 담아 다음 rerun에서 라디오 생성 전에 반영
@@ -5044,7 +5056,24 @@ def render_batch_approval_tab():
                    'ok': ('#123B2E', '#4AE3B5')}
         _bg, _fg = _colors.get(kind, _colors['ok'])
         return (f'<span style="float:right;background:{_bg};color:{_fg};border:1px solid {_fg};'
-                f'border-radius:12px;padding:2px 10px;font-size:11px;font-weight:bold">{text}</span>')
+                f'border-radius:12px;padding:4px 14px;font-size:14px;font-weight:bold">{text}</span>')
+
+    def _num(label, value, sub=''):
+        # 결정 카드 핵심 숫자 블록 — 팀장이 멀리서도 읽는 크기
+        return (f'<div style="min-width:170px;flex:1">'
+                f'<div style="font-size:14px;color:#9AB4C8;font-weight:600">{label}</div>'
+                f'<div style="font-size:34px;font-weight:800;color:#4AE3B5;line-height:1.25">{value}</div>'
+                f'<div style="font-size:13px;color:#8A99AB">{sub}</div></div>')
+
+    def _dcard(icon, title, badge_html, nums_html, decision_line):
+        # 세로형 대형 결정 카드 — 제목 23px / 숫자 34px / 결정 문구 15px
+        st.markdown(
+            f'<div style="background:#15202C;border:1px solid #2E3D4E;border-radius:14px;'
+            f'padding:20px 26px;margin:12px 0 6px 0">'
+            f'<div style="font-size:23px;font-weight:800;color:#FFFFFF">{icon} {title}{badge_html}</div>'
+            f'<div style="display:flex;gap:32px;flex-wrap:wrap;margin-top:16px">{nums_html}</div>'
+            f'<div style="font-size:15px;color:#E8EDF5;margin-top:14px;line-height:1.6">{decision_line}</div>'
+            f'</div>', unsafe_allow_html=True)
 
     # ── ① 회전 배치 — 재배치(기본) 프리셋 · 12:00 일괄 결재 ──
     results, sel_items = [], []
@@ -5070,13 +5099,13 @@ def render_batch_approval_tab():
         for _ch, _dir, _pats in (_ch_excl_active or ()):
             _n_rules += len(_pats) if _pats else 0
         _done = st.session_state.get('batch_approved_id')
-        _b1 = _badge(f'승인 완료 #{_done}', 'ok') if _done else _badge('12:00 마감', 'danger')
-        st.markdown(
-            f'<div class="scenario-box">{_b1}🔁 <b>회전 배치</b> — 이동 <b>{len(sel_items):,}건 · {sel_qty:,}장</b> · '
-            f'기대 회수 <b>{sel_rev/100000000:.2f}억</b><br>'
-            f'<span style="font-size:11px;color:#9AB">출처: 재배치(기본) · 가드레일: 회전 상한 30% · '
-            f'채널 IN-OUT {_n_rules}건 · 외부창고 제외 · 컬러 그룹(아소트) 보호</span></div>',
-            unsafe_allow_html=True)
+        _b1 = _badge(f'✅ 승인 완료 #{_done}', 'ok') if _done else _badge('오늘 12:00 마감', 'danger')
+        _nums1 = (_num('이동 수량', f'{sel_qty:,}장', f'단품 {len(sel_items):,}건 · 온라인 6채널 회전')
+                  + _num('기대 회수 매출', f'{sel_rev/100000000:.2f}억', '결품 해소 기준')
+                  + _num('남은 시간', _clock_short, '12:00 물류 확정 마감'))
+        _dcard('🔁', '회전 배치 — 일괄 승인', _b1, _nums1,
+               '✅ <b>승인하면</b>: 실행 이력 자동 기록 + 물류 지시서 생성 (FROM 채널별 시트) · '
+               f'가드레일 통과 — 회전 상한 30% / 채널 IN-OUT {_n_rules}건 / 외부창고 제외 / 아소트 보호')
         if not _ch_excl_active:
             st.error('⚠️ 채널 IN-OUT 규칙 로드 실패 — "채널 IN-OUT (MD 기입)" 탭 진입 후 재시도하세요.')
         cb1, cb2, cb3 = st.columns(3)
@@ -5123,13 +5152,13 @@ def render_batch_approval_tab():
         _reord = sum(max(0, r['ord'] * 2 - r['inv']) for r in _base)
         _exp = sum(max(0, r['ord'] * 2 - r['inv']) * r['price'] for r in _base)
         _ok2 = st.session_state.get('inbox_reo_approved')
-        _b2 = _badge(f'발송 승인 {_ok2}', 'ok') if _ok2 else _badge('오늘 중', 'warn')
-        st.markdown(
-            f'<div class="scenario-box">{_b2}🚨 <b>리오더 요청</b> — 결품 임박 <b>{len(_base):,}단품 · {_sty_n:,}스타일</b> · '
-            f'권장 <b>{_reord:,}장</b> · 기대매출 <b>{_exp/100000000:.2f}억</b><br>'
-            f'<span style="font-size:11px;color:#9AB">출처: 리오더 요청 · 회전으로 못 채우는 물량 '
-            f'(재고주수 1주 미만 · 리오더 권장 = 2주 수요 − 현재고)</span></div>',
-            unsafe_allow_html=True)
+        _b2 = _badge(f'✅ 발송 승인 {_ok2}', 'ok') if _ok2 else _badge('오늘 중 결정', 'warn')
+        _nums2 = (_num('결품 임박', f'{len(_base):,}단품', f'{_sty_n:,}개 스타일 · 재고주수 1주 미만')
+                  + _num('권장 발주량', f'{_reord:,}장', '2주 수요 − 현재고')
+                  + _num('발주 시 기대매출', f'{_exp/100000000:.2f}억', '미발주 시 결품 손실로 전환'))
+        _dcard('🚨', '리오더 요청 — 요청서 발송 승인', _b2, _nums2,
+               '⏳ <b>지금 결정해야 하는 이유</b>: 리오더 리드타임 1~2개월 — 회전(재배치)으로는 못 채우는 물량. '
+               '승인하면 리오더 요청서(xlsx)가 생성됩니다.')
         rb1, rb2, rb3 = st.columns(3)
         with rb1:
             if st.button('✅ 요청서 발송 승인', type='primary', use_container_width=True,
@@ -5179,12 +5208,12 @@ def render_batch_approval_tab():
                                 '분배량(장)': int(_used),
                                 '분배 상세': ' / '.join(f'{CH_SHORT.get(c, c)}+{q}' for c, q in _dist.items() if q > 0)})
         _ok3 = st.session_state.get('inbox_dist_approved')
-        _b3 = _badge(f'발송 승인 {_ok3}', 'ok') if _ok3 else _badge('이번 주', 'ok')
-        st.markdown(
-            f'<div class="scenario-box">{_b3}🧩 <b>추가 분배</b> — 반응과(창고) → 채널 '
-            f'<b>{len(_d_rows):,}단품 · {len(_d_sty):,}스타일 · {_d_qty:,}장</b><br>'
-            f'<span style="font-size:11px;color:#9AB">출처: 추가 분배 · 회전 후에도 남는 결품을 반응과 재고로 보충 (목표 2주)</span></div>',
-            unsafe_allow_html=True)
+        _b3 = _badge(f'✅ 발송 승인 {_ok3}', 'ok') if _ok3 else _badge('이번 주 결정', 'warn')
+        _nums3 = (_num('분배 대상', f'{len(_d_rows):,}단품', f'{len(_d_sty):,}개 스타일')
+                  + _num('분배 수량', f'{_d_qty:,}장', '반응과(창고) 보유분 → 채널')
+                  + _num('분배 후 목표', '2주', '채널 재고주수 확보'))
+        _dcard('🧩', '추가 분배 — 요청서 발송 승인', _b3, _nums3,
+               '📦 <b>승인하면</b>: 회전 후에도 남는 결품을 창고 재고로 보충 — 분배 요청서(xlsx)가 생성됩니다.')
         db1, db2, db3 = st.columns(3)
         with db1:
             if st.button('✅ 요청서 발송 승인 ', type='primary', use_container_width=True,
@@ -5211,39 +5240,7 @@ def render_batch_approval_tab():
     except Exception as _e:
         st.error(f'⚠️ 추가 분배 카드 로드 실패 — {type(_e).__name__}: {str(_e)[:150]}')
 
-    st.markdown('')
-
-    # ── ④ 예외 — 회전 배치로 해소되지 않는 결품 임박 (팀장 전결 판단) ──
-    try:
-        exc_rows = []
-        for r in results:
-            d = r['data']
-            for ch in CHANNELS:
-                o = d['orders'].get(ch, 0)
-                inv = d['inv'].get(ch, 0)
-                if o > 0 and inv < o and r['moves'].get(ch, 0) <= 0:
-                    exc_rows.append({
-                        '단품코드': r['code'],
-                        '채널': CH_SHORT.get(ch, ch),
-                        '현재고': int(inv),
-                        '주간 주문': int(o),
-                        '재고주수': round(inv / o, 2),
-                        '잠재손실(만원)': int(round(max(0, o - inv) * d.get('price', 0) / 10000)),
-                    })
-        _loss = sum(x['잠재손실(만원)'] for x in exc_rows)
-        _b4 = _badge('즉시 확인', 'danger') if exc_rows else _badge('예외 없음', 'ok')
-        st.markdown(
-            f'<div class="scenario-box">{_b4}⚠️ <b>예외</b> — 회전 배치로 해소되지 않는 결품 임박 '
-            f'<b>{len(exc_rows):,}건</b> · 잠재손실 <b>{_loss/10000:.2f}억</b><br>'
-            f'<span style="font-size:11px;color:#9AB">배치 룰 밖 물량 — 리오더·옴니 매장 당김 등 팀장 전결 판단 영역</span></div>',
-            unsafe_allow_html=True)
-        if exc_rows:
-            with st.expander(f'🔎 예외 상위 30건 보기 (전체 {len(exc_rows):,}건 · 잠재손실순)'):
-                st.dataframe(pd.DataFrame(exc_rows).sort_values('잠재손실(만원)', ascending=False).head(30),
-                             use_container_width=True, hide_index=True, key='inbox_exc_df')
-    except Exception as _e:
-        st.error(f'⚠️ 예외 카드 로드 실패 — {type(_e).__name__}: {str(_e)[:150]}')
-
+    # v3(사용자 7/13): ④ 예외 카드 제거 — 결정 3종만 세로 대형 카드로 유지
     st.caption('🗂️ 결재함 = 결정 전용 큐 · 수치 조정·단품 검토는 각 탭에서 · 회전 승인 이력은 📈 실행 효과 탭에 자동 기록')
 
 
@@ -5328,3 +5325,5 @@ if __name__ == '__main__':
 # v0.9.11 (2026-07-13) — 사용자 요청: '오늘의 결재' 탭 제거 (함수는 보존, 노출만 해제)
 # v0.9.12 (2026-07-13) — 🗳️ 오늘의 결재 v2 재도입: A안 통합 결재함 (회전 배치 12:00 마감 일괄 결재 ·
 #                        리오더/추가 분배 '요청서 발송 승인' · 예외 큐 · 탭 이동 버튼) — 역할 중복 해소
+# v0.9.13 (2026-07-13) — 🗳️ 오늘의 결재 v3: 예외 카드 제거 · 결정 3종 세로 대형 카드 (숫자 34px·제목 23px·
+#                        버튼 17px) — 팀장이 카드만 보고 결정하도록 "무엇을/왜 지금/승인 결과" 명시
