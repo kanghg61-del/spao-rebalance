@@ -5139,8 +5139,9 @@ def render_batch_approval_tab():
         except Exception as _e:
             st.error(f'⚠️ 회전 배치 카드 로드 실패 — {type(_e).__name__}: {str(_e)[:150]}')
 
-    # ── ② 리오더 요청 — 회전으로 못 채우는 물량 (결품 임박 · 2주 수요 기준) ──
-    with _c2:
+    # ── ③열 리오더 요청 — 회전으로 못 채우는 물량 (결품 임박 · 2주 수요 기준)
+    # (사용자 7/13 순서 변경: 회전→추가 분배→리오더 — 코드 순서는 유지, 컬럼만 _c3)
+    with _c3:
         try:
             _base = imminent_rows_by_channel('전체')
             _sty_n = len({r['code'][:10] for r in _base})
@@ -5149,8 +5150,9 @@ def render_batch_approval_tab():
             _ok2 = st.session_state.get('inbox_reo_approved')
             _bt2 = (f'✅ 발송 승인 {_ok2}', 'ok') if _ok2 else ('오늘 중 결정', 'warn')
             _nums2 = (_vnum('결품 임박', f'{len(_base):,}단품', f'{_sty_n:,}개 스타일 · 재고주수 1주 미만')
-                      + _vnum('발주 시 기대매출', f'{_exp/100000000:.2f}억',
-                              f'권장 {_reord:,}장 (2주 수요−현재고) · 리드타임 1~2개월'))
+                      + _vnum('발주 필요 금액 <span style="font-size:11px;font-weight:400;color:#8A99AB">(2주 수요−현재고)</span>',
+                              f'{_exp/100000000:.2f}억',
+                              f'권장 {_reord:,}장 · 정상가 기준 · 리드타임 1~2개월'))
             _hcard('#FFC000', _bt2[0], _bt2[1], '🚨', '리오더 요청',
                    '요청서 발송 승인 · 회전으로 못 채우는 물량', _nums2)
             if st.button('✅ 요청서 발송 승인', type='primary', use_container_width=True,
@@ -5181,17 +5183,26 @@ def render_batch_approval_tab():
         except Exception as _e:
             st.error(f'⚠️ 리오더 카드 로드 실패 — {type(_e).__name__}: {str(_e)[:150]}')
 
-    # ── ③ 추가 분배 — 회전 후 잔여 결품을 반응과(창고) 재고로 보충 ──
-    with _c3:
+    # ── ②열 추가 분배 — 회전 후 잔여 결품을 반응과(창고) 재고로 보충
+    # (사용자 7/13 순서 변경: 2열 배치 — 회전 배치 결과(results) 의존이라 코드상 마지막 실행 유지)
+    with _c2:
         try:
             _d_rows = []
             _d_qty = 0
+            _d_rev = 0
             _d_sty = set()
             for r in results:
                 _dist, _used = calc_distribution(r['data'], r['moves'], CHANNELS)
                 if _used > 0:
                     _d_qty += int(_used)
                     _d_sty.add(r['code'][:10])
+                    # 기대 회수매출 — 분배로 해소되는 결품분 × 정상가 (회전 카드와 동일 산식)
+                    for _dc, _dq in _dist.items():
+                        if _dq <= 0:
+                            continue
+                        _o = r['data']['orders'].get(_dc, 0)
+                        _ai = r['data']['inv'].get(_dc, 0) + r['moves'].get(_dc, 0)
+                        _d_rev += (max(0, _o - _ai) - max(0, _o - (_ai + _dq))) * r['data']['price']
                     _d_rows.append({'단품코드': r['code'], '단품명': r['data'].get('name', ''),
                                     '반응과 재고': int(r['data']['inv'].get('반응과', 0)),
                                     '분배량(장)': int(_used),
@@ -5199,7 +5210,8 @@ def render_batch_approval_tab():
             _ok3 = st.session_state.get('inbox_dist_approved')
             _bt3 = (f'✅ 발송 승인 {_ok3}', 'ok') if _ok3 else ('이번 주 결정', 'ok')
             _nums3 = (_vnum('분배 수량', f'{_d_qty:,}장', f'{len(_d_rows):,}단품 · {len(_d_sty):,}개 스타일')
-                      + _vnum('분배 후 목표', '2주', '반응과(창고) → 채널 · 회전 후 잔여 결품 보충'))
+                      + _vnum('기대 회수매출', f'{_d_rev/100000000:.2f}억',
+                              '결품 해소 기준 · 반응과(창고) → 채널'))
             _hcard('#4AE3B5', _bt3[0], _bt3[1], '🧩', '추가 분배',
                    '요청서 발송 승인 · 반응과(창고) → 채널', _nums3)
             if st.button('✅ 요청서 발송 승인 ', type='primary', use_container_width=True,
@@ -5312,3 +5324,5 @@ if __name__ == '__main__':
 #                        버튼 17px) — 팀장이 카드만 보고 결정하도록 "무엇을/왜 지금/승인 결과" 명시
 # v0.9.14 (2026-07-13) — 🗳️ 오늘의 결재 v4: 가로 3열(st.columns) 무스크롤 한 화면 — 카드 상단 컬러 바로
 #                        긴급도 구분(빨강 12:00/노랑 오늘 중/민트 이번 주) · 숫자 세로 스택 27px · 버튼 하단 정렬
+# v0.9.15 (2026-07-13) — 🗳️ 오늘의 결재 v4.1: 순서 변경(회전→추가 분배→리오더) · 추가 분배에 기대 회수매출
+#                        (결품 해소 산식) · 리오더에 발주 필요 금액(2주 수요−현재고, 부제 소자)
