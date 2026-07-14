@@ -5213,8 +5213,8 @@ def _render_dashboard_body(mode: str) -> None:
     # 7/13 세그폴트 root-cause fix: st.tabs는 모든 탭 바디를 eager 렌더
     # (9탭 × 13,894 SKU → 메모리 초과 → Segmentation fault).
     # 라디오 선택 후 해당 탭 1개만 렌더 — 라디오는 app.py CSS로 탭 모양 스타일링.
+    # 7/13 사용자 요청: '오늘의 결재' 탭 제거 (render_batch_approval_tab 함수는 보존 — 추후 재도입 대비)
     _tab_renderers = [
-        ('🗳️ 오늘의 결재', render_batch_approval_tab),
         ('🛡️ 재배치(기본)', lambda: render_scenario('🛡️ 기본', st, allow_slider=False)),
         ('🎛️ 재배치(임의)', lambda: render_scenario('🎛️ 임의', st, allow_slider=True)),
         ('🤖 AI 일일 요약(TEST)', render_ai_summary_tab),
@@ -5254,3 +5254,4 @@ if __name__ == '__main__':
     render()
 
 # v0.9.10 (2026-07-13) — 세그폴트 fix(선택 탭만 렌더) + 🗳️ 오늘의 결재(배치 일괄 승인) 탭 추가
+# v0.9.11 (2026-07-13) — 사용자 요청: '오늘의 결재' 탭 제거 (함수는 보존, 노출만 해제)
