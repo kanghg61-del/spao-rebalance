@@ -5005,6 +5005,183 @@ def _render_test_source_panel() -> None:
                 st.rerun()
 
 
+def render_batch_approval_tab():
+    """🗳️ 오늘의 결재 — 배치 일괄 승인 (7/13 팀장 의사결정 허브 1차).
+
+    스타일 단위 승인 대신 '오늘의 배치안' 1건을 일괄 결재.
+    물류는 하루 1회 배치 운영 (SLA: 운영자 확정 8:00~8:15 → 물류 8:30 마감)이므로
+    결정 단위 = 배치. 개별 개입은 승인이 아닌 '제외 체크'로만 (management by exception).
+    """
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    _kst = _tz(_td(hours=9))
+    _now = _dt.now(_kst)
+    _deadline = _now.replace(hour=8, minute=15, second=0, microsecond=0)
+    _wd = ['월', '화', '수', '목', '금', '토', '일'][_now.weekday()]
+    if _now <= _deadline:
+        _remain = int((_deadline - _now).total_seconds())
+        _hh, _rest = divmod(_remain, 3600)
+        _mm = _rest // 60
+        _clock = f'⏱️ 물류 확정 마감(8:15)까지 <b>{_hh}시간 {_mm}분</b>'
+    elif _now.hour < 9:
+        _clock = '⚠️ 8:15 경과 — 물류 8:30 마감 임박, 즉시 확정 필요'
+    else:
+        _clock = '🌙 금일 물류 마감 경과 — 내일 아침 배치 기준 검토'
+
+    st.markdown(
+        f'<div class="scenario-box">🗳️ <b>오늘의 배치안 — {_now.strftime("%m/%d")} ({_wd})</b> · '
+        f'기본은 <b>일괄 승인</b> · 개별 개입은 아래 "제외 체크"로만 · {_clock}</div>',
+        unsafe_allow_html=True,
+    )
+
+    _done_id = st.session_state.get('batch_approved_id')
+    if _done_id:
+        st.success(f'✅ 오늘 배치 승인 완료 (실행 id={_done_id}) — 📈 실행 효과 탭에서 실측 추적 중. 아래는 참고용 현황.')
+
+    # ── 배치안 계산 — 재배치 '기본' 프리셋 그대로 (보수 30%) ──
+    preset = SCENARIOS['🛡️ 기본']
+    try:
+        if not (st.session_state.get('ch_excl_rows') or []):
+            _persist_load_ch_excl()
+    except Exception:
+        pass
+    _ch_excl_active = _ch_excl_key()
+    params_key = (preset['shortage_th'], preset['target_woc'], 0.0,
+                  preset['min_move'], preset.get('min_recv', 4),
+                  _ch_excl_active, preset.get('move_cap_pct', 0.5))
+    with st.spinner('오늘의 배치안 계산 중...'):
+        results = calc_results_v20(params_key, _csv_cache_key())
+    results = _apply_exclusion(results)
+    results = _apply_overrides(results)
+    move_items = [r for r in results if any(v > 0 for v in r['moves'].values())]
+
+    # ── 가드레일 체크리스트 (일괄 승인의 신뢰 전제) ──
+    _n_rules = 0
+    for _ch, _dir, _pats in (_ch_excl_active or ()):
+        _n_rules += len(_pats) if _pats else 0
+    _cap_pct = int(round(preset.get('move_cap_pct', 0.5) * 100))
+    _pills = [
+        (f'회전 상한 {_cap_pct}% (보수)', True),
+        (f'채널 IN-OUT 규칙 {_n_rules}건 적용', bool(_ch_excl_active)),
+        (f'소액 채널 제외 (주판 {preset.get("min_recv", 4)}장 미만)', True),
+        (f'이동 {preset["min_move"]}장 이상만', True),
+        ('외부창고(AENS·ADU3·ADQS) 이동 제외', True),
+    ]
+    _pill_html = ''.join(
+        f'<span style="display:inline-block;margin:2px 6px 2px 0;padding:3px 12px;border-radius:12px;'
+        f'font-size:12px;font-weight:bold;'
+        + ('background:#123B2E;color:#4AE3B5;border:1px solid #4AE3B5;">✓ '
+           if ok else 'background:#3B1220;color:#FF6B6B;border:1px solid #FF6B6B;">✗ ')
+        + label + '</span>'
+        for label, ok in _pills
+    )
+    st.markdown(f'<div style="margin:2px 0 8px 0">{_pill_html}</div>', unsafe_allow_html=True)
+    if not _ch_excl_active:
+        st.error('⚠️ 채널 IN-OUT 규칙이 비어 있습니다 — "채널 IN-OUT (MD 기입)" 탭 진입 후 재시도하세요. 규칙 미적용 상태로 일괄 승인하면 이동량이 폭증할 수 있습니다.')
+
+    # ── 제외 체크 (스타일 단위) — 개별 개입은 여기서만 ──
+    _styles = sorted({r['code'][:10] for r in move_items})
+    col_x1, col_x2 = st.columns([3, 2])
+    with col_x1:
+        excl_styles = st.multiselect(
+            '🚫 이번 배치에서 제외할 스타일 (선택분 제외 후 나머지 일괄 승인)',
+            options=_styles, key='batch_excl_styles',
+            placeholder='기본: 제외 없음 — 전량 일괄 승인')
+    with col_x2:
+        excl_memo = st.text_input('제외 사유 메모 (이력 기록)', key='batch_excl_memo',
+                                  placeholder='예: 7/15 무신사 기획전 보호')
+    _excl_set = set(excl_styles or [])
+    sel_items = [r for r in move_items if r['code'][:10] not in _excl_set]
+    n_excluded = len(move_items) - len(sel_items)
+
+    sel_qty = sum(sum(v for v in it['moves'].values() if v > 0) for it in sel_items)
+    sel_rev = sum(it['revenue'] for it in sel_items)
+
+    # ── 배치 요약 KPI ──
+    def _kpi(col, label, value, sub=''):
+        col.markdown(
+            f'<div class="kpi-card" style="min-height:100px;display:flex;flex-direction:column;justify-content:center">'
+            f'<div class="kpi-label">{label}</div>'
+            f'<div class="kpi-value">{value}</div><div class="kpi-sub">{sub}</div></div>',
+            unsafe_allow_html=True)
+
+    k1, k2, k3, k4 = st.columns(4)
+    _kpi(k1, '이동 건수 (단품)', f'{len(sel_items):,}건',
+         f'제외 {n_excluded:,}건' if n_excluded else '제외 없음')
+    _kpi(k2, '이동 수량', f'{sel_qty:,}장', '온라인 6채널 내 회전')
+    _kpi(k3, '기대 회수 매출', f'{sel_rev/10000:.2f}억', '결품 해소 기준')
+    _kpi(k4, '시나리오', '보수 30%', '재배치(기본) 프리셋')
+
+    st.markdown('')
+
+    # ── 일괄 승인 + 물류 지시서 ──
+    b1, b2, b3 = st.columns([2.4, 2.4, 3.2])
+    with b1:
+        if st.button(f'✅ 배치 일괄 승인 ({len(sel_items):,}건 · {sel_qty:,}장)',
+                     type='primary', use_container_width=True, key='batch_approve',
+                     disabled=(not sel_items)):
+            details = []
+            for it in sel_items:
+                for ch, v in it['moves'].items():
+                    if v > 0:
+                        details.append((it['code'], ch, it['data']['inv'].get(ch, 0), v, it['data']['price']))
+            _scn = '🗳️ 배치(기본)'
+            if _excl_set:
+                _scn += f' · 제외 {len(_excl_set)}스타일'
+                if excl_memo:
+                    _scn += f' ({excl_memo[:40]})'
+            try:
+                exec_id = effect_log.log_execution(_scn, len(sel_items), sel_qty, sel_rev, details=details)
+                st.session_state['batch_approved_id'] = exec_id
+                st.toast(f'✅ 배치 승인 기록 완료 (id={exec_id}) — 실행 효과 탭에서 실측 추적', icon='💾')
+                st.rerun()
+            except Exception as _e:
+                st.error(f'⚠️ 실행 이력 저장 실패: {str(_e)[:200]}')
+    with b2:
+        try:
+            if sel_items:
+                st.download_button(
+                    f'📦 물류 지시서 다운로드 ({len(sel_items):,}건)',
+                    data=_xlsx_logistics_bytes(sel_items),
+                    file_name=f'물류이동요청_{_now.strftime("%y%m%d")}.xlsx',
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    use_container_width=True, key='batch_logi_xlsx')
+            else:
+                st.button('📦 물류 지시서 (0건)', use_container_width=True, disabled=True, key='batch_logi_dis')
+        except Exception:
+            st.button('📦 물류 지시서 (생성 오류)', use_container_width=True, disabled=True, key='batch_logi_err')
+    with b3:
+        st.caption('승인 → 실행 이력 자동 기록 (실행 효과 탭 실측 추적) · 물류 지시서는 FROM 채널별 시트 양식 (7/8 개정). '
+                   '세부 단품 검토가 필요하면 🛡️ 재배치(기본) 탭 사용.')
+
+    # ── 예외 큐 — 배치로 해소되지 않는 결품 임박 (별도 판단) ──
+    exc_rows = []
+    for r in results:
+        d = r['data']
+        for ch in CHANNELS:
+            o = d['orders'].get(ch, 0)
+            inv = d['inv'].get(ch, 0)
+            mv = r['moves'].get(ch, 0)
+            if o > 0 and inv < o and mv <= 0:
+                exc_rows.append({
+                    '단품코드': r['code'],
+                    '채널': CH_SHORT.get(ch, ch),
+                    '현재고': int(inv),
+                    '주간 주문': int(o),
+                    '재고주수': round(inv / o, 2),
+                    '잠재손실(만원)': int(round(max(0, o - inv) * d.get('price', 0) / 10000)),
+                })
+    if exc_rows:
+        exc_df = pd.DataFrame(exc_rows).sort_values('잠재손실(만원)', ascending=False)
+        st.markdown(f'#### 🚨 예외 큐 — 배치 회전으로 해소되지 않는 결품 임박 <b>{len(exc_rows):,}건</b> (상위 30 표시)',
+                    unsafe_allow_html=True)
+        st.caption('이번 배치에 IN이 배정되지 않은 재고주수 1주 미만 채널 — 회전으로는 못 채우는 물량. '
+                   '🚨 리오더 요청 탭에서 발주하거나 옴니 매장 당김으로 별도 판단하세요.')
+        st.dataframe(exc_df.head(30), use_container_width=True, hide_index=True, key='batch_exc_df')
+    else:
+        st.info('예외 없음 — 결품 임박 채널이 모두 이번 배치로 해소됩니다.')
+
+
 def _render_dashboard_body(mode: str) -> None:
     """Agent / TEST 공통 대시보드 body — 데이터 소스만 mode에 따라 다르게 물림."""
     st.session_state[_REBA_MODE_KEY] = mode
@@ -5032,28 +5209,25 @@ def _render_dashboard_body(mode: str) -> None:
     with col_c:
         st.caption('v0.9')
 
-    st.markdown(
-        '<style>'
-        'div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(6),'
-        'div[data-baseweb="tab-list"]:not([data-baseweb="tab-panel"] *) [data-baseweb="tab"]:nth-child(9)'
-        '{margin-left:68px;}'
-        '</style>',
-        unsafe_allow_html=True,
-    )
-
     # 7/13 사용자 요청: '리오더 매핑 (SCM 기입)'·'요약' 탭 제거
-    labels = [
-        '🛡️ 재배치(기본)',
-        '🎛️ 재배치(임의)',
-        '🤖 AI 일일 요약(TEST)',
-        '📈 실행 효과',
-        '🧩 추가 분배',
-        '🚨 리오더 요청',
-        '🏬 통합 재고뷰',
-        '📊 채널 별 세부',
-        '🚫 채널 IN-OUT (MD 기입)',
+    # 7/13 세그폴트 root-cause fix: st.tabs는 모든 탭 바디를 eager 렌더
+    # (9탭 × 13,894 SKU → 메모리 초과 → Segmentation fault).
+    # 라디오 선택 후 해당 탭 1개만 렌더 — 라디오는 app.py CSS로 탭 모양 스타일링.
+    _tab_renderers = [
+        ('🗳️ 오늘의 결재', render_batch_approval_tab),
+        ('🛡️ 재배치(기본)', lambda: render_scenario('🛡️ 기본', st, allow_slider=False)),
+        ('🎛️ 재배치(임의)', lambda: render_scenario('🎛️ 임의', st, allow_slider=True)),
+        ('🤖 AI 일일 요약(TEST)', render_ai_summary_tab),
+        ('📈 실행 효과', render_effect_tab),
+        ('🧩 추가 분배', render_onepan_tab),
+        ('🚨 리오더 요청', render_reorder_request_tab),
+        ('🏬 통합 재고뷰', render_unified_tab),
+        ('📊 채널 별 세부', render_channel_tab),
+        ('🚫 채널 IN-OUT (MD 기입)', render_excluded_tab),
     ]
-    t = st.tabs(labels)
+    labels = [name for name, _ in _tab_renderers]
+    sel_label = st.radio('메인 탭', labels, horizontal=True,
+                         label_visibility='collapsed', key=f'main_tab_{mode}')
 
     def _safe(name, fn):
         import traceback as _tb
@@ -5064,25 +5238,9 @@ def _render_dashboard_body(mode: str) -> None:
             with st.expander('🔎 디버그 traceback'):
                 st.code(_tb.format_exc())
 
-
-    with t[0]:
-        _safe('재배치(기본)', lambda: render_scenario('🛡️ 기본', st, allow_slider=False))
-    with t[1]:
-        _safe('재배치(임의)', lambda: render_scenario('🎛️ 임의', st, allow_slider=True))
-    with t[2]:
-        _safe('AI 일일 요약(TEST)', render_ai_summary_tab)
-    with t[3]:
-        _safe('실행 효과', render_effect_tab)
-    with t[4]:
-        _safe('추가 분배', render_onepan_tab)
-    with t[5]:
-        _safe('리오더 요청', render_reorder_request_tab)
-    with t[6]:
-        _safe('통합 재고뷰', render_unified_tab)
-    with t[7]:
-        _safe('채널 별 세부', render_channel_tab)
-    with t[8]:
-        _safe('채널 IN-OUT (MD 기입)', render_excluded_tab)
+    _fn = dict(_tab_renderers).get(sel_label)
+    if _fn is not None:
+        _safe(sel_label, _fn)
 
 
 def render():
@@ -5094,3 +5252,5 @@ def render():
 
 if __name__ == '__main__':
     render()
+
+# v0.9.10 (2026-07-13) — 세그폴트 fix(선택 탭만 렌더) + 🗳️ 오늘의 결재(배치 일괄 승인) 탭 추가
