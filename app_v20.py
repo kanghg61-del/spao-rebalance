@@ -5297,13 +5297,14 @@ def _render_dashboard_body(mode: str) -> None:
         ('🗳️ 오늘의 결재', render_batch_approval_tab),
         ('🛡️ 재배치(기본)', lambda: render_scenario('🛡️ 기본', st, allow_slider=False)),
         ('🎛️ 재배치(임의)', lambda: render_scenario('🎛️ 임의', st, allow_slider=True)),
-        ('🤖 AI 일일 요약(TEST)', render_ai_summary_tab),
         ('📈 실행 효과', render_effect_tab),
         ('🧩 추가 분배', render_onepan_tab),
         ('🚨 리오더 요청', render_reorder_request_tab),
         ('🏬 통합 재고뷰', render_unified_tab),
         ('📊 채널 별 세부', render_channel_tab),
         ('🚫 채널 IN-OUT (MD 기입)', render_excluded_tab),
+        # 7/14 사용자: AI 일일 요약(TEST)은 맨 오른쪽 배치 (채널 IN-OUT 오른편)
+        ('🤖 AI 일일 요약(TEST)', render_ai_summary_tab),
     ]
     labels = [name for name, _ in _tab_renderers]
     # 결재함 '세부 검토 →' 탭 이동 — _KeyIsolator가 key에 '__{mode}' 접미를 붙이므로
@@ -5354,3 +5355,4 @@ if __name__ == '__main__':
 #                        ③ 리오더 요청 탭 전 숫자 천단위 콤마 (핵심 10 스타일 표 · 메일 본문 표)
 #                        ④ 결재함 회전 배치 카드 = 재배치(기본)과 동일 구성·기능 (N건 승인(회전)+확인 다이얼로그 ·
 #                           Excel 물류용 상시 제공 — 회전 수기 실행용 Excel 버튼은 사용자 요청으로 미노출)
+#                        ⑤ 탭 순서: 'AI 일일 요약(TEST)'을 맨 오른쪽(채널 IN-OUT 오른편)으로 이동
