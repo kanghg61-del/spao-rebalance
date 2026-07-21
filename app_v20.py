@@ -5261,6 +5261,189 @@ def render_batch_approval_tab():
     st.caption('🗂️ 결재함 = 결정 전용 큐 · 수치 조정·단품 검토는 각 탭에서 · 회전 승인 이력은 📈 실행 효과 탭에 자동 기록')
 
 
+def render_performance_v2_tab():
+    """📉 성과 측정 v2 — 일 단위 운영 체제 (7/21 시안 승인 → 구현).
+
+    배경(사용자 7/21): 첫 재배치는 누적 불균형 '스톡' 해소라 효과가 크지만,
+    일 단위 고빈도 운영에선 건당 이동량·실현 효과가 자연 감소 → 이동량 기반
+    지표는 "시스템이 잘 될수록 실적이 줄어드는 역설" 발생.
+    해법 = KPI 트리 재정의: ① 회피 손실(카운터팩추얼 · 북극성) ② 실현 추가판매
+    (실측 · 하한 증명) ③ 결품률 유지(상태). 이동 0건인 날 = '정상 유지일'.
+    """
+    import csv as _csv
+    from datetime import datetime as _dt, date as _date, timedelta as _td
+    from pathlib import Path as _Path
+
+    st.markdown('### 📉 성과 측정 v2 — 일 단위 운영 체제')
+    st.caption('KPI 트리: **① 회피 손실**(카운터팩추얼 · 북극성) · **② 실현 추가판매**(실측 · 하한 증명) · '
+               '**③ 결품률 유지**(상태) — 이동량이 줄어도 ①·③이 실적을 지탱합니다.')
+
+    BASELINE = 12.0   # 도입 전 결품률 % (2026-06 기준선)
+    TARGET = 1.5      # 유지 목표 %
+    LAUNCH = _date(2026, 7, 9)   # 첫 재배치 실행일
+
+    skus = load_data_v20(_csv_cache_key())
+    imm = imminent_rows()
+
+    # 수요 있는 단품 수 · 주간 수요액 (회피 손실 추정 분모)
+    n_demand = 0
+    weekly_demand_amt = 0
+    for _c0, _d0 in skus.items():
+        _to0 = sum(_d0['orders'].get(_ch, 0) for _ch in CHANNELS)
+        if _to0 > 0:
+            n_demand += 1
+            weekly_demand_amt += _to0 * _d0.get('price', 0)
+    oos_rate = (len(imm) / n_demand * 100) if n_demand else 0.0
+
+    # ── 오늘의 위험액 = Σ 필업수량 × 판매확률 × 정상가 (이동 0건이어도 매일 산출) ──
+    risk_amt = 0.0
+    fill_total = 0
+    sty_g = {}
+    for r in imm:
+        _fill = max(0, int(r['ord']) - int(r['inv']))   # 필업 = 1주 수요 − 현재고
+        if _fill <= 0:
+            continue
+        _prob = min(1.0, max(0.0, 1.0 - float(r['woc'] or 0)))   # 판매확률 = 1 − 재고주수
+        risk_amt += _fill * _prob * r['price']
+        fill_total += _fill
+        _sc = r['code'][:10]
+        g = sty_g.setdefault(_sc, {'name': r['name'], 'fill': 0, 'risk': 0.0,
+                                   'wsum': 0.0, 'codes': []})
+        g['fill'] += _fill
+        g['risk'] += _fill * _prob * r['price']
+        g['wsum'] += _fill * _prob
+        g['codes'].append(r['code'])
+
+    # ── 실현 추가판매 누적 (실측 · execution_log) ──
+    _rows_log = effect_log.load_log()
+
+    def _fv(v):
+        try:
+            return float(v)
+        except Exception:
+            return 0.0
+
+    realized_man = sum(_fv(r.get('실제효과_만원')) for r in _rows_log
+                       if str(r.get('실제효과_만원') or '').strip())
+
+    # ── 회피 손실 누적 (추정) — 베이스라인 결품률 대비 주간 수요 방어분 × 경과 주수 ──
+    weeks = max(1.0, (_date.today() - LAUNCH).days / 7.0)
+    avoided_week = weekly_demand_amt * max(0.0, (BASELINE - oos_rate)) / 100.0
+    avoided_cum = avoided_week * weeks
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric('오늘의 위험액 (방치 시)', f'{risk_amt/1e8:.2f}억',
+              f'결품임박 {len(sty_g):,}개 스타일 · 필업 {fill_total:,}장')
+    k2.metric('회피 손실 누적 (추정)', f'{avoided_cum/1e8:.1f}억',
+              f'베이스라인 {BASELINE:.0f}% 대비 · {weeks:.1f}주')
+    k3.metric('실현 추가판매 누적 (실측)', f'{realized_man/1e4:.2f}억',
+              '회피 손실의 하한 증명 (strict CAP)')
+    k4.metric('결품률 (유지 상태)', f'{oos_rate:.1f}%',
+              f'{oos_rate - BASELINE:+.1f}%p vs 도입 전 {BASELINE:.0f}%',
+              delta_color='inverse')
+    st.caption('📐 위험액 = Σ 필업수량 × 판매확률 × 정상가 (필업 = 1주 수요 − 현재고 · 판매확률 = 1 − 재고주수) '
+               '· 회피 손실 = 주간 수요액 × (베이스라인 − 현재 결품률) × 경과 주수 (추정) '
+               '· 실현 = execution_log 실측 합계 (strict CAP).')
+
+    # ── 결품률 이력 자동 축적 (risk_log.csv — 접속일마다 1회) ──
+    _rl = _Path(__file__).parent / 'risk_log.csv'
+    _today = _date.today().isoformat()
+    hist = []
+    try:
+        if _rl.exists():
+            with open(_rl, encoding='utf-8-sig') as f:
+                hist = list(_csv.DictReader(f))
+        if not any(str(h.get('date')) == _today for h in hist):
+            hist.append({'date': _today, '결품률_pct': f'{oos_rate:.2f}',
+                         '위험액_만원': str(int(round(risk_amt / 1e4))),
+                         '결품임박_단품수': str(len(imm))})
+            with open(_rl, 'w', encoding='utf-8-sig', newline='') as f:
+                _w = _csv.DictWriter(f, fieldnames=['date', '결품률_pct',
+                                                    '위험액_만원', '결품임박_단품수'])
+                _w.writeheader()
+                for h in hist:
+                    _w.writerow(h)
+    except Exception:
+        pass
+
+    c_l, c_r = st.columns(2)
+    with c_l:
+        st.markdown('#### 결품률 트렌드 — 상태 지표 (유지 자체가 실적)')
+        try:
+            _tr = pd.DataFrame(hist)
+            _tr['결품률 (%)'] = pd.to_numeric(_tr['결품률_pct'], errors='coerce')
+            _tr = _tr.set_index('date')[['결품률 (%)']]
+            _tr['베이스라인 (도입 전 12%)'] = BASELINE
+            _tr['목표 (≤1.5%)'] = TARGET
+            st.line_chart(_tr, height=260, color=['#4AE3B5', '#FF6B6B', '#FFC000'])
+        except Exception:
+            st.info('기록 준비 중 — 접속일마다 자동으로 1점씩 쌓입니다.')
+        st.caption('베이스라인(12%)과의 간격이 곧 회피 손실 — 이동량이 0에 수렴해도 '
+                   '결품률이 낮게 유지되는 한 실적은 지속됩니다. ("유지 주간 수"를 실적으로 카운트)')
+    with c_r:
+        st.markdown('#### 주간 성과 롤업 — 실현(실측) + 회피(추정)')
+        try:
+            _wk = {}
+            for r in _rows_log:
+                try:
+                    _dd = _dt.strptime(str(r.get('실행일시', ''))[:10], '%Y-%m-%d').date()
+                except Exception:
+                    continue
+                _key = (_dd - _td(days=_dd.weekday())).isoformat()
+                _wk[_key] = _wk.get(_key, 0.0) + _fv(r.get('실제효과_만원'))
+            if _wk:
+                _wlist = sorted(_wk)
+                _df_w = pd.DataFrame({
+                    '주 시작': _wlist,
+                    '실현 추가판매 (만원·실측)': [round(_wk[k]) for k in _wlist],
+                    '회피 손실 (만원·추정)': [round(avoided_week / 1e4)] * len(_wlist),
+                }).set_index('주 시작')
+                st.bar_chart(_df_w, height=260, color=['#8AB4F8', '#4AE3B5'])
+            else:
+                st.info('실측 기록이 쌓이면 주간 롤업이 표시됩니다.')
+        except Exception:
+            st.info('실측 기록이 쌓이면 주간 롤업이 표시됩니다.')
+        st.caption('실현분(파랑)은 빈도가 높아질수록 자연 감소하지만, 회피분(민트)이 유지되어 '
+                   '합계가 꺾이지 않는 구조입니다.')
+
+    # ── 오늘의 위험액 TOP — 스타일 단위 ──
+    st.markdown('#### 오늘의 위험액 TOP — 방치 시 예상 결품손실 (이동 실행과 무관하게 매일 산출)')
+    _smap = _load_style_map()
+    _top = []
+    for _sc, g in sorted(sty_g.items(), key=lambda kv: -kv[1]['risk'])[:15]:
+        _chs = []
+        for _ch in CHANNELS:
+            _ti = sum(skus[c]['inv'].get(_ch, 0) for c in g['codes'] if c in skus)
+            _to = sum(skus[c]['orders'].get(_ch, 0) for c in g['codes'] if c in skus)
+            if _to > 0 and _ti < _to:
+                _chs.append(CH_SHORT.get(_ch, _ch))
+        _prob_avg = (g['wsum'] / g['fill']) if g['fill'] else 0.0
+        _top.append({'스타일': _sc, '스타일명': _smap.get(_sc) or g['name'],
+                     '결품임박 채널': '·'.join(_chs) or '-',
+                     '필업수량(장)': int(g['fill']),
+                     '판매확률(평균)': round(_prob_avg, 2),
+                     '위험액(만원)': int(round(g['risk'] / 1e4))})
+    if _top:
+        _df_top = pd.DataFrame(_top)
+        st.dataframe(_df_top.style.format({'필업수량(장)': '{:,}'.format,
+                                           '위험액(만원)': '{:,}'.format}),
+                     use_container_width=True, hide_index=True, height=380)
+    else:
+        st.success('🎉 오늘 위험액 0원 — 결품임박 스타일이 없습니다. "정상 유지일"로 기록됩니다.')
+
+    # ── 고빈도 운영 규칙 (핑퐁 방지) ──
+    st.markdown('#### 고빈도 운영 규칙 (핑퐁 방지)')
+    st.markdown(
+        '<div class="scenario-box">'
+        '• <b>이동 임계치</b>: 위험액 30만원 미만 스타일은 이동 제외 (미세 이동 억제)<br>'
+        '• <b>쿨다운</b>: 동일 SKU 역방향 이동 7일 금지 (왕복 이동 차단)<br>'
+        '• <b>순효과 집계</b>: 왕복 이동분은 실적에서 자동 차감<br>'
+        '• <b>이동 0건인 날</b> → "정상 유지일" 배지로 카운트 (실적 유지 증빙)'
+        '</div>', unsafe_allow_html=True)
+    st.caption('※ 회피 손실은 추정치(베이스라인 12% 대비)입니다 — 분기 1회 홀드아웃(재배치 제외군 A/B) 검증 권장. '
+               '결품률 이력은 risk_log.csv에 접속일 단위로 자동 축적됩니다.')
+
+
 def _render_dashboard_body(mode: str) -> None:
     """Agent / TEST 공통 대시보드 body — 데이터 소스만 mode에 따라 다르게 물림."""
     st.session_state[_REBA_MODE_KEY] = mode
@@ -5298,6 +5481,8 @@ def _render_dashboard_body(mode: str) -> None:
         ('🛡️ 재배치(기본)', lambda: render_scenario('🛡️ 기본', st, allow_slider=False)),
         ('🎛️ 재배치(임의)', lambda: render_scenario('🎛️ 임의', st, allow_slider=True)),
         ('📈 실행 효과', render_effect_tab),
+        # 7/21 사용자 승인 시안 → 신설: 일 단위 운영 체제 실적 측정 (회피 손실·결품률 유지)
+        ('📉 성과 측정 v2', render_performance_v2_tab),
         ('🧩 추가 분배', render_onepan_tab),
         ('🚨 리오더 요청', render_reorder_request_tab),
         ('🏬 통합 재고뷰', render_unified_tab),
@@ -5356,3 +5541,8 @@ if __name__ == '__main__':
 #                        ④ 결재함 회전 배치 카드 = 재배치(기본)과 동일 구성·기능 (N건 승인(회전)+확인 다이얼로그 ·
 #                           Excel 물류용 상시 제공 — 회전 수기 실행용 Excel 버튼은 사용자 요청으로 미노출)
 #                        ⑤ 탭 순서: 'AI 일일 요약(TEST)'을 맨 오른쪽(채널 IN-OUT 오른편)으로 이동
+# v0.9.17 (2026-07-21) — 📉 성과 측정 v2 탭 신설 (사용자 승인 시안 구현): 일 단위 고빈도 운영에서
+#                        이동량 감소 역설을 해소하는 KPI 트리 — ① 오늘의 위험액(방치 시 결품손실,
+#                        이동 0건이어도 매일 산출) ② 회피 손실 누적(베이스라인 12% 대비 추정)
+#                        ③ 실현 추가판매(실측 하한 증명) ④ 결품률 유지(상태). 결품률 트렌드(risk_log.csv
+#                        접속일 자동 축적) · 주간 롤업(실현+회피) · 위험액 TOP15 스타일 · 핑퐁 방지 규칙 4종.
