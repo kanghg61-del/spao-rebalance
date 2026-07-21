@@ -55,6 +55,36 @@ from typing import Optional
 
 from openpyxl import load_workbook
 
+# ── 7/21: calamine 고속 xlsx 리더 (openpyxl iter_rows 5~7분 → 수 초) ──
+try:
+    from python_calamine import CalamineWorkbook as _Calamine
+except Exception:
+    _Calamine = None
+
+
+def _sheet_names(path) -> list:
+    if _Calamine is not None:
+        return list(_Calamine.from_path(str(path)).sheet_names)
+    wb = load_workbook(path, read_only=True)
+    names = list(wb.sheetnames)
+    wb.close()
+    return names
+
+
+def _sheet_rows(path, sheet=None):
+    """xlsx 시트 → 값 튜플 제너레이터. calamine 우선, 미설치 시 openpyxl 폴백."""
+    if _Calamine is not None:
+        wb = _Calamine.from_path(str(path))
+        name = sheet if sheet else wb.sheet_names[0]
+        for row in wb.get_sheet_by_name(name).to_python(skip_empty_area=False):
+            yield tuple(row)
+        return
+    wb = load_workbook(path, read_only=True, data_only=True)
+    ws = wb[sheet] if sheet else wb.active
+    for row in ws.iter_rows(values_only=True):
+        yield row
+    wb.close()
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("build_test_csv")
 
@@ -62,8 +92,12 @@ log = logging.getLogger("build_test_csv")
 # 설정
 # ─────────────────────────────────────────────
 _HERE = Path(__file__).parent
-UPLOAD_DIR = Path("/sessions/quirky-dazzling-wozniak/mnt/uploads")   # Cowork sandbox 마운트 경로
-OUT_DIR = Path("/sessions/quirky-dazzling-wozniak/mnt/outputs/reba_770_upload/data/test")
+# Cowork sandbox 마운트 경로 — 세션명이 매번 달라지므로 자동 감지 (7/21 fix)
+_upload_candidates = sorted(Path("/sessions").glob("*/mnt/uploads")) if Path("/sessions").exists() else []
+UPLOAD_DIR = _upload_candidates[0] if _upload_candidates else Path("/sessions/quirky-dazzling-wozniak/mnt/uploads")
+# 출력 — 세션 outputs 자동 감지 (7/21 fix), 실패 시 스크립트 폴더 하위
+_out_candidates = sorted(Path("/sessions").glob("*/mnt/outputs")) if Path("/sessions").exists() else []
+OUT_DIR = (_out_candidates[0] / "reba_run" / "data" / "test") if _out_candidates else (_HERE / "data" / "test")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # 오늘 날짜 YYMMDD (파일명용)
@@ -150,16 +184,13 @@ def _read_utf8_csv(path: Path):
 
 
 def _iter_xlsx(path: Path, sheet: Optional[str] = None, skip_rows: int = 0):
-    """xlsx → dict rows (헤더는 skip_rows 이후 첫 행)."""
-    wb = load_workbook(path, read_only=True, data_only=True)
-    ws = wb[sheet] if sheet else wb.active
-    it = ws.iter_rows(values_only=True)
+    """xlsx → dict rows (헤더는 skip_rows 이후 첫 행). 7/21: calamine 고속 경로."""
+    it = _sheet_rows(path, sheet)
     for _ in range(skip_rows):
         next(it)
     hdr = [str(c).strip() if c is not None else "" for c in next(it)]
     for r in it:
         yield {hdr[i]: r[i] for i in range(min(len(hdr), len(r)))}
-    wb.close()
 
 
 # ─────────────────────────────────────────────
@@ -179,13 +210,13 @@ def stage1_master(skus: dict) -> None:
         skus.update(cached)
         log.info(f"  → {len(cached):,} 단품 (cached)")
         return
-    wb = load_workbook(path, read_only=True, data_only=True)
-    ws = wb["단품별판매재고"]
     count = 0
     # 헤더 구조: row 0=라벨('2시즌씩'), row 1=컬럼명, row 2=단위, row 3=전체결과, row 4~ 데이터
-    for i, row in enumerate(ws.iter_rows(values_only=True)):
+    for i, row in enumerate(_sheet_rows(path, "단품별판매재고")):
         if i < 4:
             continue
+        if len(row) < 20:  # calamine은 행별 가변 길이 → 패딩
+            row = tuple(row) + (None,) * (20 - len(row))
         code = str(row[0] or "").strip().upper()
         if not code or len(code) < 10:
             continue
@@ -220,7 +251,6 @@ def stage1_master(skus: dict) -> None:
             "wk_qty": wk_qty,
         }
         count += 1
-    wb.close()
     with open(cache_path, "wb") as f:
         pickle.dump(dict(skus), f)
     log.info(f"  → {count:,} 단품")
@@ -239,12 +269,9 @@ def stage2_bw(bw_qty: dict, bw_name: dict, price_fallback: dict) -> None:
     """
     log.info("Stage 2: 반응과 시트 로딩...")
     path = _find_by_any(["단품별판매재고, 반응과.xlsx"])
-    wb = load_workbook(path, read_only=True, data_only=True)
-    ws = wb["반응과"]
-    rows_iter = ws.iter_rows(values_only=True)
+    rows_iter = _sheet_rows(path, "반응과")
     header = next(rows_iter, None)
     if not header:
-        wb.close()
         return
 
     def _find(*keys: str) -> Optional[int]:
@@ -301,7 +328,6 @@ def stage2_bw(bw_qty: dict, bw_name: dict, price_fallback: dict) -> None:
         if bw_qty[code] < 0:
             bw_qty[code] = 0
 
-    wb.close()
     log.info(f"  → 반응과 재고 {sum(bw_qty.values()):,}장 ({len(bw_qty):,} 단품)")
 
 
@@ -329,7 +355,11 @@ INTERNAL_SOURCES = [
 def stage3_internal_inv(inv_int: dict, name_fallback: dict) -> None:
     log.info("Stage 3: 내부 재고 로딩...")
     for patterns, site_map in INTERNAL_SOURCES:
-        path = _find_by_any(patterns)
+        try:
+            path = _find_by_any(patterns)
+        except FileNotFoundError:
+            log.warning(f"  내부재고 파일 없음 → skip: {patterns[0]}")
+            continue
         if path.suffix.lower() == ".xlsx":
             src = _iter_xlsx(path)
         else:
@@ -470,9 +500,8 @@ _CH_SITE_MAP = {"차세대공홈": "공홈", "이랜드몰": "이랜드몰",
 
 def _parse_internal_order_xlsx(path: Path, per_ch: dict) -> int:
     """단일 EHUB 내부주문 xlsx 파싱. 첫 행이 곧 헤더 (7/7 신규 구조)."""
-    wb = load_workbook(path, read_only=True, data_only=True)
-    ws = wb["Sheet0"] if "Sheet0" in wb.sheetnames else wb.active
-    it = ws.iter_rows(values_only=True)
+    _sn = _sheet_names(path)
+    it = _sheet_rows(path, "Sheet0" if "Sheet0" in _sn else None)
     header = [str(c).strip() if c is not None else "" for c in next(it)]
     hi = {h: i for i, h in enumerate(header)}
     # 7/7 파일은 첫 행이 헤더. 예전 파일은 첫 행이 비어있었음 → 헤더 미검출 시 한 줄 더 읽어 보정
@@ -494,7 +523,6 @@ def _parse_internal_order_xlsx(path: Path, per_ch: dict) -> int:
             continue
         per_ch[ch][code] += _int(row[hi.get("실수량", 23)])
         cnt += 1
-    wb.close()
     return cnt
 
 
@@ -633,15 +661,24 @@ def stage6_orders_ext(ord_ext: dict) -> None:
     log.info("Stage 6: 외부 주문 로딩 (EDW CSV, 7/7 신규 구조)...")
 
     # ── MUSINSA (7/9 신규: 내부/외부 두 파일 합산 · 지그재그와 동일 처리)
-    # 이전: 외부(내부포함) 파일 하나. 7/9부터 지그재그처럼 내부+외부 두 파일 분리 → 합산.
+    # 7/16 fix: 셀렉 신규 파일 있으면 옛 "직접다운/통합" 파일 skip (중복 방지)
     per: dict = defaultdict(int)
-    for patterns in (
-        ["주문_내부_MUSINSA_단품명필요*.csv"],
-        ["주문_외부_MUSINSA_단품명필요*.csv"],
-        # 옛 통합 파일명 fallback
-        ["주문_외부(내부포함)_MUSINSA_단품명필요*.csv"],
-        ["주문_내부+외부_무신사*.csv"],
-    ):
+    _has_new_musinsa = any(
+        UPLOAD_DIR.glob(p) for p in (
+            "*주문_내부_MUSINSA_단품명, 셀렉_*.csv",
+            "*주문_외부_MUSINSA_단품명, 셀렉_*.csv",
+        )
+    )
+    _mus_group_list = [
+        ["주문_내부_MUSINSA_단품명, 셀렉_*.csv", "주문_내부_MUSINSA_단품명필요*.csv"],
+        ["주문_외부_MUSINSA_단품명, 셀렉_*.csv", "주문_외부_MUSINSA_단품명필요*.csv"],
+    ]
+    if not _has_new_musinsa:
+        _mus_group_list.extend([
+            ["주문_외부(내부포함)_MUSINSA_단품명필요*.csv"],
+            ["주문_내부+외부_무신사*.csv"],
+        ])
+    for patterns in _mus_group_list:
         try:
             path = _find_by_any(patterns)
         except FileNotFoundError:
@@ -657,6 +694,7 @@ def stage6_orders_ext(ord_ext: dict) -> None:
     # ── NAVER (외부(내부포함) 파일 하나) ──
     per = defaultdict(int)
     path = _find_by_any([
+        "주문_외부(내부포함)_NAVER_단품명, 셀렉_*.csv",
         "주문_외부(내부포함)_NAVER_단품명필요*.csv",
         "주문_내부+외부_네이버*.csv",
     ])
@@ -667,8 +705,8 @@ def stage6_orders_ext(ord_ext: dict) -> None:
     # ── ZIGZAG (내부 + 외부 두 파일 합산) ──
     per = defaultdict(int)
     for patterns in (
-        ["주문_내부_ZIGZAG_단품명필요*.csv"],
-        ["주문_외부_ZIGZAG_단품명필요*.csv"],
+        ["주문_내부_ZIGZAG_단품명, 셀렉_*.csv", "주문_내부_ZIGZAG_단품명필요*.csv"],
+        ["주문_외부_ZIGZAG_단품명, 셀렉_*.csv", "주문_외부_ZIGZAG_단품명필요*.csv"],
     ):
         try:
             path = _find_by_any(patterns)
@@ -689,8 +727,8 @@ def stage6b_price_fallback(price_fallback: dict) -> None:
     # ZIGZAG — ORIGINAL_PRICE (내부/외부 파일 모두 순회)
     add = 0
     for patterns in (
-        ["주문_내부_ZIGZAG_단품명필요*.csv"],
-        ["주문_외부_ZIGZAG_단품명필요*.csv"],
+        ["주문_내부_ZIGZAG_단품명, 셀렉_*.csv", "주문_내부_ZIGZAG_단품명필요*.csv"],
+        ["주문_외부_ZIGZAG_단품명, 셀렉_*.csv", "주문_외부_ZIGZAG_단품명필요*.csv"],
     ):
         try:
             path = _find_by_any(patterns)
@@ -709,8 +747,8 @@ def stage6b_price_fallback(price_fallback: dict) -> None:
     add = 0
     musinsa_paths = []
     for patterns in (
-        ["주문_내부_MUSINSA_단품명필요*.csv"],
-        ["주문_외부_MUSINSA_단품명필요*.csv"],
+        ["주문_내부_MUSINSA_단품명, 셀렉_*.csv", "주문_내부_MUSINSA_단품명필요*.csv"],
+        ["주문_외부_MUSINSA_단품명, 셀렉_*.csv", "주문_외부_MUSINSA_단품명필요*.csv"],
         ["주문_외부(내부포함)_MUSINSA_단품명필요*.csv"],
         ["주문_내부+외부_무신사*.csv"],
     ):
