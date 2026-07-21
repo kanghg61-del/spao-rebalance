@@ -1,2 +1,2 @@
-Redeploy trigger — 2026-07-08T01:04:01Z
-Reason: force Streamlit Cloud full restart to pick up new _xlsx_logistics_bytes (FROM/TO 6-column format).
+Redeploy trigger — 2026-07-21
+Reason: force Streamlit Cloud restart to pick up data/test/data_spao_260721.csv.gz (35,875 SKU).
