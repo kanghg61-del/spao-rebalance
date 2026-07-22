@@ -5293,10 +5293,12 @@ def render_performance_v2_tab():
     dem_cell = pre_cell = post_cell = 0          # 건수(단품×채널)
     dem_sku = pre_sku = post_sku = 0             # 단품(SKU)
     pre_amt = post_amt = 0.0                     # 금액(결품 매출)
+    b_cell = ac_cell = b_post = 0                # B(재배치가능)·A·C(불가) 분해
     n_demand = 0
     weekly_demand_amt = 0.0
     for _r in _perf_res:
         _d0 = _r['data']; _mv = _r['moves']; _pr = _d0.get('price', 0)
+        _tot_inv = sum(_d0['inv'].get(_ch, 0) for _ch in CHANNELS)
         _sd = _sp = _spo = False
         for _ch in CHANNELS:
             _o = _d0['orders'].get(_ch, 0); _i = _d0['inv'].get(_ch, 0)
@@ -5305,6 +5307,12 @@ def render_performance_v2_tab():
             dem_cell += 1; _sd = True
             if _i == 0:                                    # 재배치 전 결품 (재고0)
                 pre_cell += 1; pre_amt += _o * _pr; _sp = True
+                if _tot_inv > 0:                           # 타 채널에 재고 있음 = B(에이전트 몫)
+                    b_cell += 1
+                    if _i + _mv.get(_ch, 0) <= 0:
+                        b_post += 1
+                else:                                      # 온라인 전체 재고0 = A·C(재배치 불가)
+                    ac_cell += 1
             if _i + _mv.get(_ch, 0) <= 0:                  # 재배치 후에도 재고0
                 post_cell += 1; post_amt += _o * _pr; _spo = True
         if _sd:
@@ -5317,6 +5325,10 @@ def render_performance_v2_tab():
     resolve_rate = ((pre_cell - post_cell) / pre_cell * 100) if pre_cell else 0.0
     oos_sku_pre = (pre_sku / dem_sku * 100) if dem_sku else 0.0          # 재배치 전 (단품)
     oos_sku_post = (post_sku / dem_sku * 100) if dem_sku else 0.0        # 재배치 후 (단품)
+    b_rate = (b_cell / dem_cell * 100) if dem_cell else 0.0             # B(에이전트 몫) %p of 대상
+    ac_rate = (ac_cell / dem_cell * 100) if dem_cell else 0.0           # A·C(재배치 불가) %p of 대상
+    b_share = (b_cell / pre_cell * 100) if pre_cell else 0.0            # 결품 중 B 비중
+    b_resolve = ((b_cell - b_post) / b_cell * 100) if b_cell else 0.0   # B 실제 해소율(그룹엔진)
     BASELINE = oos_rate   # 도입 전(재배치 전) = 정의1 결품률 실측치 (상수 12% → 실측 대체)
 
     # ── 오늘의 위험액 = Σ 필업수량 × 판매확률 × 정상가 (이동 0건이어도 매일 산출) ──
@@ -5369,6 +5381,10 @@ def render_performance_v2_tab():
                '· 전→후 = 기본 재배치(대상1주·목표2주·상한30%) 적용 시뮬레이션 '
                '· 회피 손실 = 재배치로 방어한 주간 결품매출(전−후) × 경과 주수 (추정) '
                '· 실현 = execution_log 실측 합계 (strict CAP).')
+    st.caption(f'🔎 결품 분해 — 재고0 결품 {oos_rate:.1f}% 중  '
+               f'**B(재배치 가능·에이전트 몫) {b_rate:.1f}%p ({b_share:.0f}%)**  ·  '
+               f'**A·C(재배치 불가·발주/오프라인 몫) {ac_rate:.1f}%p ({100-b_share:.0f}%)**  ·  '
+               f'B 실제 해소율(그룹엔진) {b_resolve:.0f}%')
 
     # ── 결품률 이력 자동 축적 (risk_log.csv — 접속일마다 1회) ──
     _rl = _Path(__file__).parent / 'risk_log.csv'
