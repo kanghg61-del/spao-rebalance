@@ -5278,22 +5278,46 @@ def render_performance_v2_tab():
     st.caption('KPI 트리: **① 회피 손실**(카운터팩추얼 · 북극성) · **② 실현 추가판매**(실측 · 하한 증명) · '
                '**③ 결품률 유지**(상태) — 이동량이 줄어도 ①·③이 실적을 지탱합니다.')
 
-    BASELINE = 12.0   # 도입 전 결품률 % (2026-06 기준선)
     TARGET = 1.5      # 유지 목표 %
     LAUNCH = _date(2026, 7, 9)   # 첫 재배치 실행일
 
     skus = load_data_v20(_csv_cache_key())
     imm = imminent_rows()
 
-    # 수요 있는 단품 수 · 주간 수요액 (회피 손실 추정 분모)
+    # ── 결품률 정의 1 (재고0) ──────────────────────────────────────────────
+    #  결품률 = [주간 판매(수요)가 있는 채널 중 '해당 채널 재고 = 0'인 단품×채널]
+    #           ÷ [주간 판매가 있는 전체 단품×채널]
+    #  ('재배치로 해소 가능' 조건은 제외 — 온라인 전체 재고0(A/C)도 포함한 전사 기준)
+    #  재배치 전(pre) → 후(post)를 실제 엔진(기본 시나리오: 대상1주·목표2주·상한30%)으로 산출.
+    _perf_res = calc_results_v20((1.0, 2.0, 0.90, 0, 0, (), 0.30), _csv_cache_key())
+    dem_cell = pre_cell = post_cell = 0          # 건수(단품×채널)
+    dem_sku = pre_sku = post_sku = 0             # 단품(SKU)
+    pre_amt = post_amt = 0.0                     # 금액(결품 매출)
     n_demand = 0
-    weekly_demand_amt = 0
-    for _c0, _d0 in skus.items():
-        _to0 = sum(_d0['orders'].get(_ch, 0) for _ch in CHANNELS)
-        if _to0 > 0:
-            n_demand += 1
-            weekly_demand_amt += _to0 * _d0.get('price', 0)
-    oos_rate = (len(imm) / n_demand * 100) if n_demand else 0.0
+    weekly_demand_amt = 0.0
+    for _r in _perf_res:
+        _d0 = _r['data']; _mv = _r['moves']; _pr = _d0.get('price', 0)
+        _sd = _sp = _spo = False
+        for _ch in CHANNELS:
+            _o = _d0['orders'].get(_ch, 0); _i = _d0['inv'].get(_ch, 0)
+            if _o <= 0:
+                continue
+            dem_cell += 1; _sd = True
+            if _i == 0:                                    # 재배치 전 결품 (재고0)
+                pre_cell += 1; pre_amt += _o * _pr; _sp = True
+            if _i + _mv.get(_ch, 0) <= 0:                  # 재배치 후에도 재고0
+                post_cell += 1; post_amt += _o * _pr; _spo = True
+        if _sd:
+            n_demand += 1; dem_sku += 1
+            weekly_demand_amt += sum(_d0['orders'].get(_ch, 0) for _ch in CHANNELS) * _pr
+        if _sp: pre_sku += 1
+        if _spo: post_sku += 1
+    oos_rate = (pre_cell / dem_cell * 100) if dem_cell else 0.0          # 재배치 전 (건수·정의1)
+    oos_rate_after = (post_cell / dem_cell * 100) if dem_cell else 0.0   # 재배치 후 (건수)
+    resolve_rate = ((pre_cell - post_cell) / pre_cell * 100) if pre_cell else 0.0
+    oos_sku_pre = (pre_sku / dem_sku * 100) if dem_sku else 0.0          # 재배치 전 (단품)
+    oos_sku_post = (post_sku / dem_sku * 100) if dem_sku else 0.0        # 재배치 후 (단품)
+    BASELINE = oos_rate   # 도입 전(재배치 전) = 정의1 결품률 실측치 (상수 12% → 실측 대체)
 
     # ── 오늘의 위험액 = Σ 필업수량 × 판매확률 × 정상가 (이동 0건이어도 매일 산출) ──
     risk_amt = 0.0
@@ -5326,23 +5350,24 @@ def render_performance_v2_tab():
     realized_man = sum(_fv(r.get('실제효과_만원')) for r in _rows_log
                        if str(r.get('실제효과_만원') or '').strip())
 
-    # ── 회피 손실 누적 (추정) — 베이스라인 결품률 대비 주간 수요 방어분 × 경과 주수 ──
+    # ── 회피 손실 누적 (추정) — 재배치 전−후 결품매출 방어분 × 경과 주수 (정의1 실측 기반) ──
     weeks = max(1.0, (_date.today() - LAUNCH).days / 7.0)
-    avoided_week = weekly_demand_amt * max(0.0, (BASELINE - oos_rate)) / 100.0
+    avoided_week = max(0.0, pre_amt - post_amt)   # 재배치로 방어한 주간 결품매출(전−후)
     avoided_cum = avoided_week * weeks
 
     k1, k2, k3, k4 = st.columns(4)
     k1.metric('오늘의 위험액 (방치 시)', f'{risk_amt/1e8:.2f}억',
               f'결품임박 {len(sty_g):,}개 스타일 · 필업 {fill_total:,}장')
     k2.metric('회피 손실 누적 (추정)', f'{avoided_cum/1e8:.1f}억',
-              f'베이스라인 {BASELINE:.0f}% 대비 · {weeks:.1f}주')
+              f'재배치 전−후 결품매출 방어 · {weeks:.1f}주')
     k3.metric('실현 추가판매 누적 (실측)', f'{realized_man/1e4:.2f}억',
               '회피 손실의 하한 증명 (strict CAP)')
-    k4.metric('결품률 (유지 상태)', f'{oos_rate:.1f}%',
-              f'{oos_rate - BASELINE:+.1f}%p vs 도입 전 {BASELINE:.0f}%',
-              delta_color='inverse')
-    st.caption('📐 위험액 = Σ 필업수량 × 판매확률 × 정상가 (필업 = 1주 수요 − 현재고 · 판매확률 = 1 − 재고주수) '
-               '· 회피 손실 = 주간 수요액 × (베이스라인 − 현재 결품률) × 경과 주수 (추정) '
+    k4.metric('재고0 결품률 (재배치 전→후)', f'{oos_rate:.1f}% → {oos_rate_after:.1f}%',
+              f'해소 {resolve_rate:.0f}% · 단품 {oos_sku_pre:.0f}%→{oos_sku_post:.0f}%',
+              delta_color='off')
+    st.caption('📐 결품률(정의1) = 주간 판매 있는 채널 중 재고=0 / 주간 판매 있는 전체 (단품×채널 건수 기준) '
+               '· 전→후 = 기본 재배치(대상1주·목표2주·상한30%) 적용 시뮬레이션 '
+               '· 회피 손실 = 재배치로 방어한 주간 결품매출(전−후) × 경과 주수 (추정) '
                '· 실현 = execution_log 실측 합계 (strict CAP).')
 
     # ── 결품률 이력 자동 축적 (risk_log.csv — 접속일마다 1회) ──
@@ -5355,10 +5380,11 @@ def render_performance_v2_tab():
                 hist = list(_csv.DictReader(f))
         if not any(str(h.get('date')) == _today for h in hist):
             hist.append({'date': _today, '결품률_pct': f'{oos_rate:.2f}',
+                         '결품률후_pct': f'{oos_rate_after:.2f}',
                          '위험액_만원': str(int(round(risk_amt / 1e4))),
                          '결품임박_단품수': str(len(imm))})
             with open(_rl, 'w', encoding='utf-8-sig', newline='') as f:
-                _w = _csv.DictWriter(f, fieldnames=['date', '결품률_pct',
+                _w = _csv.DictWriter(f, fieldnames=['date', '결품률_pct', '결품률후_pct',
                                                     '위험액_만원', '결품임박_단품수'])
                 _w.writeheader()
                 for h in hist:
@@ -5368,18 +5394,18 @@ def render_performance_v2_tab():
 
     c_l, c_r = st.columns(2)
     with c_l:
-        st.markdown('#### 결품률 트렌드 — 상태 지표 (유지 자체가 실적)')
+        st.markdown('#### 결품률 트렌드 (정의1) — 재배치 전 vs 후')
         try:
             _tr = pd.DataFrame(hist)
-            _tr['결품률 (%)'] = pd.to_numeric(_tr['결품률_pct'], errors='coerce')
-            _tr = _tr.set_index('date')[['결품률 (%)']]
-            _tr['베이스라인 (도입 전 12%)'] = BASELINE
+            _tr['결품률 전 (%)'] = pd.to_numeric(_tr['결품률_pct'], errors='coerce')
+            _tr['결품률 후 (%)'] = pd.to_numeric(_tr.get('결품률후_pct'), errors='coerce')
+            _tr = _tr.set_index('date')[['결품률 전 (%)', '결품률 후 (%)']]
             _tr['목표 (≤1.5%)'] = TARGET
-            st.line_chart(_tr, height=260, color=['#4AE3B5', '#FF6B6B', '#FFC000'])
+            st.line_chart(_tr, height=260, color=['#FF6B6B', '#4AE3B5', '#FFC000'])
         except Exception:
             st.info('기록 준비 중 — 접속일마다 자동으로 1점씩 쌓입니다.')
-        st.caption('베이스라인(12%)과의 간격이 곧 회피 손실 — 이동량이 0에 수렴해도 '
-                   '결품률이 낮게 유지되는 한 실적은 지속됩니다. ("유지 주간 수"를 실적으로 카운트)')
+        st.caption('빨강(재배치 전)과 민트(재배치 후)의 간격이 곧 에이전트가 매일 방어하는 결품 — '
+                   '재고=0 결품 / 주간 판매 있는 전체 (건수 기준). 접속일마다 1점씩 자동 축적됩니다.')
     with c_r:
         st.markdown('#### 주간 성과 롤업 — 실현(실측) + 회피(추정)')
         try:
@@ -5440,7 +5466,7 @@ def render_performance_v2_tab():
         '• <b>순효과 집계</b>: 왕복 이동분은 실적에서 자동 차감<br>'
         '• <b>이동 0건인 날</b> → "정상 유지일" 배지로 카운트 (실적 유지 증빙)'
         '</div>', unsafe_allow_html=True)
-    st.caption('※ 회피 손실은 추정치(베이스라인 12% 대비)입니다 — 분기 1회 홀드아웃(재배치 제외군 A/B) 검증 권장. '
+    st.caption('※ 회피 손실은 추정치(정의1 재배치 전−후 결품매출 차)입니다 — 분기 1회 홀드아웃(재배치 제외군 A/B) 검증 권장. '
                '결품률 이력은 risk_log.csv에 접속일 단위로 자동 축적됩니다.')
 
 
