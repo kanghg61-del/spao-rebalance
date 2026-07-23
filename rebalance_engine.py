@@ -310,12 +310,18 @@ def calc_rebalance_group(group, params, channels):
     return out
 
 
-def calc_expected_revenue(sku_data, moves, channels, price):
-    """기대효과 = 해소된 결품량 × 정상가 (보수 추정)"""
+def calc_expected_revenue(sku_data, moves, channels, price, days: int = 5):
+    """기대효과 = 해소된 결품량 × 정상가 × (days/7) — 5일 기준 회수매출 (사용자 7/23 요청)
+    
+    orders는 파일 기준 주간(7일) 판매량 → 5일 예측 판매량으로 스케일링.
+    days=7이면 종전과 동일 결과 (호환성).
+    """
     revenue = 0
+    scale = days / 7.0  # 5/7 스케일링 (5일 기준 회수매출)
     for c in channels:
         inv = sku_data['inv'].get(c, 0)
-        o = sku_data['orders'].get(c, 0)
+        o_wk = sku_data['orders'].get(c, 0)
+        o = o_wk * scale  # 5일 예측 주문량
         new_inv = inv + moves.get(c, 0)
         old_short = max(0, o - inv)
         new_short = max(0, o - new_inv)
