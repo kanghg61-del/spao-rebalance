@@ -4287,7 +4287,9 @@ def render_ai_summary_tab():
     # 전일자 외형매출·재고액 실수치 사용 (사용자 6/25 요청 — 가격 추정 X)
     _has_daily_amt = any(d.get('daily_amt') for d in skus.values())
     _has_inv_amt = any(d.get('inv_amt') for d in skus.values())
-    _last_date = next((d.get('last_date', '') for d in skus.values() if d.get('last_date')), '')
+    # 7/23 사용자 요청: 가장 최근 일자 표시 — next() → max()로 실제 최신 일자 산출
+    _last_date_values = [d.get('last_date', '') for d in skus.values() if d.get('last_date')]
+    _last_date = max(_last_date_values) if _last_date_values else ''
     # 7/13: 최근 일자 매출 추출 — latest_daily.json (외부 3채널 실판매가 기준 단일일자)
     # 없는 채널(공홈/이랜드몰/카카오)은 daily_amt/7 로 fallback
     import json as _json, os as _os
@@ -5503,14 +5505,12 @@ def _render_dashboard_body(mode: str) -> None:
     # 라디오 선택 후 해당 탭 1개만 렌더 — 라디오는 app.py CSS로 탭 모양 스타일링.
     # 7/13 v0.9.12: '오늘의 결재' 재도입 — A안 통합 결재함 (회전 배치·리오더·추가 분배·예외를 한 큐로)
     _tab_renderers = [
-        ('🗳️ 오늘의 결재', render_batch_approval_tab),
+        # 7/23 사용자 요청: 오늘의 결재·추가 분배·리오더 요청 3개 탭 제거 (간소화)
         ('🛡️ 재배치(기본)', lambda: render_scenario('🛡️ 기본', st, allow_slider=False)),
         ('🎛️ 재배치(임의)', lambda: render_scenario('🎛️ 임의', st, allow_slider=True)),
         ('📈 실행 효과', render_effect_tab),
         # 7/21 사용자 승인 시안 → 신설: 일 단위 운영 체제 실적 측정 (회피 손실·결품률 유지)
         ('📉 성과 측정 v2', render_performance_v2_tab),
-        ('🧩 추가 분배', render_onepan_tab),
-        ('🚨 리오더 요청', render_reorder_request_tab),
         ('🏬 통합 재고뷰', render_unified_tab),
         ('📊 채널 별 세부', render_channel_tab),
         ('🚫 채널 IN-OUT (MD 기입)', render_excluded_tab),
