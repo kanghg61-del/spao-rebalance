@@ -2338,7 +2338,7 @@ def _render_group(results_ch, keyfn, g_inv, g_ord, g_move, g_eff, g_ext, keycol,
             '이동 후 재고주수': round((a['inv'] + a['mv']) / a['ordd']) if a['ordd'] > 0 else None,
             '효과(만원)': round(a['eff'] / 10000),
             '판매량 비중(%)': round(a['ordd'] / tot_ord * 100, 2),
-            '결품률(%)': round(a['urg'] / a['item'] * 100, 1) if a['item'] else 0.0,
+            '결품률(%)': None  # 결품률 재검증 중,
         })
         return row
 
@@ -2366,7 +2366,7 @@ def _render_group(results_ch, keyfn, g_inv, g_ord, g_move, g_eff, g_ext, keycol,
         '추천이동(회전)': T['mv'],
         '이동 후 재고주수': round((T['inv'] + T['mv']) / T['ordd']) if T['ordd'] > 0 else None,
         '효과(만원)': round(T['eff'] / 10000),
-        '판매량 비중(%)': 100.0, '결품률(%)': round(T['urg'] / T['item'] * 100, 1) if T['item'] else 0.0,
+        '판매량 비중(%)': 100.0, '결품률(%)': None  # 결품률 재검증 중,
     })
     df = pd.DataFrame([sumrow] + body)
     styled = (df.style.map(_rate_color, subset=['결품률(%)'])
@@ -2467,12 +2467,12 @@ def render_channel_tab():
             kcard(c[1], '총 재고액', f'{tot_amt/1e8:.2f}억', '재고수량 × 정상가')
             kcard(c[2], '총 재고량', f'{tot_inv:,}장', '6채널 합계')
             kcard(c[3], '긴급 결품', f'{n_urgent:,}건', '재고주수 < 1주')
-            kcard(c[4], '결품률(합산)', f'{rate:.1f}%', '6채널 재고 합산')
-            kcard(c[5], '결품(채널)', f'{union_rate:.1f}%', '한 채널이라도 결품')
+            kcard(c[4], '결품률(합산)', '—', '재검증 중 · 로직 업데이트 예정')
+            kcard(c[5], '결품(채널)', '—', '재검증 중 · 로직 업데이트 예정')
             kcard(c[6], '추천 이동(IN)', f'{tot_in:,}장', '금주 충전')
             kcard(c[7], '외부창고', f'{tot_ext:,}장', 'AENS·ADU3·ADQS')
             kcard(c[8], '외부창고 비중', f'{ext_pct:.1f}%', '외부창고 / 총재고')
-            st.caption('ℹ️ 결품률(합산)은 6채널 재고를 합쳐 봐 낮게(7%대) 보입니다(풀링 효과). 운영 체감은 "한 채널이라도 결품"인 결품(채널)을 보세요.')
+            st.caption('ℹ️ 결품률 지표는 정확 로직 재반영 중입니다 (일시 공란 · 추후 업데이트 예정).')
         else:
             n = 7 if is_ext else 6
             c = st.columns(n)
@@ -2480,11 +2480,11 @@ def render_channel_tab():
             kcard(c[1], '총 재고액', f'{tot_amt/1e8:.2f}억', '재고수량 × 정상가')
             kcard(c[2], '총 재고량', f'{tot_inv:,}장', f'{channel_pick}')
             kcard(c[3], '긴급 결품', f'{n_urgent:,}건', '재고주수 < 1주')
-            kcard(c[4], '결품률', f'{rate:.1f}%', f'{n_urgent:,}/{n_item:,}')
+            kcard(c[4], '결품률', '—', '재검증 중 · 로직 업데이트 예정')
             kcard(c[5], '추천 이동(IN)', f'{tot_in:,}장', '금주 충전')
             if is_ext:
                 kcard(c[6], '외부창고', f'{tot_ext:,}장', f'{wh_label} · 비중 {ext_pct:.1f}%')
-            st.caption(f'ℹ️ {channel_pick} 결품률 {rate:.1f}% — 마이너 채널은 운영 SKU·SKU당 재고가 적어 구조적으로 높습니다(데이터 오류 아님).')
+            st.caption(f'ℹ️ {channel_pick} 결품률 지표는 정확 로직 재반영 중입니다 (일시 공란 · 추후 업데이트 예정).')
 
         bstat = {b: [0, 0] for b in BOK_LIST}
         for r in results_ch:
@@ -5374,17 +5374,11 @@ def render_performance_v2_tab():
               f'재배치 전−후 결품매출 방어 · {weeks:.1f}주')
     k3.metric('실현 추가판매 누적 (실측)', f'{realized_man/1e4:.2f}억',
               '회피 손실의 하한 증명 (strict CAP)')
-    k4.metric('재고0 결품률 (재배치 전→후)', f'{oos_rate:.1f}% → {oos_rate_after:.1f}%',
-              f'해소 {resolve_rate:.0f}% · 단품 {oos_sku_pre:.0f}%→{oos_sku_post:.0f}%',
+    k4.metric('재고0 결품률 (재배치 전→후)', '—',
+              '재검증 중 · 로직 업데이트 예정',
               delta_color='off')
-    st.caption('📐 결품률(정의1) = 주간 판매 있는 채널 중 재고=0 / 주간 판매 있는 전체 (단품×채널 건수 기준) '
-               '· 전→후 = 기본 재배치(대상1주·목표2주·상한30%) 적용 시뮬레이션 '
-               '· 회피 손실 = 재배치로 방어한 주간 결품매출(전−후) × 경과 주수 (추정) '
-               '· 실현 = execution_log 실측 합계 (strict CAP).')
-    st.caption(f'🔎 결품 분해 — 재고0 결품 {oos_rate:.1f}% 중  '
-               f'**B(재배치 가능·에이전트 몫) {b_rate:.1f}%p ({b_share:.0f}%)**  ·  '
-               f'**A·C(재배치 불가·발주/오프라인 몫) {ac_rate:.1f}%p ({100-b_share:.0f}%)**  ·  '
-               f'B 실제 해소율(그룹엔진) {b_resolve:.0f}%')
+    st.caption('📐 결품률 계산 로직 재검증 중 — 정확한 로직 반영 후 다시 표시 예정 (일시 공란).')
+    st.caption('🔎 결품 분해 (B·A·C 몫) — 로직 재검증 중 · 추후 업데이트 예정.')
 
     # ── 결품률 이력 자동 축적 (risk_log.csv — 접속일마다 1회) ──
     _rl = _Path(__file__).parent / 'risk_log.csv'
@@ -5411,17 +5405,7 @@ def render_performance_v2_tab():
     c_l, c_r = st.columns(2)
     with c_l:
         st.markdown('#### 결품률 트렌드 (정의1) — 재배치 전 vs 후')
-        try:
-            _tr = pd.DataFrame(hist)
-            _tr['결품률 전 (%)'] = pd.to_numeric(_tr['결품률_pct'], errors='coerce')
-            _tr['결품률 후 (%)'] = pd.to_numeric(_tr.get('결품률후_pct'), errors='coerce')
-            _tr = _tr.set_index('date')[['결품률 전 (%)', '결품률 후 (%)']]
-            _tr['목표 (≤1.5%)'] = TARGET
-            st.line_chart(_tr, height=260, color=['#FF6B6B', '#4AE3B5', '#FFC000'])
-        except Exception:
-            st.info('기록 준비 중 — 접속일마다 자동으로 1점씩 쌓입니다.')
-        st.caption('빨강(재배치 전)과 민트(재배치 후)의 간격이 곧 에이전트가 매일 방어하는 결품 — '
-                   '재고=0 결품 / 주간 판매 있는 전체 (건수 기준). 접속일마다 1점씩 자동 축적됩니다.')
+        st.info('📐 결품률 계산 로직 재검증 중 — 정확한 로직 반영 후 다시 표시 예정 (일시 공란).')
     with c_r:
         st.markdown('#### 주간 성과 롤업 — 실현(실측) + 회피(추정)')
         try:
