@@ -2338,7 +2338,7 @@ def _render_group(results_ch, keyfn, g_inv, g_ord, g_move, g_eff, g_ext, keycol,
             '이동 후 재고주수': round((a['inv'] + a['mv']) / a['ordd']) if a['ordd'] > 0 else None,
             '효과(만원)': round(a['eff'] / 10000),
             '판매량 비중(%)': round(a['ordd'] / tot_ord * 100, 2),
-            '결품률(%)': None  # 결품률 재검증 중,
+            '결품률(%)': '—'  # 결품률 재검증 중 (문자열로 두어 styler format 오류 회피),
         })
         return row
 
@@ -2366,11 +2366,11 @@ def _render_group(results_ch, keyfn, g_inv, g_ord, g_move, g_eff, g_ext, keycol,
         '추천이동(회전)': T['mv'],
         '이동 후 재고주수': round((T['inv'] + T['mv']) / T['ordd']) if T['ordd'] > 0 else None,
         '효과(만원)': round(T['eff'] / 10000),
-        '판매량 비중(%)': 100.0, '결품률(%)': None  # 결품률 재검증 중,
+        '판매량 비중(%)': 100.0, '결품률(%)': '—'  # 결품률 재검증 중 (문자열로 두어 styler format 오류 회피),
     })
     df = pd.DataFrame([sumrow] + body)
-    styled = (df.style.map(_rate_color, subset=['결품률(%)'])
-              .map(woc_color, subset=['현 재고주수', '이동 후 재고주수'])
+    # 7/23 결품률 재검증 중: _rate_color subset · format에서 결품률 제외 (문자열 '—' 그대로 표시)
+    styled = (df.style.map(woc_color, subset=['현 재고주수', '이동 후 재고주수'])
               .map(mv_color, subset=['추천이동(회전)'])
               .apply(_hl_sum, axis=1)
               .format({'주간 판매량': '{:,}'.format, '일평균 판매량': '{:.1f}'.format,
@@ -2378,7 +2378,7 @@ def _render_group(results_ch, keyfn, g_inv, g_ord, g_move, g_eff, g_ext, keycol,
                        '외부창고': '{:,}'.format, '현 재고주수': _woc, '이동 후 재고주수': _woc,
                        '소진예상(일)': _int0,
                        '추천이동(회전)': '{:,}'.format, '효과(만원)': '{:,}'.format,
-                       '판매량 비중(%)': '{:.2f}'.format, '결품률(%)': '{:.1f}'.format,
+                       '판매량 비중(%)': '{:.2f}'.format,
                        '누판율(%)': '{:.1f}'.format, '주판율(%)': '{:.1f}'.format}))
     st.dataframe(styled, use_container_width=True, height=440, hide_index=True,
                  column_config={'이미지': st.column_config.ImageColumn('이미지', width='small',
