@@ -2496,15 +2496,13 @@ def render_channel_tab():
                     if i / o < 1:
                         bstat[b][1] += 1
         st.markdown('##### 🧬 복종별 결품률')
+        # 7/23 사용자 요청: 결품률 정확 로직 재검증 중 · 카드 값 공란 처리 (추후 업데이트 예정)
         bc = st.columns(len(BOK_LIST))
         for j, b in enumerate(BOK_LIST):
-            item, urg = bstat[b]
-            br = urg / item * 100 if item else 0
-            clr = '#FF6B70' if br >= 25 else '#FFC000' if br >= 10 else '#4AE3B5'
             bc[j].markdown(
                 f'<div class="kpi-card"><div class="kpi-label">복종 {b}</div>'
-                f'<div class="kpi-value" style="color:{clr}">{br:.1f}%</div>'
-                f'<div class="kpi-sub">{urg:,}/{item:,}</div></div>', unsafe_allow_html=True)
+                f'<div class="kpi-value" style="color:#9FB0C0">—</div>'
+                f'<div class="kpi-sub">재검증 중</div></div>', unsafe_allow_html=True)
         urgent_loss = 0
         for r in results_ch:
             d = r['data']; o = g_ord(d); i = g_inv(d)
@@ -2521,7 +2519,7 @@ def render_channel_tab():
             '<span style="color:#9FB0C0;font-weight:normal;font-size:11px">(통계·규칙 기반 자동 진단)</span></div>'
             '<div style="color:#FFFFFF;font-size:13px;line-height:1.7">'
             f'<b>진단</b> — {channel_pick} 운영 SKU {n_item:,}건 중 <b>{n_urgent:,}건({rate:.1f}%)</b>이 1주 내 결품 위험, '
-            f'노출 손실 약 <b>{urgent_loss/1e8:.1f}억원</b> 규모. 복종별로는 <b>{wb}({wb_rate:.1f}%)</b>가 가장 취약 → 우선 점검.<br>'
+            f'노출 손실 약 <b>{urgent_loss/1e8:.1f}억원</b> 규모.<br>'  # 7/23 복종별 결품률 공란 처리 · 취약 복종 언급 제거
             '<b>제안</b> — ① 회전(온라인 잉여→결품 채널) 우선 충전 · '
             f'② {dist_note} · ③ 회전·분배로 못 메우는 단품은 리오더 요청(🤖 AICA 2.0 허브) 처리 권장.'
             '</div></div>', unsafe_allow_html=True)
