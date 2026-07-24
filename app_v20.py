@@ -869,6 +869,14 @@ def render_scenario(scenario_key, container, allow_slider=False):
     else:
         _units, _units_amt, _in, _amt, _rev, _sub = total_units, total_units_amt, total_in, total_amt, total_rev, '전체 기준'
         _chart_items = filtered
+    # 7/24 신규: 판매 로스 = 결품 상태에서 잃는 매출 (max(0, ord - inv) × price)
+    # 회수 매출과 대칭 관점 — 재배치 안 하면 이번 주 잃음
+    _loss = 0
+    for r in _chart_items:
+        d = r['data']; price = d.get('price', 0)
+        for c in CHANNELS:
+            o = d['orders'].get(c, 0); i = d['inv'].get(c, 0)
+            _loss += max(0, o - i) * price
     with kpi_ph:
         k1, k2, k3, k4, k5, k6 = st.columns(6)
         kpi_card(k1, '총 단품량', f'{_units:,}장', f'6채널 재고 합계 · {_sub}')
@@ -878,8 +886,14 @@ def render_scenario(scenario_key, container, allow_slider=False):
         k5.markdown(
             f'<div class="kpi-card" style="min-height:120px"><div class="kpi-label">회수 매출 · 채널 구성</div>'
             f'<div class="kpi-value">{_rev/100000000:.2f}억</div>'
+            f'<div class="kpi-sub">연 환산 {_rev*52/100000000:.0f}억 · × 52주</div>'
             f'{_chan_recovery_bar(_chart_items)}</div>', unsafe_allow_html=True)
-        kpi_card(k6, '연 환산', f'{_rev*52/100000000:.0f}억', '× 52주')
+        # 판매 로스 카드 (신규) — 빨강 · 재배치 안 하면 이번 주 잃음
+        k6.markdown(
+            f'<div class="kpi-card"><div class="kpi-label">판매 로스 (미실행 시)</div>'
+            f'<div class="kpi-value" style="color:#FF6B70">{_loss/100000000:.2f}억</div>'
+            f'<div class="kpi-sub">결품 방치 시 · 이번 주 예상 손실</div></div>',
+            unsafe_allow_html=True)
 
     rows = []
     for r in filtered:
@@ -985,7 +999,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
     # 표 위 placeholder 채우기 — [헤더 텍스트 | 채널 IN-OUT 라디오(소형) | 승인 버튼 | Excel(회전) | Excel(물류용)]
     # 사용자 7/9 — 채널 IN-OUT 라디오를 승인 버튼 왼쪽에 컴팩트하게 배치
     with actions_ph.container():
-        col_h, col_r, col_b1, col_b2, col_b3 = st.columns([2.2, 1.6, 2, 2, 2])
+        col_h, col_r, col_b1, col_b2, col_b3 = st.columns([2.2, 1.6, 2, 2, 2])  # b2: 방향별요약(팝업), b3: Excel 물류용
     with col_h:
         st.markdown(f'**단품 × 채널 매트릭스 — {len(filtered):,}건**')
     with col_r:
@@ -1024,89 +1038,75 @@ def render_scenario(scenario_key, container, allow_slider=False):
                 st.error(f'⚠️ 실행 이력 저장 실패: {str(_e)[:200]}')
             _approve_dialog(scenario_key, sel_count, sel_qty, sel_amt, sel_rev, ch_in, ch_out, exec_id)
     with col_b2:
-        # SAP 자동 연동 전 임시 — MD가 수기 실행할 수 있도록 회전 결과 엑셀 다운로드
-        # (스파오 6/19 합의 — 이노플 견적 협의 중)
+        # 7/24 신규: 채널간 이동 방향별 요약 팝업 (수기 실행용 Excel 제거)
+        # sel_items 기반 · FROM×TO 5x5 매트릭스 · TOP3 방향 카드
         try:
-            smap = _load_style_map()
-            out_rows = {ch: [] for ch in CHANNELS}
-            all_rows = []
-            for it in sel_items:
-                d = it['data']
-                code = it['code']
-                moves = it.get('moves', {})
-                sty = code[:10]
-                sty_name = smap.get(sty, d.get('name', ''))
-                in_pairs = [(ch, moves[ch]) for ch in CHANNELS if moves.get(ch, 0) > 0]
-                in_str = ' / '.join([f'{CH_SHORT.get(ch, ch)}+{q:,}' for ch, q in in_pairs])
-                # 받는 채널 매장코드 (회전 작업 편의 — 영문 4자리만, 사용자 요청 6/19)
-                in_wh_str = ' / '.join([WAREHOUSE_CODE.get(ch, '-') for ch, _ in in_pairs])
-                # v0.9.8 — 채널 시트에 OUT·IN 모두 표시 (단품 누락 방지)
-                # ch_move != 0인 모든 채널을 그 채널의 시트에 포함
-                for ch in CHANNELS:
-                    ch_move = moves.get(ch, 0)
-                    if ch_move == 0:
-                        continue
-                    out_qty = max(0, -ch_move)
-                    in_qty = max(0, ch_move)
-                    price = d.get('price', 0)
-                    inv_my = d['inv'].get(ch, 0)
-                    ord_my = d['orders'].get(ch, 0)
-                    woc_cur = round(inv_my / ord_my, 1) if ord_my > 0 else None
-                    woc_after = round((inv_my + in_qty - out_qty) / ord_my, 1) if ord_my > 0 else None
-                    # v0.9.9 — 회수매출 2개 컬럼 분리 (옵션 B)
-                    # 1) OUT 매출가치(만원) = OUT 수량 × 정상가 (회수된 재고의 단순 가치)
-                    out_value = round(out_qty * price / 10000) if out_qty > 0 else 0
-                    # 2) 결품해소 회수(만원) = 대시보드 KPI와 동일 산식 — 이 채널의 결품 해소분
-                    old_short_ch = max(0, ord_my - inv_my)
-                    new_short_ch = max(0, ord_my - (inv_my + in_qty - out_qty))
-                    relief = round((old_short_ch - new_short_ch) * price / 10000)
-                    row = {
-                        '단품코드': code, '스타일코드': sty, '스타일명': sty_name,
-                        '내 채널 현재고': inv_my,
-                        '내 채널 주판': ord_my,
-                        '현 재고주수': (f'{woc_cur}주' if woc_cur is not None else ''),
-                        'OUT 수량(장)': int(out_qty),
-                        'IN 수량(장)': int(in_qty),
-                        '이동 후 재고주수': (f'{woc_after}주' if woc_after is not None else ''),
-                        '받는 채널 분배': in_str,
-                        '받는 채널 매장코드': in_wh_str,
-                        '내 채널 매장코드': WAREHOUSE_CODE.get(ch, '-'),
-                        '단품 정상가(원)': price,
-                        'OUT 매출가치(만원)': out_value,
-                        '결품해소 회수(만원)': relief,
-                    }
-                    out_rows[ch].append(row)
-                    all_rows.append({**row, '채널': ch})
-            sheets = {}
-            for ch in CHANNELS:
-                if out_rows[ch]:
-                    sheets[CH_SHORT.get(ch, ch)] = (
-                        pd.DataFrame(out_rows[ch])
-                        .sort_values('OUT 수량(장)', ascending=False)
-                        .reset_index(drop=True)
-                    )
-            if all_rows:
-                sheets['전체 회전 매트릭스'] = pd.DataFrame(all_rows)
-            from datetime import datetime as _dt
-            tot_qty = sum(r['OUT 수량(장)'] for r in all_rows) if all_rows else 0
-            fname = f'회전결과_{scenario_key.replace(" ", "")}_{_dt.now().strftime("%Y%m%d_%H%M")}_{tot_qty}장.xlsx'
-            if sheets:
-                # 조건부 서식 (사용자 6/19 요청)
-                bar_cols = ['내 채널 현재고', '내 채널 주판', 'OUT 수량(장)']
-                red_bar_cols = ['OUT 매출가치(만원)', '결품해소 회수(만원)']
-                woc_cols = ['현 재고주수', '이동 후 재고주수']
-                bold_cols = ['OUT 수량(장)', '결품해소 회수(만원)']
-                st.download_button(
-                    f'⬇️ Excel 다운로드 (회전 수기 실행용 · {sel_count:,}건)',
-                    data=_xlsx_bytes_with_bars(sheets, bar_cols, red_bar_cols, woc_cols, bold_cols),
-                    file_name=fname,
-                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                    use_container_width=True, key=f'exp_xlsx_{scenario_key}',
-                )
-            else:
-                st.button('⬇️ Excel 다운로드 (0건)', use_container_width=True, disabled=True, key=f'exp_xlsx_dis_{scenario_key}')
-        except Exception as e:
-            st.button(f'⬇️ Excel 다운로드 (에러)', use_container_width=True, disabled=True, key=f'exp_xlsx_err_{scenario_key}')
+            _bin_key = f'bin_pop_{scenario_key}'
+            if st.button(f'📦 방향별 요약 ({sel_count:,}건)', use_container_width=True,
+                         key=f'bin_btn_{scenario_key}', disabled=(sel_count == 0)):
+                st.session_state[_bin_key] = True
+
+            if st.session_state.get(_bin_key):
+                @st.dialog('📦 물류 방향별 이동 요약', width='large')
+                def _show_bin_dialog():
+                    st.caption(f'FROM → TO 채널 페어별 총 이동량 · 승인 대상 {sel_count:,}건 기준')
+                    # 5x5 매트릭스 계산
+                    _pair = {}  # (from, to) -> qty
+                    for it in sel_items:
+                        d = it['data']; mvs = it.get('moves', {})
+                        outs = [(c, -q) for c, q in mvs.items() if q < 0]
+                        ins = [(c, q) for c, q in mvs.items() if q > 0]
+                        # SKU 단위 · OUT/IN 페어링 (가중치 = 이동량)
+                        tot_out = sum(q for _, q in outs)
+                        for oc, oq in outs:
+                            for ic, iq in ins:
+                                if tot_out > 0:
+                                    portion = int(iq * oq / tot_out)
+                                    if portion > 0:
+                                        _pair[(oc, ic)] = _pair.get((oc, ic), 0) + portion
+                    if not _pair:
+                        st.info('이동 명세 없음')
+                    else:
+                        # TOP 3 방향 카드
+                        _top3 = sorted(_pair.items(), key=lambda x: -x[1])[:3]
+                        _t_cols = st.columns(3)
+                        for _i, ((_fc, _tc), _q) in enumerate(_top3):
+                            _t_cols[_i].markdown(
+                                f'<div class="kpi-card"><div class="kpi-label">{_fc} → {_tc}</div>'
+                                f'<div class="kpi-value">{_q:,}장</div>'
+                                f'<div class="kpi-sub">회복 예상 · {int(_q/max(sel_qty,1)*100)}% 비중</div></div>',
+                                unsafe_allow_html=True)
+                        st.markdown('---')
+                        # 5x5 매트릭스 (pandas)
+                        import pandas as _pd
+                        _df = _pd.DataFrame(0, index=CHANNELS, columns=CHANNELS)
+                        for (_fc, _tc), _q in _pair.items():
+                            if _fc in CHANNELS and _tc in CHANNELS:
+                                _df.loc[_fc, _tc] = _q
+                        _df['OUT 합'] = _df.sum(axis=1)
+                        _df.loc['IN 합'] = _df.sum(axis=0)
+                        st.markdown('**전체 방향별 매트릭스 (5×5)**')
+                        st.dataframe(_df.style.background_gradient(cmap='Reds', axis=None)
+                                     .format('{:,}'), use_container_width=True)
+                    _c_close, _c_csv = st.columns([1, 1])
+                    if _c_close.button('닫기', use_container_width=True, key=f'bin_close_{scenario_key}'):
+                        st.session_state[_bin_key] = False
+                        st.rerun()
+                    if _pair:
+                        import io as _io, csv as _csv
+                        _buf = _io.StringIO()
+                        _w = _csv.writer(_buf)
+                        _w.writerow(['FROM', 'TO', '이동수량'])
+                        for (_fc, _tc), _q in sorted(_pair.items(), key=lambda x: -x[1]):
+                            _w.writerow([_fc, _tc, _q])
+                        _c_csv.download_button('📥 방향별 CSV', data=_buf.getvalue().encode('utf-8-sig'),
+                                               file_name=f'방향별요청_{scenario_key.replace(" ","")}_{_dt.now().strftime("%y%m%d")}.csv' if False else 'direction_summary.csv',
+                                               mime='text/csv', use_container_width=True, key=f'bin_csv_{scenario_key}')
+                _show_bin_dialog()
+        except Exception as _e:
+            st.button(f'📦 방향별 요약 (에러)', use_container_width=True, disabled=True,
+                      key=f'bin_err_{scenario_key}')
+        # (구 수기 Excel 블록 완전 제거 · 7/24)
     with col_b3:
         # 물류용 Excel — 받는 채널(IN)별 시트 분리, 메일 양식 (사용자 6/25)
         try:
@@ -1125,7 +1125,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
                 st.button('📦 Excel 다운로드 (물류용 · 0건)', use_container_width=True, disabled=True, key=f'exp_xlsx_logi_dis_{scenario_key}')
         except Exception as e:
             st.button(f'📦 Excel 다운로드 (에러)', use_container_width=True, disabled=True, key=f'exp_xlsx_logi_err_{scenario_key}')
-    container.caption('💡 스파오 6/19 합의 — SAP 자동 연동 전 임시 운영: 위 ⬇️ Excel(채널별 시트)로 MD 수기 실행. 📦 물류용은 받는 매장 입장 양식(메일 발송용).')
+    container.caption('💡 📦 방향별 요약(팝업) : FROM→TO 채널 페어별 이동량 · 📦 Excel(물류용) : 받는 매장 입장 양식.')
 
 
 # ============================================================
@@ -2430,7 +2430,7 @@ def render_channel_tab():
                      f'<div class="kpi-value">{value}</div><div class="kpi-sub">{sub}</div></div>',
                      unsafe_allow_html=True)
 
-    sub_overview, sub_item, sub_style, sub_sku = st.tabs(['📋 재고 현황', '🧺 아이템별', '🎨 스타일별', '🔎 단품 상세'])
+    sub_overview, sub_item, sub_style, sub_sku, sub_best = st.tabs(['📋 재고 현황', '🧺 아이템별', '🎨 스타일별', '🔎 단품 상세', '🏆 BEST 10'])
 
     # ───────────── 재고 현황 ─────────────
     with sub_overview:
@@ -2665,6 +2665,55 @@ def render_channel_tab():
             st.info('표시할 단품이 없습니다.')
 
         st.caption('🎨 상태: 🔴 긴급결품(<1주) · 🟡 주의(1~2주) · 🟢 정상(≥2주)   |   효과=선택 채널 기준(전체=합산)   |   외부창고=AENS·ADU3·ADQS 실데이터   |   🔌 내부창고·항만·부평=물류 API 연동(9/1) 후 표시')
+
+
+
+    # ───────────── BEST 10 (7/24 신규) ─────────────
+    with sub_best:
+        st.caption('선택 채널 기준 주간 판매 상위 10 스타일 (컬러×사이즈 롤업) · 실시간 재고·이동안')
+        # 스타일 10자리 그룹핑 · 주간 판매량 합산 · 상위 10개
+        _sty_agg = {}
+        for r in results_ch:
+            code = r['code']; d = r['data']; mv = r.get('moves', {})
+            sty = code[:10]
+            o = g_ord(d); i = g_inv(d); px = d.get('price', 0)
+            e = _sty_agg.setdefault(sty, {'ord': 0, 'inv': 0, 'mv_in': 0, 'mv_out': 0, 'names': set(), 'price': 0, 'ch_ord': {}})
+            e['ord'] += o
+            e['inv'] += i
+            e['mv_in'] += sum(v for v in mv.values() if v > 0)
+            e['mv_out'] += sum(-v for v in mv.values() if v < 0)
+            if d.get('name'): e['names'].add(d['name'])
+            if e['price'] == 0 and px > 0: e['price'] = px
+        _best = sorted(_sty_agg.items(), key=lambda x: -x[1]['ord'])[:10]
+        if not _best:
+            st.info('표시할 상품이 없습니다.')
+        else:
+            _cols_per_row = 5
+            for _row_i in range(0, len(_best), _cols_per_row):
+                _cols = st.columns(_cols_per_row)
+                for _j, (sty, e) in enumerate(_best[_row_i:_row_i + _cols_per_row]):
+                    rank = _row_i + _j + 1
+                    nm = next(iter(e['names']), '(단품명 없음)')[:22]
+                    woc = e['inv'] / e['ord'] if e['ord'] > 0 else None
+                    woc_str = f'{woc:.1f}주' if woc is not None else '-'
+                    woc_color = '#C0392B' if woc is not None and woc < 1 else '#C07020' if woc is not None and woc < 2 else '#1B864A'
+                    rank_bg = '#C0392B' if rank <= 3 else '#1a1a1a'
+                    # SPAO 공홈 이미지 URL 추정 (실제 서버 없으면 placeholder)
+                    img_url = f'https://image.eland.co.kr/spao/goods/detail/{sty}.jpg'
+                    _cols[_j].markdown(
+                        f'<div style="background:#fff;border:0.5px solid #e2e2de;border-radius:8px;overflow:hidden;margin-bottom:8px">'
+                        f'<div style="position:relative;aspect-ratio:1;background:#f0f0ee;display:flex;align-items:center;justify-content:center">'
+                        f'<img src="{img_url}" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display=\'none\'" />'
+                        f'<div style="position:absolute;top:6px;left:6px;width:22px;height:22px;border-radius:50%;background:{rank_bg};color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500">{rank}</div>'
+                        f'</div>'
+                        f'<div style="padding:8px 10px">'
+                        f'<div style="font-size:11px;font-weight:500;color:#1a1a1a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{nm}</div>'
+                        f'<div style="font-size:10px;color:#bbb;margin-top:1px">{sty}</div>'
+                        f'<div style="display:flex;justify-content:space-between;font-size:10px;color:#666;margin-top:6px"><span>주판</span><b style="color:#1a1a1a">{e["ord"]:,}장</b></div>'
+                        f'<div style="display:flex;justify-content:space-between;font-size:10px;color:#666;margin-top:2px"><span>재고주수</span><b style="color:{woc_color}">{woc_str}</b></div>'
+                        f'</div></div>',
+                        unsafe_allow_html=True)
+        st.caption('※ 상품 이미지는 SPAO 공홈 규격 URL 추정 · 실제 이미지 없으면 회색 자리 표시. 향후 이미지 API 연동 예정.')
 
 
 def render_effect_tab():
@@ -4838,6 +4887,17 @@ def render_summary_tab():
     """
     from collections import defaultdict
 
+    # 7/24 신규: 뉴발란스 스타일 chip UI + 라이트/다크 테마 스위처
+    st.markdown('''<style>
+      /* 채널 tabs chip 스타일 */
+      .stTabs [data-baseweb="tab-list"] { gap: 6px; }
+      .stTabs [data-baseweb="tab"] { padding: 6px 14px; border-radius: 20px; background: transparent;
+                                     border: 0.5px solid #d0d0cc; font-size: 12px; }
+      .stTabs [aria-selected="true"] { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+      /* 라디오도 chip 룩 */
+      div[role="radiogroup"] label { padding: 6px 12px; border-radius: 20px; margin-right: 4px; }
+    </style>''', unsafe_allow_html=True)
+
     st.markdown('<div class="title-bar">📋 요약 — 결품 방어 &amp; 물량 확보 한 판'
                 '<span class="ver-badge">A+B</span></div>', unsafe_allow_html=True)
     st.markdown(
@@ -5539,7 +5599,33 @@ def _render_dashboard_body(mode: str) -> None:
 
 
 def render():
+    # 7/24 신규: 뉴발란스 스타일 chip UI + 라이트/다크 테마 스위처
+    st.markdown('''<style>
+      .stTabs [data-baseweb="tab-list"] { gap: 6px; }
+      .stTabs [data-baseweb="tab"] { padding: 6px 14px; border-radius: 20px; background: transparent;
+                                     border: 0.5px solid #d0d0cc; font-size: 12px; }
+      .stTabs [aria-selected="true"] { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+      div[role="radiogroup"] label { padding: 6px 12px; border-radius: 20px; margin-right: 4px; }
+    </style>''', unsafe_allow_html=True)
+    with st.sidebar:
+        _theme = st.radio('테마', ['🌙 다크 (기본)', '☀️ 라이트', '💻 시스템'],
+                          index=st.session_state.get('_theme_idx', 0),
+                          horizontal=True, key='theme_pick',
+                          help='라이트는 뉴발란스 스타일 · 새로고침 후 적용')
+        st.session_state['_theme_idx'] = ['🌙 다크 (기본)', '☀️ 라이트', '💻 시스템'].index(_theme)
+        if _theme == '☀️ 라이트':
+            st.markdown('<style>[data-testid="stAppViewContainer"], body { background:#F0F0EE!important; color:#1A1A1A!important; } .stMarkdown, .stText, p, div { color:#1A1A1A!important; } .kpi-card { background:#fff!important; border:0.5px solid #e2e2de!important; color:#1A1A1A!important; }</style>', unsafe_allow_html=True)
     st.markdown('<div class="title-bar">온라인 재고관리 Agent — 운영 대시보드<span class="ver-badge">v0.9</span></div>', unsafe_allow_html=True)
+
+    # 7/24 신규: 사이드바 테마 선택 (라이트/다크/시스템)
+    with st.sidebar:
+        _theme = st.radio('테마', ['🌙 다크 (기본)', '☀️ 라이트', '💻 시스템'],
+                          index=st.session_state.get('_theme_idx', 0),
+                          horizontal=True, key='theme_pick',
+                          help='라이트는 뉴발란스 스타일 미니멀 · 브라우저 새로고침 후 적용')
+        st.session_state['_theme_idx'] = ['🌙 다크 (기본)', '☀️ 라이트', '💻 시스템'].index(_theme)
+        if _theme == '☀️ 라이트':
+            st.markdown('<style>[data-testid="stAppViewContainer"], body { background: #F0F0EE !important; color: #1A1A1A !important; } .stMarkdown, .stText, p, div { color: #1A1A1A !important; } .kpi-card { background: #fff !important; border: 0.5px solid #e2e2de !important; color: #1A1A1A !important; }</style>', unsafe_allow_html=True)
     # 7/13 사용자 요청: Agent(운영·시연) 탭 제거 — TEST(신규 데이터) 단일 진입
     with _KeyIsolator('test'):
         _render_dashboard_body('test')
