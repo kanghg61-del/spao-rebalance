@@ -5617,15 +5617,6 @@ def render():
             st.markdown('<style>[data-testid="stAppViewContainer"], body { background:#F0F0EE!important; color:#1A1A1A!important; } .stMarkdown, .stText, p, div { color:#1A1A1A!important; } .kpi-card { background:#fff!important; border:0.5px solid #e2e2de!important; color:#1A1A1A!important; }</style>', unsafe_allow_html=True)
     st.markdown('<div class="title-bar">온라인 재고관리 Agent — 운영 대시보드<span class="ver-badge">v0.9</span></div>', unsafe_allow_html=True)
 
-    # 7/24 신규: 사이드바 테마 선택 (라이트/다크/시스템)
-    with st.sidebar:
-        _theme = st.radio('테마', ['🌙 다크 (기본)', '☀️ 라이트', '💻 시스템'],
-                          index=st.session_state.get('_theme_idx', 0),
-                          horizontal=True, key='theme_pick',
-                          help='라이트는 뉴발란스 스타일 미니멀 · 브라우저 새로고침 후 적용')
-        st.session_state['_theme_idx'] = ['🌙 다크 (기본)', '☀️ 라이트', '💻 시스템'].index(_theme)
-        if _theme == '☀️ 라이트':
-            st.markdown('<style>[data-testid="stAppViewContainer"], body { background: #F0F0EE !important; color: #1A1A1A !important; } .stMarkdown, .stText, p, div { color: #1A1A1A !important; } .kpi-card { background: #fff !important; border: 0.5px solid #e2e2de !important; color: #1A1A1A !important; }</style>', unsafe_allow_html=True)
     # 7/13 사용자 요청: Agent(운영·시연) 탭 제거 — TEST(신규 데이터) 단일 진입
     with _KeyIsolator('test'):
         _render_dashboard_body('test')
