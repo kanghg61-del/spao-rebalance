@@ -869,31 +869,14 @@ def render_scenario(scenario_key, container, allow_slider=False):
     else:
         _units, _units_amt, _in, _amt, _rev, _sub = total_units, total_units_amt, total_in, total_amt, total_rev, '전체 기준'
         _chart_items = filtered
-    # 7/24 신규: 판매 로스 = 결품 상태에서 잃는 매출 (max(0, ord - inv) × price)
-    # 회수 매출과 대칭 관점 — 재배치 안 하면 이번 주 잃음
-    _loss = 0
-    for r in _chart_items:
-        d = r['data']; price = d.get('price', 0)
-        for c in CHANNELS:
-            o = d['orders'].get(c, 0); i = d['inv'].get(c, 0)
-            _loss += max(0, o - i) * price
     with kpi_ph:
-        k1, k2, k3, k4, k5, k6 = st.columns(6)
+        # 7/24 사용자 요청: 판매 로스 카드 제거 · 5개 KPI 통일 (채널 구성 바도 제거하여 높이 균일)
+        k1, k2, k3, k4, k5 = st.columns(5)
         kpi_card(k1, '총 단품량', f'{_units:,}장', f'6채널 재고 합계 · {_sub}')
         kpi_card(k2, '총 이동량(회전)', f'{_in:,}장', f'주간 IN · {_sub}')
         kpi_card(k3, '총 재고금액', f'{_units_amt/100000000:.1f}억', '매장재고 정상가')
         kpi_card(k4, '총 이동 금액', f'{_amt/100000000:.2f}억', '이동수량 × 정상가')
-        k5.markdown(
-            f'<div class="kpi-card" style="min-height:120px"><div class="kpi-label">회수 매출 · 채널 구성</div>'
-            f'<div class="kpi-value">{_rev/100000000:.2f}억</div>'
-            f'<div class="kpi-sub">연 환산 {_rev*52/100000000:.0f}억 · × 52주</div>'
-            f'{_chan_recovery_bar(_chart_items)}</div>', unsafe_allow_html=True)
-        # 판매 로스 카드 (신규) — 빨강 · 재배치 안 하면 이번 주 잃음
-        k6.markdown(
-            f'<div class="kpi-card"><div class="kpi-label">판매 로스 (미실행 시)</div>'
-            f'<div class="kpi-value" style="color:#FF6B70">{_loss/100000000:.2f}억</div>'
-            f'<div class="kpi-sub">결품 방치 시 · 이번 주 예상 손실</div></div>',
-            unsafe_allow_html=True)
+        kpi_card(k5, '회수 매출', f'{_rev/100000000:.2f}억', f'연 환산 {_rev*52/100000000:.0f}억 · × 52주')
 
     rows = []
     for r in filtered:
@@ -2696,7 +2679,8 @@ def render_channel_tab():
                     nm = next(iter(e['names']), '(단품명 없음)')[:22]
                     woc = e['inv'] / e['ord'] if e['ord'] > 0 else None
                     woc_str = f'{woc:.1f}주' if woc is not None else '-'
-                    woc_color = '#C0392B' if woc is not None and woc < 1 else '#C07020' if woc is not None and woc < 2 else '#1B864A'
+                    # 7/24 fix: woc_color 함수와 충돌 방지 · _woc_hex로 rename
+                    _woc_hex = '#C0392B' if woc is not None and woc < 1 else '#C07020' if woc is not None and woc < 2 else '#1B864A'
                     rank_bg = '#C0392B' if rank <= 3 else '#1a1a1a'
                     # SPAO 공홈 이미지 URL 추정 (실제 서버 없으면 placeholder)
                     img_url = f'https://image.eland.co.kr/spao/goods/detail/{sty}.jpg'
@@ -2710,7 +2694,7 @@ def render_channel_tab():
                         f'<div style="font-size:11px;font-weight:500;color:#1a1a1a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{nm}</div>'
                         f'<div style="font-size:10px;color:#bbb;margin-top:1px">{sty}</div>'
                         f'<div style="display:flex;justify-content:space-between;font-size:10px;color:#666;margin-top:6px"><span>주판</span><b style="color:#1a1a1a">{e["ord"]:,}장</b></div>'
-                        f'<div style="display:flex;justify-content:space-between;font-size:10px;color:#666;margin-top:2px"><span>재고주수</span><b style="color:{woc_color}">{woc_str}</b></div>'
+                        f'<div style="display:flex;justify-content:space-between;font-size:10px;color:#666;margin-top:2px"><span>재고주수</span><b style="color:{_woc_hex}">{woc_str}</b></div>'
                         f'</div></div>',
                         unsafe_allow_html=True)
         st.caption('※ 상품 이미지는 SPAO 공홈 규격 URL 추정 · 실제 이미지 없으면 회색 자리 표시. 향후 이미지 API 연동 예정.')
