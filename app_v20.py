@@ -1069,8 +1069,18 @@ def render_scenario(scenario_key, container, allow_slider=False):
                         _df['OUT 합'] = _df.sum(axis=1)
                         _df.loc['IN 합'] = _df.sum(axis=0)
                         st.markdown('**전체 방향별 매트릭스 (5×5)**')
-                        st.dataframe(_df.style.background_gradient(cmap='Reds', axis=None)
-                                     .format('{:,}'), use_container_width=True)
+                        # matplotlib 불필요한 조건부 색상 (7/24 fix: background_gradient → applymap)
+                        def _bin_cell_color(v):
+                            try:
+                                x = float(v)
+                                if x >= 1000: return 'background-color: #FCEBEB; color: #791F1F; font-weight: 500'
+                                if x >= 500:  return 'background-color: #FAEEDA; color: #633806'
+                                if x >= 100:  return 'background-color: #EAF3DE; color: #27500A'
+                                if x > 0:     return 'background-color: #F1EFE8; color: #444441'
+                            except: pass
+                            return ''
+                        st.dataframe(_df.style.applymap(_bin_cell_color).format('{:,}'),
+                                     use_container_width=True)
                     _c_close, _c_csv = st.columns([1, 1])
                     if _c_close.button('닫기', use_container_width=True, key=f'bin_close_{scenario_key}'):
                         st.session_state[_bin_key] = False
@@ -2413,7 +2423,7 @@ def render_channel_tab():
                      f'<div class="kpi-value">{value}</div><div class="kpi-sub">{sub}</div></div>',
                      unsafe_allow_html=True)
 
-    sub_overview, sub_item, sub_style, sub_sku, sub_best = st.tabs(['📋 재고 현황', '🧺 아이템별', '🎨 스타일별', '🔎 단품 상세', '🏆 BEST 10'])
+    sub_overview, sub_best, sub_item, sub_style, sub_sku = st.tabs(['📋 재고 현황', '🏆 BEST 10', '🧺 아이템별', '🎨 스타일별', '🔎 단품 상세'])
 
     # ───────────── 재고 현황 ─────────────
     with sub_overview:
