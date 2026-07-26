@@ -870,13 +870,14 @@ def render_scenario(scenario_key, container, allow_slider=False):
         _units, _units_amt, _in, _amt, _rev, _sub = total_units, total_units_amt, total_in, total_amt, total_rev, '전체 기준'
         _chart_items = filtered
     with kpi_ph:
-        # 7/24 사용자 요청: 판매 로스 카드 제거 · 5개 KPI 통일 (채널 구성 바도 제거하여 높이 균일)
-        k1, k2, k3, k4, k5 = st.columns(5)
+        # 7/27 사용자 요청: 회수매출 오른쪽에 '연 환산 회수매출' 별도 카드 추가 (6개 KPI · 재배치 기본/임의 공통)
+        k1, k2, k3, k4, k5, k6 = st.columns(6)
         kpi_card(k1, '총 단품량', f'{_units:,}장', f'6채널 재고 합계 · {_sub}')
         kpi_card(k2, '총 이동량(회전)', f'{_in:,}장', f'주간 IN · {_sub}')
         kpi_card(k3, '총 재고금액', f'{_units_amt/100000000:.1f}억', '매장재고 정상가')
         kpi_card(k4, '총 이동 금액', f'{_amt/100000000:.2f}억', '이동수량 × 정상가')
-        kpi_card(k5, '회수 매출', f'{_rev/100000000:.2f}억', f'연 환산 {_rev*52/100000000:.0f}억 · × 52주')
+        kpi_card(k5, '회수 매출', f'{_rev/100000000:.2f}억', '주간 기준 · 결품해소')
+        kpi_card(k6, '연 환산 회수매출', f'{_rev*52/100000000:.0f}억', '주간 회수매출 × 52주')
 
     rows = []
     for r in filtered:
