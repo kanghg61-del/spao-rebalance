@@ -2455,46 +2455,61 @@ def render_channel_tab():
                         union_urg += 1
         union_rate = union_urg / max(1, union_item) * 100
 
-        # ── 7/26 결품률 정의 확정: 재고=0 & 주간판매>0 / 주간판매 대상 · 건수(단품×채널) · 신상(5th='G')만 ──
+        # ── 7/26 결품률 정의 확정: 회전 결품(B) = 재고=0 & 타 채널 재고 있음(재배치 가능) & 주간주문 ≥ 2 ──
+        #    분모 = 주간주문 ≥ 2 대상 · 신상(5th='G') · 건수(단품×채널) · 재배치 전→후 해소율 산출
         _isnew = lambda _c: len(_c) > 4 and _c[4] == 'G'
         _ch_scope = CHANNELS if is_all else [channel_pick]
-        _oos_n = _dem_n = 0
+        MIN_DEM = 2                 # 소액수요 제외(주간주문 ≥ 2장)
+        REALIZED_ANNUAL = 36        # 회피매출 실측(억/연) — 7/9~7/16 8일 실행 실측(일 약 1,000만)
+        _dem_n = _bpre = _bpost = 0
+        _bok_oos = {b: [0, 0] for b in BOK_LIST}   # [B결품 前, 분모]
         for r in results_ch:
             if not _isnew(r['code']):
                 continue
-            d = r['data']
+            d = r['data']; mv = r['moves']
+            _tot = sum(d['inv'].get(c, 0) for c in CHANNELS)
+            _b = _bok(r['code'])
             for c in _ch_scope:
                 o = d['orders'].get(c, 0)
-                if o > 0:
-                    _dem_n += 1
-                    if d['inv'].get(c, 0) == 0:
-                        _oos_n += 1
-        oos0_rate = (_oos_n / _dem_n * 100) if _dem_n else 0.0
+                if o < MIN_DEM:
+                    continue
+                _dem_n += 1
+                if _b in _bok_oos:
+                    _bok_oos[_b][1] += 1
+                if d['inv'].get(c, 0) == 0 and _tot > 0:          # B 회전 결품(전)
+                    _bpre += 1
+                    if _b in _bok_oos:
+                        _bok_oos[_b][0] += 1
+                    if d['inv'].get(c, 0) + mv.get(c, 0) <= 0:    # 재배치 후에도 재고0(잔여)
+                        _bpost += 1
+        oos0_rate = (_bpre / _dem_n * 100) if _dem_n else 0.0          # 회전 결품률(B, 전)
+        oos_after_rate = (_bpost / _dem_n * 100) if _dem_n else 0.0    # 재배치 후 잔여
+        resolve_rate = ((_bpre - _bpost) / _bpre * 100) if _bpre else 0.0  # 해소율
 
         if is_all:
             c = st.columns(9)
             kcard(c[0], '품목 수', f'{n_item:,}', '주문 발생 SKU')
             kcard(c[1], '총 재고액', f'{tot_amt/1e8:.2f}억', '재고수량 × 정상가')
             kcard(c[2], '총 재고량', f'{tot_inv:,}장', '6채널 합계')
-            kcard(c[3], '긴급 결품', f'{n_urgent:,}건', '재고주수 < 1주(조기경보)')
-            kcard(c[4], '결품률', f'{oos0_rate:.1f}%', '재고=0 · 건수 · 신상(G)')
-            kcard(c[5], '결품 건수', f'{_oos_n:,}건', f'재고=0 / 판매채널 {_dem_n:,}건')
-            kcard(c[6], '추천 이동(IN)', f'{tot_in:,}장', '금주 충전')
-            kcard(c[7], '외부창고', f'{tot_ext:,}장', 'AENS·ADU3·ADQS')
+            kcard(c[3], '긴급 결품', f'{n_urgent:,}건', '재고주수<1주 · 조기경보')
+            kcard(c[4], '회전 결품률(B)', f'{oos0_rate:.1f}%', '재고0·타채널有·주문≥2·신상G')
+            kcard(c[5], '재배치 해소율', f'{resolve_rate:.0f}%', f'전 {oos0_rate:.1f}% → 후 {oos_after_rate:.1f}%')
+            kcard(c[6], '회피매출(실측)', f'연 {REALIZED_ANNUAL}억', '8일 실행 · 일 1,000만')
+            kcard(c[7], '추천 이동(IN)', f'{tot_in:,}장', '금주 충전')
             kcard(c[8], '외부창고 비중', f'{ext_pct:.1f}%', '외부창고 / 총재고')
-            st.caption('ℹ️ 결품률 = 주간 판매 있는 채널 중 재고=0 / 주간 판매 대상 (건수 기준 · 신상 5번째 G) · 긴급결품(재고주수<1주)은 조기경보 보조지표.')
+            st.caption('ℹ️ 회전 결품률(B) = 재고=0 · 타 채널에 재고 있음(재배치 가능) · 주간주문 ≥ 2장 / 주간주문 ≥ 2장 대상 (건수 · 신상 5번째 G). A·C(발주·오프라인)·소액수요 제외 · 긴급결품(재고주수<1주)은 조기경보 · 회피매출은 8일 실행 실측(연 36억).')
         else:
             n = 7 if is_ext else 6
             c = st.columns(n)
             kcard(c[0], '품목 수', f'{n_item:,}', '주문 발생 SKU')
             kcard(c[1], '총 재고액', f'{tot_amt/1e8:.2f}억', '재고수량 × 정상가')
             kcard(c[2], '총 재고량', f'{tot_inv:,}장', f'{channel_pick}')
-            kcard(c[3], '긴급 결품', f'{n_urgent:,}건', '재고주수 < 1주(조기경보)')
-            kcard(c[4], '결품률', f'{oos0_rate:.1f}%', '재고=0 · 건수 · 신상(G)')
+            kcard(c[3], '긴급 결품', f'{n_urgent:,}건', '재고주수<1주 · 조기경보')
+            kcard(c[4], '회전 결품률(B)', f'{oos0_rate:.1f}%', f'해소 {resolve_rate:.0f}% · 주문≥2·신상G')
             kcard(c[5], '추천 이동(IN)', f'{tot_in:,}장', '금주 충전')
             if is_ext:
                 kcard(c[6], '외부창고', f'{tot_ext:,}장', f'{wh_label} · 비중 {ext_pct:.1f}%')
-            st.caption(f'ℹ️ {channel_pick} 결품률 = 재고=0 / 주간 판매 대상 (건수 · 신상 G) · 긴급결품(재고주수<1주)은 조기경보 보조지표.')
+            st.caption(f'ℹ️ {channel_pick} 회전 결품률(B) = 재고=0 · 타 채널 재고 있음 · 주문 ≥ 2장 / 주문 ≥ 2장 대상 (신상 G) · 재배치 후 해소율 병기 · 긴급결품(재고주수<1주)은 조기경보.')
 
         bstat = {b: [0, 0] for b in BOK_LIST}
         for r in results_ch:
@@ -2505,22 +2520,8 @@ def render_channel_tab():
                     bstat[b][0] += 1
                     if i / o < 1:
                         bstat[b][1] += 1
-        st.markdown('##### 🧬 복종별 결품률 (재고=0 · 건수 · 신상 G)')
-        # 7/26: 결품률 정의 확정 반영 — 복종(단품코드 8번째 자리)별 재고=0 건수 결품률
-        _bok_oos = {b: [0, 0] for b in BOK_LIST}   # [oos, dem]
-        for r in results_ch:
-            if not _isnew(r['code']):
-                continue
-            b = _bok(r['code'])
-            if b not in _bok_oos:
-                continue
-            d = r['data']
-            for c in _ch_scope:
-                o = d['orders'].get(c, 0)
-                if o > 0:
-                    _bok_oos[b][1] += 1
-                    if d['inv'].get(c, 0) == 0:
-                        _bok_oos[b][0] += 1
+        st.markdown('##### 🧬 복종별 회전 결품률 (B · 재고0 · 주문≥2 · 신상 G)')
+        # 7/26: _bok_oos[b] = [B 회전 결품(전), 주문≥2 분모] — 상단 계산 블록에서 산출
         bc = st.columns(len(BOK_LIST))
         for j, b in enumerate(BOK_LIST):
             _o, _dm = _bok_oos[b]
@@ -2551,10 +2552,11 @@ def render_channel_tab():
             '<div style="color:#8AB4F8;font-weight:bold;margin-bottom:4px">🧠 AI 진단 · 제안 '
             '<span style="color:#9FB0C0;font-weight:normal;font-size:11px">(통계·규칙 기반 자동 진단)</span></div>'
             '<div style="color:#FFFFFF;font-size:13px;line-height:1.7">'
-            f'<b>진단</b> — {channel_pick} 운영 SKU {n_item:,}건 중 <b>{n_urgent:,}건({rate:.1f}%)</b>이 1주 내 결품 위험, '
-            f'노출 손실 약 <b>{urgent_loss/1e8:.1f}억원</b> 규모.<br>'  # 7/23 복종별 결품률 공란 처리 · 취약 복종 언급 제거
+            f'<b>진단</b> — 온라인 <b>회전 결품 {oos0_rate:.1f}%</b>(재고는 타 채널에 있는데 판매 채널엔 0 · 주문≥2·신상). '
+            f'하루 1회 재배치로 <b>{resolve_rate:.0f}% 해소</b>(전 {oos0_rate:.1f}% → 후 {oos_after_rate:.1f}%), 실측 회피매출 <b>연 약 {REALIZED_ANNUAL}억</b>(8일 실행). '
+            f'긴급결품(재고주수&lt;1주) {n_urgent:,}건은 조기경보.<br>'
             '<b>제안</b> — ① 회전(온라인 잉여→결품 채널) 우선 충전 · '
-            f'② {dist_note} · ③ 회전·분배로 못 메우는 단품은 리오더 요청(🤖 AICA 2.0 허브) 처리 권장.'
+            f'② {dist_note} · ③ 회전·분배로 못 메우는 단품(A·C)은 리오더 요청(🤖 AICA 2.0 허브) 처리 권장.'
             '</div></div>', unsafe_allow_html=True)
 
     # ───────────── 아이템별 ─────────────
