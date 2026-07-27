@@ -1039,11 +1039,15 @@ def stage7_finalize(skus_master: dict, bw_qty: dict, bw_name: dict,
             q = max(0, int(mp.get(code, 0)))
             r[f"ord_{ch}"] = q
             r[f"daily_{ch}"] = q
-        # 주문 (외부)
+        # 주문 (외부) — 7/27 fix: 내부 이미 있으면 합산 (덮어쓰기 X · 무신사/지그재그 이중 채널 대응)
         for ch, mp in ord_ext.items():
             q = max(0, int(mp.get(code, 0)))
-            r[f"ord_{ch}"] = q
-            r[f"daily_{ch}"] = q
+            if ch in ord_int:
+                r[f"ord_{ch}"] = r.get(f"ord_{ch}", 0) + q
+                r[f"daily_{ch}"] = r.get(f"daily_{ch}", 0) + q
+            else:
+                r[f"ord_{ch}"] = q
+                r[f"daily_{ch}"] = q
         skus[code] = r
 
     # 7/13: 신상 필터 해제 — 이월상품 포함 (사용자 정책 변경)
