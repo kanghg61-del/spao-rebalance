@@ -1323,6 +1323,22 @@ _GH_REPO = 'kanghg61-del/spao-rebalance'
 _GH_BRANCH = 'main'
 
 
+def _gh_err_hint(err):
+    """GitHub 저장 실패 메시지를 원인·해결책이 보이게 변환 (7/27 사용자 리포트 — 401 raw JSON 노출 개선)."""
+    _e = str(err or '')
+    if '401' in _e or 'Bad credentials' in _e:
+        return ('GitHub 토큰 만료/무효(401) — Streamlit Cloud [Manage app → Settings → Secrets]의 '
+                'GITHUB_TOKEN을 새 토큰(Contents Read/Write 권한)으로 교체하면 영구 저장이 다시 활성화됩니다. '
+                '변경분은 현재 세션에는 반영되어 있습니다.')
+    if '403' in _e:
+        return ('GitHub 권한 부족(403) — 토큰에 이 리포지토리 Contents Read/Write 권한이 있는지 확인하세요.')
+    if '404' in _e:
+        return ('GitHub 경로/리포 접근 불가(404) — 토큰 권한 또는 리포 설정을 확인하세요.')
+    if '키 미설정' in _e:
+        return _e
+    return _e[:200]
+
+
 def _gh_get_token():
     try:
         if hasattr(st, 'secrets'):
@@ -1908,9 +1924,26 @@ def render_excluded_tab():
         _today0 = _d0.today()
 
         # 7/27 사용자: 병합/교체 시 자동 영구 저장 — rerun 후에도 결과 멘트 유지 (flash)
+        # + 저장 성공 시 확인 '팝업'(st.dialog) 표시 (사용자 요청)
         _flash0 = st.session_state.pop('_inout_flash', None)
         if _flash0:
-            (st.success if _flash0[0] == 'ok' else st.warning)(_flash0[1])
+            if _flash0[0] == 'ok':
+                st.success(_flash0[1])
+
+                @st.dialog('💾 저장 완료')
+                def _inout_saved_dlg():
+                    st.markdown('### ✅ 영구 저장까지 완료되었습니다')
+                    st.markdown(_flash0[1])
+                    st.caption('모든 사용자 화면과 재배치 계산에 즉시 반영됩니다.')
+                    if st.button('확인', type='primary', use_container_width=True, key='inout_dlg_ok'):
+                        st.rerun()
+
+                try:
+                    _inout_saved_dlg()
+                except Exception:
+                    pass
+            else:
+                st.warning(_flash0[1])
 
         def _auto_gh_save(rows_to_save, action_txt):
             """병합/교체 직후 GitHub 영구 저장까지 자동 실행 — 결과 멘트를 flash로 예약."""
@@ -1924,8 +1957,8 @@ def render_excluded_tab():
                     'ok', f'✅ {action_txt} + 💾 GitHub 영구 저장까지 완료 — 모든 사용자·재배치 계산에 즉시 반영됩니다.')
             else:
                 st.session_state['_inout_flash'] = (
-                    'warn', f'☑️ {action_txt} 완료 (현재 세션에는 반영) · ⚠️ 영구 저장 실패: {str(_errg)[:120]} '
-                            f'— 하단 "💾 GitHub 영구 저장" 버튼으로 재시도하세요.')
+                    'warn', f'☑️ {action_txt} 완료 (현재 세션 반영 — 재배치 계산에는 즉시 적용) · '
+                            f'⚠️ 영구 저장 실패: {_gh_err_hint(_errg)}')
 
         def _norm_d0(v):
             """무엇이 오든(date/datetime/pd.Timestamp/NaT/str/None) 순수 datetime.date 또는 None으로 정규화.
@@ -2067,7 +2100,8 @@ def render_excluded_tab():
                 _bc0, _bc1, _bc2 = st.columns(3)
                 st.caption('💾 [기존에 병합] · [전체 교체] 클릭 시 **GitHub 영구 저장까지 자동 실행**됩니다 (별도 저장 버튼 불필요).')
                 with _bc0:
-                    if st.button(f'✓ 기존에 병합 (+{len(_new0)}건) · 영구 저장', type='primary',
+                    # 7/27 사용자: 기본값 = 전체 교체 → 교체 버튼을 primary(민트)로, 병합은 secondary
+                    if st.button(f'기존에 병합 (+{len(_new0)}건) · 영구 저장',
                                  use_container_width=True, key='xl_merge', disabled=(not _new0)):
                         _rows_m0 = all_rows + _new0
                         st.session_state['ch_excl_rows'] = _rows_m0
@@ -2076,8 +2110,8 @@ def render_excluded_tab():
                             _auto_gh_save(_rows_m0, f'엑셀 병합 +{len(_new0)}건')
                         st.rerun()
                 with _bc1:
-                    if st.button(f'전체 교체 ({len(_parsed)}건으로) · 영구 저장', use_container_width=True,
-                                 key='xl_replace', disabled=(not _parsed)):
+                    if st.button(f'✓ 전체 교체 ({len(_parsed)}건으로) · 영구 저장', type='primary',
+                                 use_container_width=True, key='xl_replace', disabled=(not _parsed)):
                         _rows_r0 = list(_parsed)
                         st.session_state['ch_excl_rows'] = _rows_r0
                         st.session_state.pop('up_xl_all', None)
@@ -2441,7 +2475,7 @@ def render_excluded_tab():
             if ok:
                 st.success('✅ GitHub 영구 저장 완료. 모든 사용자에게 반영됩니다.')
             else:
-                st.error(f'❌ 저장 실패: {err}')
+                st.error(f'❌ 저장 실패: {_gh_err_hint(err)}')
     with save_col2:
         if st.button('🔄 GitHub에서 다시 불러오기', use_container_width=True, key='gh_reload_excl'):
             st.session_state.pop('_ch_excl_loaded', None)
@@ -2471,7 +2505,7 @@ def render_excluded_tab():
                 if ok:
                     st.success('✅ GitHub 영구 저장 완료')
                 else:
-                    st.error(f'❌ 저장 실패: {err}')
+                    st.error(f'❌ 저장 실패: {_gh_err_hint(err)}')
         with bc2:
             if st.button('🗑️ 전체 이동 제외 초기화', use_container_width=True):
                 st.session_state['excluded_text'] = ''
@@ -2683,7 +2717,7 @@ def render_reorder_tab():
             if ok:
                 st.success('✅ GitHub 영구 저장 완료. 재배포 후에도 유지됩니다.')
             else:
-                st.error(f'❌ 저장 실패: {err}')
+                st.error(f'❌ 저장 실패: {_gh_err_hint(err)}')
     with gs_c2:
         if st.button('🔄 GitHub에서 다시 불러오기', use_container_width=True, key='gh_reload_reorder'):
             data, _ = _gh_load('data/reorder_mapping.json')
@@ -6213,3 +6247,7 @@ if __name__ == '__main__':
 # v0.9.21a (2026-07-27) — [버그 fix] '≡ 전체' 탭 TypeError (Timestamp vs date 비교 불가): data_editor
 #                        경유 규칙의 시작/종료일이 pd.Timestamp로 저장돼 date와 직접 비교 시 크래시 →
 #                        _norm_d0 정규화(Timestamp/datetime/NaT/str → date) 후 비교하도록 수정.
+# v0.9.21b (2026-07-27) — ① 전체 교체 버튼을 primary(민트·기본값)로, 병합은 secondary (사용자 지정)
+#                        ② GitHub 저장 실패 문구 개선: _gh_err_hint — 401(토큰 만료/무효) 시 raw JSON 대신
+#                           원인·해결책(Secrets의 GITHUB_TOKEN 교체 절차) 안내, 403/404 케이스별 문구.
+#                           ※ 401 자체는 코드가 아닌 Streamlit Secrets 토큰 문제 — 토큰 재발급 필요.
