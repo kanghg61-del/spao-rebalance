@@ -786,7 +786,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
         except Exception:
             _status = None
 
-    def _think(msg, sec=0.5):  # 7/27 사용자: 시퀀스 속도 절반으로 (0.25→0.5s/단계)
+    def _think(msg, sec=1.0):  # 7/27 사용자 3차: 체감 총 ~6초 (1.0s/단계 × 6단계)
         # msg = HTML (주요 수치 컬러 스팬 포함) — ✓ 마커·진행률 막대 자동 갱신
         if _status is not None:
             try:
@@ -798,7 +798,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
                     unsafe_allow_html=True)
                 if _think_state['prog'] is not None:
                     _pct0 = min(int(_n0 / _tot0 * 100), 100)
-                    _eta0 = max(0.0, (_tot0 - _n0) * 0.7)
+                    _eta0 = max(0.0, (_tot0 - _n0) * 1.0)
                     _txt0 = (f'진행률 {_pct0}% · 예상 완료 {_eta0:.1f}초' if _pct0 < 100
                              else '진행률 100% · 사고 시퀀스 완료')
                     _think_state['prog'].progress(_pct0, text=_txt0)
@@ -872,7 +872,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
                    f'<span style="color:#FFC000;font-weight:800">{int(move_cap_pct*100)}%</span> · '
                    f'채널 IN-OUT 규칙 <span style="color:#FFC000;font-weight:800">{_rules_n0}건</span> {_chx_lbl0}')
             _think(f'<b>최종안 확정</b> — 재배치 <span style="color:#8AB4F8;font-weight:800">{len(_mv_items0):,}건</span> · '
-                   f'기대 회수 <span style="color:#4AE3B5;font-weight:800">{_rev0/1e8:.2f}억</span> → 결재 대기', sec=0.3)
+                   f'기대 회수 <span style="color:#4AE3B5;font-weight:800">{_rev0/1e8:.2f}억</span> → 결재 대기', sec=0.8)
             _now_hm0 = _dt_think.now().strftime('%H:%M')
             _status.update(label=f'✅ 검토 완료 ({_now_hm0}) — 재배치안 {len(_mv_items0):,}건 · 기대 회수 {_rev0/1e8:.2f}억',
                            state='complete', expanded=False)
@@ -1898,8 +1898,276 @@ def render_excluded_tab():
     from datetime import date as _date
 
     all_rows = list(st.session_state.get('ch_excl_rows', []))
-    tabs = st.tabs([str(c) for c in CHANNELS])
-    for tab, c in zip(tabs, CHANNELS):
+    # ── 7/27 사용자 승인 시안 구현: '≡ 전체' 통합 탭 신설 (공홈 왼쪽 · 기본 진입) ──
+    # ① 전 채널 엑셀 업로드(전달 양식 그대로 + 샘플 양식 다운로드) ② 유효기간(자동 만료) 빠른 등록
+    # ③ KPI 칩·전면 차단 경고·중복 등록 통합 테이블 (채널 수 6/6 빨강 · 2+ 앰버)
+    tabs = st.tabs(['≡ 전체'] + [str(c) for c in CHANNELS])
+    with tabs[0]:
+        from datetime import date as _d0, timedelta as _td0
+
+        _today0 = _d0.today()
+
+        def _row_end(r):
+            e = r.get('종료일')
+            if not e:
+                return None
+            try:
+                return e if hasattr(e, 'toordinal') else _d0.fromisoformat(str(e)[:10])
+            except Exception:
+                return None
+
+        def _row_active(r):
+            s, e = r.get('시작일'), r.get('종료일')
+            if not (s or e):
+                return True
+            if not (s and e):
+                return False
+            try:
+                s_ = s if hasattr(s, 'toordinal') else _d0.fromisoformat(str(s)[:10])
+                e_ = e if hasattr(e, 'toordinal') else _d0.fromisoformat(str(e)[:10])
+                return s_ <= _today0 <= e_
+            except Exception:
+                return False
+
+        # ── ① 통합 엑셀 업로드 ──
+        st.markdown('#### 📥 제외 리스트 엑셀 업로드 (전 채널 한 파일 · 전달 양식 그대로)')
+        _upc1, _upc2 = st.columns([3, 2])
+        with _upc1:
+            _xl_up = st.file_uploader(
+                '엑셀/CSV 업로드 — 컬럼: 채널 · 방향(IN/OUT) · 스타일 · 시작일 · 종료일 (스타일·채널만 필수)',
+                type=['xlsx', 'csv'], key='up_xl_all')
+        with _upc2:
+            try:
+                import io as _io0
+                from openpyxl import Workbook as _WB0
+                _wb0 = _WB0()
+                _ws0 = _wb0.active
+                _ws0.title = '제외리스트'
+                _ws0.append(['채널', '방향(IN/OUT)', '스타일', '시작일', '종료일'])
+                _ws0.append(['무신사', 'OUT', 'SPPPG37U17', '', ''])
+                _ws0.append(['무신사', 'IN', 'SPTCG25G12', str(_today0), str(_today0 + _td0(days=14))])
+                _ws0.append(['공홈', 'OUT', 'SPRLG37U38', '', ''])
+                for _col0, _w0 in zip('ABCDE', (12, 14, 18, 12, 12)):
+                    _ws0.column_dimensions[_col0].width = _w0
+                _b0 = _io0.BytesIO()
+                _wb0.save(_b0)
+                st.download_button('📄 샘플 양식 다운로드 (xlsx)', data=_b0.getvalue(),
+                                   file_name='채널IN-OUT제외_양식.xlsx',
+                                   mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                                   use_container_width=True, key='dl_xl_sample')
+            except Exception:
+                pass
+            st.caption('종료일 비우면 상시 제외 · 종료일 지나면 자동 해제 · 채널명 부분 일치 허용')
+
+        if _xl_up is not None:
+            try:
+                _parsed, _errs = [], []
+                _name0 = str(getattr(_xl_up, 'name', '') or '')
+                import io as _io1
+                if _name0.lower().endswith('.csv'):
+                    import csv as _csv0
+                    try:
+                        _txt0 = _xl_up.getvalue().decode('utf-8-sig')
+                    except Exception:
+                        _txt0 = _xl_up.getvalue().decode('cp949', errors='replace')
+                    _recs0 = list(_csv0.DictReader(_io1.StringIO(_txt0)))
+                else:
+                    from openpyxl import load_workbook as _lwb0
+                    _wbu = _lwb0(_io1.BytesIO(_xl_up.getvalue()), read_only=True, data_only=True)
+                    _wsu = _wbu.active
+                    _it0 = _wsu.iter_rows(values_only=True)
+                    _hdr0 = [str(x).strip() if x is not None else '' for x in next(_it0)]
+                    _recs0 = [{_hdr0[i]: r[i] for i in range(min(len(_hdr0), len(r)))} for r in _it0]
+                    _wbu.close()
+
+                def _pick0(row, keys):
+                    for k in keys:
+                        for rk in row:
+                            if k in str(rk):
+                                v = row[rk]
+                                if v not in (None, ''):
+                                    return v
+                    return None
+
+                def _pdate0(v):
+                    if v in (None, ''):
+                        return None
+                    try:
+                        if hasattr(v, 'toordinal') and not hasattr(v, 'hour'):
+                            return v
+                        if hasattr(v, 'date'):
+                            return v.date()
+                        return _d0.fromisoformat(str(v).strip()[:10])
+                    except Exception:
+                        return None
+
+                for _i0, _r0 in enumerate(_recs0, start=2):
+                    _sty0 = _pick0(_r0, ('스타일', 'Style', 'style', '코드', 'Code'))
+                    if not _sty0:
+                        continue  # 빈 행 skip
+                    _sty0 = str(_sty0).strip().upper()
+                    if len(_sty0) < 4:
+                        _errs.append(f'{_i0}행: 스타일 "{_sty0}" 4자 미만')
+                        continue
+                    _chraw0 = str(_pick0(_r0, ('채널', 'Channel', 'channel')) or '').strip()
+                    _ch0 = next((cc for cc in CHANNELS if _chraw0 and (_chraw0 in cc or cc in _chraw0)), None)
+                    if _ch0 is None:
+                        _errs.append(f'{_i0}행: 채널 "{_chraw0}" 인식 불가')
+                        continue
+                    _dr0 = 'in' if str(_pick0(_r0, ('방향', 'Direction', 'IN/OUT')) or '').strip().upper() == 'IN' else 'out'
+                    _s0 = _pdate0(_pick0(_r0, ('시작',)))
+                    _e0 = _pdate0(_pick0(_r0, ('종료', '만료')))
+                    if _e0 and not _s0:
+                        _s0 = _today0
+                    if _s0 and not _e0:
+                        _e0 = _d0(2999, 1, 1)
+                    _parsed.append({'채널': _ch0, '방향': _dr0, '스타일': _sty0,
+                                    '시작일': _s0, '종료일': _e0})
+
+                _exist0 = {(r.get('채널'), (r.get('방향') or '').lower(), r.get('스타일')) for r in all_rows}
+                _new0 = [r for r in _parsed if (r['채널'], r['방향'], r['스타일']) not in _exist0]
+                _dup0 = len(_parsed) - len(_new0)
+                _n_exp0 = sum(1 for r in _parsed if _row_end(r) and _row_end(r).year < 2999)
+                st.info(f'📋 업로드 미리보기 ({_name0}) — 신규 **{len(_new0)}건** · 기존과 중복 {_dup0}건(무시) · '
+                        f'형식 오류 {len(_errs)}건 · 만료일 지정 {_n_exp0}건')
+                if _errs:
+                    st.caption('⚠️ ' + ' / '.join(_errs[:5]) + (' 외' if len(_errs) > 5 else ''))
+                _bc0, _bc1, _bc2 = st.columns(3)
+                with _bc0:
+                    if st.button(f'✓ 기존에 병합 (+{len(_new0)}건)', type='primary',
+                                 use_container_width=True, key='xl_merge', disabled=(not _new0)):
+                        st.session_state['ch_excl_rows'] = all_rows + _new0
+                        st.session_state.pop('up_xl_all', None)
+                        st.success(f'병합 완료 (+{len(_new0)}건) — 하단 "💾 GitHub 영구 저장"으로 확정하세요.')
+                        st.rerun()
+                with _bc1:
+                    if st.button(f'전체 교체 ({len(_parsed)}건으로)', use_container_width=True,
+                                 key='xl_replace', disabled=(not _parsed)):
+                        st.session_state['ch_excl_rows'] = list(_parsed)
+                        st.session_state.pop('up_xl_all', None)
+                        st.success(f'전체 교체 완료 ({len(_parsed)}건) — 하단 "💾 GitHub 영구 저장"으로 확정하세요.')
+                        st.rerun()
+                with _bc2:
+                    if st.button('취소', use_container_width=True, key='xl_cancel'):
+                        st.session_state.pop('up_xl_all', None)
+                        st.rerun()
+            except Exception as _e0x:
+                st.error(f'❌ 파일 파싱 실패: {type(_e0x).__name__}: {str(_e0x)[:150]}')
+
+        # ── ② 유효기간(자동 만료) 빠른 등록 ──
+        st.markdown('#### ⏱️ 유효기간(자동 만료) 빠른 등록')
+        st.caption('"무신사 업로드 완료 예정일까지"처럼 임시 제외에 사용 — 만료일이 지나면 재배치 계산에서 자동 해제됩니다.')
+        _qc1, _qc2, _qc3, _qc4 = st.columns([1.4, 1.4, 3, 1.8])
+        with _qc1:
+            _q_ch = st.selectbox('채널', CHANNELS, key='q_excl_ch')
+        with _qc2:
+            _q_dr = st.radio('방향', ['OUT', 'IN'], key='q_excl_dr', horizontal=True)
+        with _qc3:
+            _q_txt = st.text_area('스타일 코드 (줄바꿈/쉼표 복붙)', height=68, key='q_excl_txt',
+                                  placeholder='SPPPG37U17\nSPRLG37U38, SPTCG25G12')
+        with _qc4:
+            _q_perm = st.checkbox('상시 (만료 없음)', value=False, key='q_excl_perm')
+            _q_end = None
+            if not _q_perm:
+                _q_end = st.date_input('만료일', value=_today0 + _td0(days=14), key='q_excl_end')
+        _q_codes = [x.strip().upper() for x in str(_q_txt or '').replace(',', '\n').split('\n') if x.strip()]
+        if st.button(f'➕ {len(_q_codes)}건 등록', key='q_excl_add', disabled=(not _q_codes)):
+            _addn = 0
+            _exist1 = {(r.get('채널'), (r.get('방향') or '').lower(), r.get('스타일')) for r in all_rows}
+            for _cd in _q_codes:
+                if (_q_ch, _q_dr.lower(), _cd) in _exist1:
+                    continue
+                all_rows.append({'채널': _q_ch, '방향': _q_dr.lower(), '스타일': _cd,
+                                 '시작일': (None if _q_perm else _today0),
+                                 '종료일': (None if _q_perm else _q_end)})
+                _addn += 1
+            st.session_state['ch_excl_rows'] = all_rows
+            st.success(f'✅ {_q_ch} · {_q_dr} · {_addn}건 등록'
+                       + ('' if _q_perm else f' (만료 {_q_end} 이후 자동 해제)')
+                       + ' — 하단 "💾 GitHub 영구 저장"으로 확정하세요.')
+
+        # ── ③ 통합 현황 — KPI 칩 · 전면 차단 경고 · 중복 테이블 ──
+        st.markdown('---')
+        _sty_ch = {}
+        for r in all_rows:
+            _p = r.get('스타일')
+            if not _p:
+                continue
+            g = _sty_ch.setdefault(_p, {'chs': set(), 'dirs': set(), 'ends': [], 'active': False, 'n': 0})
+            g['chs'].add(r.get('채널'))
+            g['dirs'].add((r.get('방향') or '').upper())
+            g['ends'].append(_row_end(r))
+            g['n'] += 1
+            if _row_active(r):
+                g['active'] = True
+        _n_multi = sum(1 for g in _sty_ch.values() if len(g['chs']) >= 2)
+        _full_block = [p for p, g in _sty_ch.items() if len(g['chs']) >= len(CHANNELS)]
+        _exp_rows = [r for r in all_rows if (_row_end(r) and _row_end(r) < _today0)]
+        _soon_rows = [r for r in all_rows
+                      if (_row_end(r) and _today0 <= _row_end(r) <= _today0 + _td0(days=7))]
+        _k = st.columns(6)
+        _k[0].metric('총 규칙', f'{len(all_rows):,}건')
+        _k[1].metric('제외 스타일', f'{len(_sty_ch):,}개')
+        _k[2].metric('2개+ 채널 중복', f'{_n_multi:,}개')
+        _k[3].metric(f'{len(CHANNELS)}채널 전부 제외', f'{len(_full_block):,}개')
+        _k[4].metric('만료 예정 (7일 내)', f'{len(_soon_rows):,}건')
+        _k[5].metric('만료 경과 (비활성)', f'{len(_exp_rows):,}건')
+        if _full_block:
+            st.error(f'⚠️ 전 채널({len(CHANNELS)}개) 모두 제외된 스타일 {len(_full_block)}개 — 사실상 이동 전면 차단: '
+                     + ', '.join(_full_block[:5]) + (' 외' if len(_full_block) > 5 else '')
+                     + ' · 의도가 맞는지 확인하세요.')
+        if _exp_rows:
+            if st.button(f'🧹 만료 경과 규칙 {len(_exp_rows)}건 정리(삭제)', key='purge_expired'):
+                st.session_state['ch_excl_rows'] = [r for r in all_rows if r not in _exp_rows]
+                st.success(f'만료 규칙 {len(_exp_rows)}건 삭제 — 하단 "💾 GitHub 영구 저장"으로 확정하세요.')
+                st.rerun()
+
+        st.markdown('#### 전 채널 통합 규칙 — 중복 등록 많은 순')
+        _smap0 = _load_style_map()
+        _tbl = []
+        for _p, g in sorted(_sty_ch.items(), key=lambda kv: (-len(kv[1]['chs']), kv[0])):
+            _ends = [e for e in g['ends'] if e and e.year < 2999]
+            _has_perm = any(e is None or e.year >= 2999 for e in g['ends'])
+            _exp_txt = '상시' if _has_perm else ('~' + max(_ends).strftime('%m/%d') if _ends else '상시')
+            _tbl.append({
+                '스타일': _p,
+                '스타일명': _smap0.get(str(_p)[:10], ''),
+                '등록 채널': ' · '.join(CH_SHORT.get(cc, cc) for cc in CHANNELS if cc in g['chs']),
+                '채널 수': f"{len(g['chs'])} / {len(CHANNELS)}",
+                '방향': '·'.join(sorted(g['dirs'])),
+                '만료': _exp_txt,
+                '상태': ('활성' if g['active'] else '만료/대기'),
+            })
+        if _tbl:
+            _dfov = _pd.DataFrame(_tbl)
+
+            def _ov_color(row):
+                try:
+                    _nch = int(str(row['채널 수']).split('/')[0])
+                except Exception:
+                    _nch = 0
+                if _nch >= len(CHANNELS):
+                    return ['background-color:#3B1220; color:#FF6B6B; font-weight:bold'] * len(row)
+                if _nch >= 2:
+                    return ['color:#FFC000'] * len(row)
+                return [''] * len(row)
+
+            st.dataframe(_dfov.style.apply(_ov_color, axis=1), use_container_width=True,
+                         hide_index=True, height=380)
+            _del_pick = st.multiselect('해제할 스타일 선택 (모든 채널에서 제거)',
+                                       [t['스타일'] for t in _tbl], key='ov_del_pick')
+            if st.button(f'× 선택 {len(_del_pick)}개 스타일 전체 해제', key='ov_del_btn',
+                         disabled=(not _del_pick)):
+                _dset = set(_del_pick)
+                st.session_state['ch_excl_rows'] = [r for r in all_rows if r.get('스타일') not in _dset]
+                st.success(f'{len(_del_pick)}개 스타일 전체 해제 — 하단 "💾 GitHub 영구 저장"으로 확정하세요.')
+                st.rerun()
+        else:
+            st.info('등록된 제외 규칙이 없습니다.')
+        st.caption('· 채널 수 6/6 빨강 = 전면 차단 경고 · 2개+ 앰버 = 중복 등록 · 만료 지난 규칙은 재배치 계산에서 자동 비활성 '
+                   '· 모든 변경은 하단 "💾 GitHub 영구 저장" 클릭 시 전체 사용자에게 반영됩니다.')
+
+    for tab, c in zip(tabs[1:], CHANNELS):
         with tab:
             ca, cb = st.columns(2)
             # ── IN 제외 ─────────────────────────────
@@ -5893,3 +6161,12 @@ if __name__ == '__main__':
 #                        완료 시 '사고 시퀀스 완료') ② 주요 수치 컬러 강조 (SKU·회수액 민트 / 결품 빨강 /
 #                        필업·가드레일 앰버 / 건수·달성률 블루) + '① 사고 시퀀스' 배지 ③ IN-OUT 적용/미적용
 #                        토글 시에도 시퀀스 재생 (think 키에 토글 상태 포함, 미적용 시 '규칙 무시' 빨강 표기).
+# v0.9.20 (2026-07-27) — 채널 IN-OUT 관리 개선 (사용자 승인 시안 · 김혜인 팀장 피드백 대응):
+#                        ① '≡ 전체' 통합 탭 신설 (공홈 왼쪽 · 기본 진입) — KPI 칩 6종(총 규칙/스타일/2+
+#                           중복/전 채널 제외/만료 예정/만료 경과) · 전면 차단 빨강 경고 · 중복 등록 많은 순
+#                           통합 테이블(6/6 빨강·2+ 앰버) · 선택 스타일 전체 해제 · 만료 규칙 일괄 정리
+#                        ② 전 채널 엑셀/CSV 업로드 — 전달 양식 그대로 파싱(컬럼 유연 매칭·채널 부분 일치),
+#                           미리보기(신규/중복/오류/만료 지정) → 병합/전체 교체/취소 + 샘플 양식 다운로드(xlsx)
+#                        ③ 유효기간(자동 만료) 빠른 등록 — 채널·방향·스타일 복붙·만료일(또는 상시),
+#                           만료 경과 시 재배치 계산 자동 비활성 (기존 _ch_excl_key 기간 로직 재사용)
+#                        + 사고 시퀀스 속도 체감 ~6초 (1.0s/단계)
