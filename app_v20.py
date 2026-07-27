@@ -893,10 +893,12 @@ def render_scenario(scenario_key, container, allow_slider=False):
             _wk_ord = sum(d.get('orders', {}).values())
             sv = _price * _wk_ord
         sales_str = f"{round(sv/10000):,}만" if sv else '-'
-        # 7/27 사용자 요청: 누판/주판 0%인 경우 '이월'로 문구 표시
+        # 7/27 사용자 요청: 누판/주판/출고 0%인 경우 '이월'로 문구 표시
         cum_str = '이월' if cum == 0 else f"{cum:.0f}%"
         wk_str = '이월' if wk == 0 else f"{wk:.0f}%"
-        row = [r['code'], name, sales_str, cum_str, wk_str, f"{int(d['ship_rate']*100)}%",
+        ship_pct = int(d['ship_rate'] * 100)
+        ship_str = '이월' if ship_pct == 0 else f"{ship_pct}%"
+        row = [r['code'], name, sales_str, cum_str, wk_str, ship_str,
                f"{inv.get('반응과', 0):,}"]
         for c in CHANNELS:
             o = d['orders'].get(c, 0)
@@ -1080,7 +1082,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
                         _df['OUT 합'] = _df.sum(axis=1)
                         _df.loc['IN 합'] = _df.sum(axis=0)
                         st.markdown('**전체 방향별 매트릭스 (5×5)**')
-                        # matplotlib 불필요한 조건부 색상 (7/24 fix: background_gradient → applymap)
+                        # matplotlib 불필요 · 조건부 색상 (7/27 fix: applymap → map · pandas 2.1+ Styler API 대응)
                         def _bin_cell_color(v):
                             try:
                                 x = float(v)
@@ -1088,9 +1090,13 @@ def render_scenario(scenario_key, container, allow_slider=False):
                                 if x >= 500:  return 'background-color: #FAEEDA; color: #633806'
                                 if x >= 100:  return 'background-color: #EAF3DE; color: #27500A'
                                 if x > 0:     return 'background-color: #F1EFE8; color: #444441'
-                            except: pass
+                            except Exception:
+                                pass
                             return ''
-                        st.dataframe(_df.style.applymap(_bin_cell_color).format('{:,}'),
+                        # pandas 버전 호환 (Styler.map = 2.1+, Styler.applymap = 이전)
+                        _sty = _df.style
+                        _fn = getattr(_sty, 'map', None) or getattr(_sty, 'applymap')
+                        st.dataframe(_fn(_bin_cell_color).format('{:,}'),
                                      use_container_width=True)
                     _c_close, _c_csv = st.columns([1, 1])
                     if _c_close.button('닫기', use_container_width=True, key=f'bin_close_{scenario_key}'):
