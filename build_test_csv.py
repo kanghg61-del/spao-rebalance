@@ -125,6 +125,23 @@ OUT_PATH = OUT_DIR / f"data_spao_{_TODAY}.csv.gz"
 CHANNELS = ["공홈", "이랜드몰", "무신사", "지그재그", "네이버", "카카오선물하기"]
 EXT_CH = ("무신사", "지그재그", "네이버")
 
+# 7/27 사용자 확정: 원본 데이터 필터 규칙 (취소·환불·교환 자동 제거)
+# 파일별 상태 컬럼과 제거 대상값을 명시 리스트로 관리 (부분매칭 오탐 방지)
+MUSINSA_INT_CLM_REMOVE = {"환불완료", "환불요청", "클레임무효", "주문취소", "교환요청"}
+MUSINSA_INT_ORD_REMOVE = {"결제오류", "주문취소"}
+MUSINSA_EXT_CLM_REMOVE = {"환불요청", "주문취소", "환불완료", "클레임무효", "교환처리중", "교환완료"}
+MUSINSA_EXT_ORD_REMOVE = {"주문취소", "결제오류"}
+ZIGZAG_INT_CLM_REMOVE = {"CANCELLED", "취소완료", "반품수거중", "반품 요청", "교환수거중", "반품수거완료",
+                          "구매확정 후 취소", "교환 요청", "교환수거완료", "교환검수완료", "반품완료",
+                          "취소 요청", "CANCEL_REQUESTED"}
+ZIGZAG_INT_ORD_REMOVE = {"CANCELLED", "CANCELLED_BEFORE_TRANSFER", "미입금취소", "입금대기"}
+ZIGZAG_EXT_STATUS_REMOVE = {"CANCELLED", "CANCELLED_BEFORE_TRANSFER", "입금대기", "취소완료", "반품 요청",
+                             "취소 요청", "미입금취소", "반품수거중", "교환수거중", "반품수거완료",
+                             "교환수거완료", "반품완료", "구매확정 후 취소 반품 수거완료"}
+NAVER_PRODUCT_ORDER_STATUS_REMOVE = {"CANCELED", "PAYMENT_WAITING", "RETURNED", "CANCELED_BY_NOPAYMENT", "EXCHANGED"}
+# 공홈/이랜드몰 (내부 EDW): CANCEL_QTY != 0 행 제거 · SHOP_CD → 채널 매핑
+INTERNAL_SHOP_CD_MAP = {"AEQ5": "공홈", "AAKY": "이랜드몰"}
+
 
 def _int(v, d=0):
     try:
@@ -544,7 +561,8 @@ def _parse_internal_order_xlsx(path: Path, per_ch: dict) -> int:
 
 
 def stage5_orders_internal(ord_int: dict) -> None:
-    """내부 주문 로딩 · 각 xlsx 파일마다 별도 pickle 캐시.
+    """내부 주문 로딩 · 각 파일마다 별도 pickle 캐시.
+    7/27 신규: EDW CSV 우선 시도 (공홈,이랜드몰 통합 / 무신사 / 지그재그) · 없으면 EHUB xlsx fallback.
     타임아웃 발생 시 다음 실행에서 캐시된 파일은 건너뜀."""
     log.info("Stage 5: 내부 주문 로딩...")
     import pickle
@@ -557,34 +575,81 @@ def stage5_orders_internal(ord_int: dict) -> None:
             per_ch[existing_ch][code] = q
 
     total = 0
-    for patterns in (
-        ["주문_내부_공홈.xlsx"],
-        ["주문_내부_이랜드몰.xlsx"],
-        ["주문_내부_카카오톡선물하기.xlsx"],
-        ["주문_내부_공홈,이랜드몰,카카오톡.xlsx"],
-    ):
-        try:
-            path = _find_by_any(patterns)
-        except FileNotFoundError:
-            continue
-        cache_p = cache_dir / f"ord_int_{path.name}_{int(path.stat().st_mtime)}.pkl"
+
+    # ── 7/27 신규: EDW CSV 우선 (공홈+이랜드몰 통합) ──
+    try:
+        _pth = _find_by_any(["주문_내부_공홈, 이랜드몰_*_AEQ5, AAKY*.csv",
+                              "주문_내부_공홈, 이랜드몰_*.csv"])
+        cache_p = cache_dir / f"ord_int_{_pth.name}_{int(_pth.stat().st_mtime)}.pkl"
         if cache_p.exists():
             with open(cache_p, "rb") as f:
                 cached = pickle.load(f)
             for ch, mp in cached.items():
                 for code, q in mp.items():
                     per_ch[ch][code] += q
-            log.info(f"  {path.name}: (cached)")
-            continue
-        this_file: dict = defaultdict(lambda: defaultdict(int))
-        cnt = _parse_internal_order_xlsx(path, this_file)
-        for ch, mp in this_file.items():
-            for code, q in mp.items():
-                per_ch[ch][code] += q
-        with open(cache_p, "wb") as f:
-            pickle.dump({ch: dict(mp) for ch, mp in this_file.items()}, f)
-        log.info(f"  {path.name}: {cnt:,}행 처리 (cached)")
-        total += cnt
+            log.info(f"  {_pth.name}: (cached)")
+        else:
+            this_file: dict = {}
+            cnt = _parse_internal_order_csv_gonghong_emall(_pth, this_file)
+            for ch, mp in this_file.items():
+                for code, q in mp.items():
+                    per_ch[ch][code] += q
+            with open(cache_p, "wb") as f:
+                pickle.dump({ch: dict(mp) for ch, mp in this_file.items()}, f)
+            log.info(f"  {_pth.name}: {cnt:,}행 처리 (CANCEL_QTY!=0 제외 후)")
+            total += cnt
+    except FileNotFoundError:
+        # ── EHUB xlsx fallback (구 방식) ──
+        for patterns in (
+            ["주문_내부_공홈.xlsx"],
+            ["주문_내부_이랜드몰.xlsx"],
+            ["주문_내부_카카오톡선물하기.xlsx"],
+            ["주문_내부_공홈,이랜드몰,카카오톡.xlsx"],
+        ):
+            try:
+                path = _find_by_any(patterns)
+            except FileNotFoundError:
+                continue
+            cache_p = cache_dir / f"ord_int_{path.name}_{int(path.stat().st_mtime)}.pkl"
+            if cache_p.exists():
+                with open(cache_p, "rb") as f:
+                    cached = pickle.load(f)
+                for ch, mp in cached.items():
+                    for code, q in mp.items():
+                        per_ch[ch][code] += q
+                log.info(f"  {path.name}: (cached)")
+                continue
+            this_file2: dict = defaultdict(lambda: defaultdict(int))
+            cnt = _parse_internal_order_xlsx(path, this_file2)
+            for ch, mp in this_file2.items():
+                for code, q in mp.items():
+                    per_ch[ch][code] += q
+            with open(cache_p, "wb") as f:
+                pickle.dump({ch: dict(mp) for ch, mp in this_file2.items()}, f)
+            log.info(f"  {path.name}: {cnt:,}행 처리 (cached)")
+            total += cnt
+
+    # ── 7/27 신규: MUSINSA 내부 EDW CSV (있으면 추가 병합) ──
+    try:
+        _pth = _find_by_any(["주문_내부_MUSINSA_단품명, 셀렉_*.csv"])
+        _mp: dict = defaultdict(int)
+        _parse_musinsa_order_csv(_pth, _mp, is_internal=True)
+        for code, q in _mp.items():
+            per_ch["무신사"][code] += q
+        log.info(f"  {_pth.name}: +{sum(_mp.values()):,}건 (내부 필터 적용)")
+    except FileNotFoundError:
+        pass
+
+    # ── 7/27 신규: ZIGZAG 내부 EDW CSV (있으면 추가 병합) ──
+    try:
+        _pth = _find_by_any(["주문_내부_ZIGZAG_단품명, 셀렉_*.csv"])
+        _mp = defaultdict(int)
+        _parse_zigzag_order_csv(_pth, _mp, is_internal=True)
+        for code, q in _mp.items():
+            per_ch["지그재그"][code] += q
+        log.info(f"  {_pth.name}: +{sum(_mp.values()):,}건 (내부 필터 적용)")
+    except FileNotFoundError:
+        pass
 
     for ch, mp in per_ch.items():
         ord_int[ch] = dict(mp)
@@ -609,9 +674,21 @@ def _extract_style(text: str) -> Optional[str]:
     return m[-1] if m else None
 
 
-def _parse_musinsa_order_csv(path: Path, per: dict) -> None:
+def _parse_musinsa_order_csv(path: Path, per: dict, is_internal: bool = False) -> None:
+    """MUSINSA 주문 CSV 파싱 (내부/외부 공용).
+    7/27 사용자 확정: CLM_STATE + ORD_STATE 명시 리스트 필터 (부분매칭 오탐 방지)."""
     rows = _read_cp949_csv(path)
+    clm_remove = MUSINSA_INT_CLM_REMOVE if is_internal else MUSINSA_EXT_CLM_REMOVE
+    ord_remove = MUSINSA_INT_ORD_REMOVE if is_internal else MUSINSA_EXT_ORD_REMOVE
     for r in rows:
+        # 필터 (CLM_STATE + ORD_STATE)
+        clm = str(r.get("CLM_STATE") or "").strip()
+        if clm in clm_remove:
+            continue
+        ost = str(r.get("ORD_STATE") or "").strip()
+        if ost in ord_remove:
+            continue
+        # 단품 매핑
         name = str(r.get("GOODS_NM") or "")
         style = str(r.get("STYLE_NO") or "").strip().upper() or _extract_style(name)
         if not style:
@@ -636,16 +713,24 @@ def _parse_musinsa_order_csv(path: Path, per: dict) -> None:
                     pass
         if not cs:
             continue
-        state = str(r.get("ORD_STATE") or "")
-        if any(x in state for x in ("취소", "반품", "교환")):
-            continue
         code = f"{style}{cs[0]}{cs[1]}"
         per[code] += _int(r.get("QTY", 0)) or 1
 
 
 def _parse_naver_order_csv(path: Path, per: dict) -> None:
+    """NAVER 주문 CSV 파싱.
+    7/27 사용자 확정: PRODUCT_ORDER_STATUS 명시 리스트 필터."""
     rows = _read_cp949_csv(path)
     for r in rows:
+        # 필터 (PRODUCT_ORDER_STATUS)
+        pos = str(r.get("PRODUCT_ORDER_STATUS") or "").strip()
+        if pos in NAVER_PRODUCT_ORDER_STATUS_REMOVE:
+            continue
+        # 구 파일 호환 (CLAIM_STATUS)
+        claim = str(r.get("CLAIM_STATUS") or "")
+        if "CANCEL" in claim.upper():
+            continue
+        # 단품 매핑
         name = str(r.get("PRODUCT_NAME") or "")
         style = _extract_style(name)
         if not style:
@@ -655,23 +740,60 @@ def _parse_naver_order_csv(path: Path, per: dict) -> None:
         sm = _NAVER_SIZE_A_RX.search(opt) or _NAVER_SIZE_B_RX.search(opt)
         if not (cm and sm):
             continue
-        claim = str(r.get("CLAIM_STATUS") or "")
-        if "CANCEL" in claim.upper():
-            continue
         code = f"{style}{cm.group(1).zfill(2)}{sm.group(1).zfill(3)}"
         per[code] += 1  # 사용자 확정: 각 행 = 1건
 
 
-def _parse_zigzag_order_csv(path: Path, per: dict) -> None:
+def _parse_zigzag_order_csv(path: Path, per: dict, is_internal: bool = False) -> None:
+    """ZIGZAG 주문 CSV 파싱 (내부/외부 공용).
+    7/27 사용자 확정: 내부는 CLM_STATE + ORD_STATE · 외부는 ORDER_STATUS 명시 리스트 필터."""
     rows = _read_cp949_csv(path)
     for r in rows:
+        if is_internal:
+            # 내부: CLM_STATE (파일 컬럼명은 CLAIM_STATUS) + ORD_STATE (ORDER_STATUS)
+            clm = str(r.get("CLAIM_STATUS") or r.get("CLM_STATE") or "").strip()
+            if clm in ZIGZAG_INT_CLM_REMOVE:
+                continue
+            ost = str(r.get("ORDER_STATUS") or r.get("ORD_STATE") or "").strip()
+            if ost in ZIGZAG_INT_ORD_REMOVE:
+                continue
+        else:
+            # 외부: ORDER_STATUS만 확장 리스트
+            status = str(r.get("ORDER_STATUS") or "").strip()
+            if status in ZIGZAG_EXT_STATUS_REMOVE:
+                continue
+        # 단품 매핑
         code = str(r.get("CUSTOM_PRODUCT_ITEM_CODE") or "").strip().upper()
         if not code or len(code) < 12:
             continue
-        status = str(r.get("ORDER_STATUS") or "")
-        if any(x in status.upper() for x in ("CANCEL", "REFUND")):
-            continue
         per[code] += _int(r.get("QUANTITY", 0)) or 1
+
+
+def _parse_internal_order_csv_gonghong_emall(path: Path, per_ch: dict) -> int:
+    """공홈·이랜드몰 내부 주문 EDW CSV 파싱 (신규 · 7/27).
+    - CANCEL_QTY != 0 행 제거
+    - SHOP_CD: AEQ5→공홈, AAKY→이랜드몰
+    - 수량: INDI_QTY"""
+    rows = _read_cp949_csv(path)
+    cnt = 0
+    for r in rows:
+        cq = _int(r.get("CANCEL_QTY", 0))
+        if cq != 0:
+            continue
+        shop = str(r.get("SHOP_CD") or "").strip().upper()
+        ch = INTERNAL_SHOP_CD_MAP.get(shop)
+        if not ch:
+            continue
+        code = str(r.get("PROD_CD") or "").strip().upper()
+        if not code or len(code) < 12:
+            continue
+        qty = _int(r.get("INDI_QTY", 0))
+        if qty <= 0:
+            continue
+        per_ch.setdefault(ch, {})
+        per_ch[ch][code] = per_ch[ch].get(code, 0) + qty
+        cnt += 1
+    return cnt
 
 
 def stage6_orders_ext(ord_ext: dict) -> None:
@@ -686,8 +808,8 @@ def stage6_orders_ext(ord_ext: dict) -> None:
             "*주문_외부_MUSINSA_단품명, 셀렉_*.csv",
         )
     )
+    # 7/27: 내부 파일은 stage5에서 이미 처리 (필터 다름) · stage6에서는 외부만
     _mus_group_list = [
-        ["주문_내부_MUSINSA_단품명, 셀렉_*.csv", "주문_내부_MUSINSA_단품명필요*.csv"],
         ["주문_외부_MUSINSA_단품명, 셀렉_*.csv", "주문_외부_MUSINSA_단품명필요*.csv"],
     ]
     if not _has_new_musinsa:
@@ -701,10 +823,10 @@ def stage6_orders_ext(ord_ext: dict) -> None:
         except FileNotFoundError:
             continue
         before = sum(per.values())
-        _parse_musinsa_order_csv(path, per)
+        _parse_musinsa_order_csv(path, per, is_internal=False)
         added = sum(per.values()) - before
         if added > 0:
-            log.info(f"  MUSINSA[{path.name}]: +{added:,}주문")
+            log.info(f"  MUSINSA[{path.name}]: +{added:,}주문 (외부 필터 적용)")
     ord_ext["무신사"] = dict(per)
     log.info(f"  MUSINSA 합계: {sum(per.values()):,}주문 ({len(per):,}단품)")
 
@@ -719,20 +841,14 @@ def stage6_orders_ext(ord_ext: dict) -> None:
     ord_ext["네이버"] = dict(per)
     log.info(f"  NAVER: {sum(per.values()):,}주문 ({len(per):,}단품) [{path.name}]")
 
-    # ── ZIGZAG (내부 + 외부 두 파일 합산) ──
+    # ── ZIGZAG (7/27: 내부는 stage5에서 처리 · 외부만) ──
     per = defaultdict(int)
-    for patterns in (
-        ["주문_내부_ZIGZAG_단품명, 셀렉_*.csv", "주문_내부_ZIGZAG_단품명필요*.csv"],
-        ["주문_외부_ZIGZAG_단품명, 셀렉_*.csv", "주문_외부_ZIGZAG_단품명필요*.csv"],
-    ):
-        try:
-            path = _find_by_any(patterns)
-        except FileNotFoundError:
-            log.warning(f"  ZIGZAG 파일 없음: {patterns}")
-            continue
-        before = sum(per.values())
-        _parse_zigzag_order_csv(path, per)
-        log.info(f"  ZIGZAG[{path.name}]: +{sum(per.values()) - before:,}주문")
+    try:
+        path = _find_by_any(["주문_외부_ZIGZAG_단품명, 셀렉_*.csv", "주문_외부_ZIGZAG_단품명필요*.csv"])
+        _parse_zigzag_order_csv(path, per, is_internal=False)
+        log.info(f"  ZIGZAG[{path.name}]: +{sum(per.values()):,}주문 (외부 필터 적용)")
+    except FileNotFoundError:
+        log.warning(f"  ZIGZAG 외부 파일 없음")
     ord_ext["지그재그"] = dict(per)
     log.info(f"  ZIGZAG 합계: {sum(per.values()):,}주문 ({len(per):,}단품)")
 
