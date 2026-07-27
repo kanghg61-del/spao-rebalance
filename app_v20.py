@@ -770,19 +770,38 @@ def render_scenario(scenario_key, container, allow_slider=False):
     from datetime import datetime as _dt_think
     _think_flag = f'_reba_think_{scenario_key}'
     _think_sum_key = f'_reba_think_sum_{scenario_key}'
-    _data_day = str(_csv_cache_key())
+    # 7/27 사용자 요청: IN-OUT '적용'/'미적용' 토글 시에도 사고 시퀀스 재생 — 키에 토글 상태 포함
+    _data_day = f'{_csv_cache_key()}|chx={_chx_use}'
     _do_think = st.session_state.get(_think_flag) != _data_day
     _status = None
+    # 7/27 사용자 요청 v2: 진행률 막대 + 주요 수치 컬러 강조 (사고 시퀀스 디자인 업그레이드)
+    _think_state = {'n': 0, 'total': 6, 'prog': None}
     if _do_think:
         try:
             _status = container.status('🤖 에이전트가 오늘의 재배치 안을 검토하고 있습니다...', expanded=True)
+            _status.markdown('<span style="background:#123B2E;color:#4AE3B5;border:1px solid #4AE3B5;'
+                             'border-radius:10px;padding:2px 10px;font-size:11px;font-weight:800">'
+                             '① 사고 시퀀스</span>', unsafe_allow_html=True)
+            _think_state['prog'] = _status.progress(0, text='진행률 0% · 사고 시퀀스 시작')
         except Exception:
             _status = None
 
     def _think(msg, sec=0.25):
+        # msg = HTML (주요 수치 컬러 스팬 포함) — ✓ 마커·진행률 막대 자동 갱신
         if _status is not None:
             try:
-                _status.write(msg)
+                _think_state['n'] += 1
+                _n0, _tot0 = _think_state['n'], _think_state['total']
+                _status.markdown(
+                    f'<div style="font-size:14px;line-height:1.9;color:#E8F1F8">'
+                    f'<span style="color:#4AE3B5;font-weight:800">✓</span>&nbsp; {msg}</div>',
+                    unsafe_allow_html=True)
+                if _think_state['prog'] is not None:
+                    _pct0 = min(int(_n0 / _tot0 * 100), 100)
+                    _eta0 = max(0.0, (_tot0 - _n0) * 0.35)
+                    _txt0 = (f'진행률 {_pct0}% · 예상 완료 {_eta0:.1f}초' if _pct0 < 100
+                             else '진행률 100% · 사고 시퀀스 완료')
+                    _think_state['prog'].progress(_pct0, text=_txt0)
                 _time.sleep(sec)
             except Exception:
                 pass
@@ -790,13 +809,15 @@ def render_scenario(scenario_key, container, allow_slider=False):
     if _status is not None:
         try:
             _skus_cnt = len(load_data_v20(_csv_cache_key()))
-            _think(f'✓ **데이터 로드** — {get_last_update_time()} 갱신 · {_skus_cnt:,} 단품 × 6채널 스캔')
+            _think(f'<b>데이터 로드</b> — {get_last_update_time()} 갱신 · '
+                   f'<span style="color:#4AE3B5;font-weight:800">{_skus_cnt:,} SKU</span> × 6개 채널 스캔')
         except Exception:
             pass
         try:
             _imm0 = imminent_rows()
             _fill0 = sum(max(0, int(x['ord']) - int(x['inv'])) for x in _imm0)
-            _think(f'✓ **결품 임박 감지** — {len(_imm0):,}개 단품 · 필업 필요 {_fill0:,}장 (방치 시 결품손실)')
+            _think(f'<b>결품 임박 감지</b> — <span style="color:#FF6B6B;font-weight:800">{len(_imm0):,}개 단품</span> · '
+                   f'필업 필요 <span style="color:#FFC000;font-weight:800">{_fill0:,}장</span> (방치 시 결품손실)')
         except Exception:
             pass
         try:
@@ -805,9 +826,11 @@ def render_scenario(scenario_key, container, allow_slider=False):
                 _lr = _mlog[-1]
                 _exp0 = float(_lr.get('기대효과_만원') or 0)
                 _act0 = float(_lr.get('실제효과_만원') or 0)
-                _rate0 = f' (달성률 {_act0/_exp0*100:.0f}%)' if _exp0 > 0 else ''
-                _think(f"✓ **직전 실측 학습** — {str(_lr.get('실행일시', ''))[:10]} 실행분 "
-                       f"{int(float(_lr.get('추가판매_장') or 0)):,}장 · {int(_act0):,}만원 회수 확인{_rate0}")
+                _rate0 = (f' (<span style="color:#8AB4F8;font-weight:800">달성률 {_act0/_exp0*100:.0f}%</span>)'
+                          if _exp0 > 0 else '')
+                _think(f"<b>직전 실측 학습</b> — {str(_lr.get('실행일시', ''))[:10]} 실행분 "
+                       f"<span style='color:#4AE3B5;font-weight:800'>{int(float(_lr.get('추가판매_장') or 0)):,}장 · "
+                       f"{int(_act0):,}만원</span> 회수 확인{_rate0}")
         except Exception:
             pass
 
@@ -840,9 +863,16 @@ def render_scenario(scenario_key, container, allow_slider=False):
             _mv_qty0 = sum(sum(v for v in r['moves'].values() if v > 0) for r in _mv_items0)
             _rules_n0 = sum(len(_p0) if _p0 else 0 for _c0x, _d0x, _p0 in (_ch_excl_active or ()))
             _rev0 = sum(r['revenue'] for r in _mv_items0)
-            _think(f'✓ **이동 후보 산출** — 과잉↔결품 매칭 {_mv_qty0:,}장 · {len(_mv_items0):,}건')
-            _think(f'✓ **가드레일 검증** — 채널 이동 상한 {int(move_cap_pct*100)}% · 채널 IN-OUT 규칙 {_rules_n0}건 반영')
-            _think(f'✓ **최종안 확정** — 재배치 {len(_mv_items0):,}건 · 기대 회수 {_rev0/1e8:.2f}억 → 결재 대기', sec=0.15)
+            _think(f'<b>이동 후보 산출</b> — 과잉↔결품 매칭 '
+                   f'<span style="color:#4AE3B5;font-weight:800">{_mv_qty0:,}장</span> · '
+                   f'<span style="color:#8AB4F8;font-weight:800">{len(_mv_items0):,}건</span>')
+            _chx_lbl0 = ('반영' if _chx_use == '적용'
+                         else '<span style="color:#FF6B6B;font-weight:800">미적용 (규칙 무시)</span>')
+            _think(f'<b>가드레일 검증</b> — 채널 이동 상한 '
+                   f'<span style="color:#FFC000;font-weight:800">{int(move_cap_pct*100)}%</span> · '
+                   f'채널 IN-OUT 규칙 <span style="color:#FFC000;font-weight:800">{_rules_n0}건</span> {_chx_lbl0}')
+            _think(f'<b>최종안 확정</b> — 재배치 <span style="color:#8AB4F8;font-weight:800">{len(_mv_items0):,}건</span> · '
+                   f'기대 회수 <span style="color:#4AE3B5;font-weight:800">{_rev0/1e8:.2f}억</span> → 결재 대기', sec=0.15)
             _now_hm0 = _dt_think.now().strftime('%H:%M')
             _status.update(label=f'✅ 검토 완료 ({_now_hm0}) — 재배치안 {len(_mv_items0):,}건 · 기대 회수 {_rev0/1e8:.2f}억',
                            state='complete', expanded=False)
@@ -5859,3 +5889,7 @@ if __name__ == '__main__':
 #                           (st.dataframe 셀 내 버튼 불가 제약 → 선택 연동 방식으로 구현)
 #                        ③ [버그 fix] IN-OUT 적용/미적용 토글 미반영 — _KeyIsolator 접미('__test') 키에
 #                           위젯 상태가 저장되는데 raw 키만 읽어 항상 '적용' 해석 → 접미 키 우선 해석.
+# v0.9.19 (2026-07-27) — 사고 시퀀스 디자인 v2: ① 진행률 막대(st.progress — 진행률 %·예상 완료 초,
+#                        완료 시 '사고 시퀀스 완료') ② 주요 수치 컬러 강조 (SKU·회수액 민트 / 결품 빨강 /
+#                        필업·가드레일 앰버 / 건수·달성률 블루) + '① 사고 시퀀스' 배지 ③ IN-OUT 적용/미적용
+#                        토글 시에도 시퀀스 재생 (think 키에 토글 상태 포함, 미적용 시 '규칙 무시' 빨강 표기).
