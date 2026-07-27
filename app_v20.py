@@ -2455,30 +2455,46 @@ def render_channel_tab():
                         union_urg += 1
         union_rate = union_urg / max(1, union_item) * 100
 
+        # ── 7/26 결품률 정의 확정: 재고=0 & 주간판매>0 / 주간판매 대상 · 건수(단품×채널) · 신상(5th='G')만 ──
+        _isnew = lambda _c: len(_c) > 4 and _c[4] == 'G'
+        _ch_scope = CHANNELS if is_all else [channel_pick]
+        _oos_n = _dem_n = 0
+        for r in results_ch:
+            if not _isnew(r['code']):
+                continue
+            d = r['data']
+            for c in _ch_scope:
+                o = d['orders'].get(c, 0)
+                if o > 0:
+                    _dem_n += 1
+                    if d['inv'].get(c, 0) == 0:
+                        _oos_n += 1
+        oos0_rate = (_oos_n / _dem_n * 100) if _dem_n else 0.0
+
         if is_all:
             c = st.columns(9)
             kcard(c[0], '품목 수', f'{n_item:,}', '주문 발생 SKU')
             kcard(c[1], '총 재고액', f'{tot_amt/1e8:.2f}억', '재고수량 × 정상가')
             kcard(c[2], '총 재고량', f'{tot_inv:,}장', '6채널 합계')
-            kcard(c[3], '긴급 결품', f'{n_urgent:,}건', '재고주수 < 1주')
-            kcard(c[4], '결품률(합산)', '—', '재검증 중 · 로직 업데이트 예정')
-            kcard(c[5], '결품(채널)', '—', '재검증 중 · 로직 업데이트 예정')
+            kcard(c[3], '긴급 결품', f'{n_urgent:,}건', '재고주수 < 1주(조기경보)')
+            kcard(c[4], '결품률', f'{oos0_rate:.1f}%', '재고=0 · 건수 · 신상(G)')
+            kcard(c[5], '결품 건수', f'{_oos_n:,}건', f'재고=0 / 판매채널 {_dem_n:,}건')
             kcard(c[6], '추천 이동(IN)', f'{tot_in:,}장', '금주 충전')
             kcard(c[7], '외부창고', f'{tot_ext:,}장', 'AENS·ADU3·ADQS')
             kcard(c[8], '외부창고 비중', f'{ext_pct:.1f}%', '외부창고 / 총재고')
-            st.caption('ℹ️ 결품률 지표는 정확 로직 재반영 중입니다 (일시 공란 · 추후 업데이트 예정).')
+            st.caption('ℹ️ 결품률 = 주간 판매 있는 채널 중 재고=0 / 주간 판매 대상 (건수 기준 · 신상 5번째 G) · 긴급결품(재고주수<1주)은 조기경보 보조지표.')
         else:
             n = 7 if is_ext else 6
             c = st.columns(n)
             kcard(c[0], '품목 수', f'{n_item:,}', '주문 발생 SKU')
             kcard(c[1], '총 재고액', f'{tot_amt/1e8:.2f}억', '재고수량 × 정상가')
             kcard(c[2], '총 재고량', f'{tot_inv:,}장', f'{channel_pick}')
-            kcard(c[3], '긴급 결품', f'{n_urgent:,}건', '재고주수 < 1주')
-            kcard(c[4], '결품률', '—', '재검증 중 · 로직 업데이트 예정')
+            kcard(c[3], '긴급 결품', f'{n_urgent:,}건', '재고주수 < 1주(조기경보)')
+            kcard(c[4], '결품률', f'{oos0_rate:.1f}%', '재고=0 · 건수 · 신상(G)')
             kcard(c[5], '추천 이동(IN)', f'{tot_in:,}장', '금주 충전')
             if is_ext:
                 kcard(c[6], '외부창고', f'{tot_ext:,}장', f'{wh_label} · 비중 {ext_pct:.1f}%')
-            st.caption(f'ℹ️ {channel_pick} 결품률 지표는 정확 로직 재반영 중입니다 (일시 공란 · 추후 업데이트 예정).')
+            st.caption(f'ℹ️ {channel_pick} 결품률 = 재고=0 / 주간 판매 대상 (건수 · 신상 G) · 긴급결품(재고주수<1주)은 조기경보 보조지표.')
 
         bstat = {b: [0, 0] for b in BOK_LIST}
         for r in results_ch:
@@ -2489,14 +2505,37 @@ def render_channel_tab():
                     bstat[b][0] += 1
                     if i / o < 1:
                         bstat[b][1] += 1
-        st.markdown('##### 🧬 복종별 결품률')
-        # 7/23 사용자 요청: 결품률 정확 로직 재검증 중 · 카드 값 공란 처리 (추후 업데이트 예정)
+        st.markdown('##### 🧬 복종별 결품률 (재고=0 · 건수 · 신상 G)')
+        # 7/26: 결품률 정의 확정 반영 — 복종(단품코드 8번째 자리)별 재고=0 건수 결품률
+        _bok_oos = {b: [0, 0] for b in BOK_LIST}   # [oos, dem]
+        for r in results_ch:
+            if not _isnew(r['code']):
+                continue
+            b = _bok(r['code'])
+            if b not in _bok_oos:
+                continue
+            d = r['data']
+            for c in _ch_scope:
+                o = d['orders'].get(c, 0)
+                if o > 0:
+                    _bok_oos[b][1] += 1
+                    if d['inv'].get(c, 0) == 0:
+                        _bok_oos[b][0] += 1
         bc = st.columns(len(BOK_LIST))
         for j, b in enumerate(BOK_LIST):
-            bc[j].markdown(
-                f'<div class="kpi-card"><div class="kpi-label">복종 {b}</div>'
-                f'<div class="kpi-value" style="color:#9FB0C0">—</div>'
-                f'<div class="kpi-sub">재검증 중</div></div>', unsafe_allow_html=True)
+            _o, _dm = _bok_oos[b]
+            if _dm < 30:
+                bc[j].markdown(
+                    f'<div class="kpi-card"><div class="kpi-label">복종 {b}</div>'
+                    f'<div class="kpi-value" style="color:#9FB0C0">—</div>'
+                    f'<div class="kpi-sub">표본 부족({_dm})</div></div>', unsafe_allow_html=True)
+            else:
+                _rt = _o / _dm * 100
+                _col = '#FF6B6B' if _rt >= 15 else ('#F5B24A' if _rt >= 8 else '#4AE3B5')
+                bc[j].markdown(
+                    f'<div class="kpi-card"><div class="kpi-label">복종 {b}</div>'
+                    f'<div class="kpi-value" style="color:{_col}">{_rt:.1f}%</div>'
+                    f'<div class="kpi-sub">{_o:,}/{_dm:,}건</div></div>', unsafe_allow_html=True)
         urgent_loss = 0
         for r in results_ch:
             d = r['data']; o = g_ord(d); i = g_inv(d)
