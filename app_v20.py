@@ -2269,6 +2269,8 @@ def _woc(v):
 
 
 BOK_LIST = ['A', 'C', 'G', 'K', 'M', 'U', 'W']
+BOK_NAME = {'A': '잡화, 이너', 'C': '유니 캐주얼', 'G': '여성 캐주얼', 'K': '키즈',
+            'M': '포맨', 'U': '콜라보, 파자마', 'W': '포우먼'}
 
 
 def _bok(code):
@@ -2484,7 +2486,8 @@ def render_channel_tab():
                         _bpost += 1
         oos0_rate = (_bpre / _dem_n * 100) if _dem_n else 0.0          # 회전 결품률(B, 전)
         oos_after_rate = (_bpost / _dem_n * 100) if _dem_n else 0.0    # 재배치 후 잔여
-        resolve_rate = ((_bpre - _bpost) / _bpre * 100) if _bpre else 0.0  # 해소율
+        resolve_rate = ((_bpre - _bpost) / _bpre * 100) if _bpre else 0.0  # 해소율(참고)
+        delta_pp = oos0_rate - oos_after_rate                          # 결품률 감소폭(%p) — ▼표기용
 
         if is_all:
             c = st.columns(9)
@@ -2493,7 +2496,7 @@ def render_channel_tab():
             kcard(c[2], '총 재고량', f'{tot_inv:,}장', '6채널 합계')
             kcard(c[3], '긴급 결품', f'{n_urgent:,}건', '재고주수<1주 · 조기경보')
             kcard(c[4], '회전 결품률(B)', f'{oos0_rate:.1f}%', '재고0·타채널有·주문≥2·신상G')
-            kcard(c[5], '재배치 해소율', f'{resolve_rate:.0f}%', f'전 {oos0_rate:.1f}% → 후 {oos_after_rate:.1f}%')
+            kcard(c[5], '재배치 효과', f'▼{delta_pp:.1f}%p', f'전 {oos0_rate:.1f}% → 후 {oos_after_rate:.1f}%')
             kcard(c[6], '회피매출(실측)', f'연 {REALIZED_ANNUAL}억', '8일 실행 · 일 1,000만')
             kcard(c[7], '추천 이동(IN)', f'{tot_in:,}장', '금주 충전')
             kcard(c[8], '외부창고 비중', f'{ext_pct:.1f}%', '외부창고 / 총재고')
@@ -2505,7 +2508,7 @@ def render_channel_tab():
             kcard(c[1], '총 재고액', f'{tot_amt/1e8:.2f}억', '재고수량 × 정상가')
             kcard(c[2], '총 재고량', f'{tot_inv:,}장', f'{channel_pick}')
             kcard(c[3], '긴급 결품', f'{n_urgent:,}건', '재고주수<1주 · 조기경보')
-            kcard(c[4], '회전 결품률(B)', f'{oos0_rate:.1f}%', f'해소 {resolve_rate:.0f}% · 주문≥2·신상G')
+            kcard(c[4], '회전 결품률(B)', f'{oos0_rate:.1f}%', f'재배치 ▼{delta_pp:.1f}%p · 주문≥2·신상G')
             kcard(c[5], '추천 이동(IN)', f'{tot_in:,}장', '금주 충전')
             if is_ext:
                 kcard(c[6], '외부창고', f'{tot_ext:,}장', f'{wh_label} · 비중 {ext_pct:.1f}%')
@@ -2525,16 +2528,17 @@ def render_channel_tab():
         bc = st.columns(len(BOK_LIST))
         for j, b in enumerate(BOK_LIST):
             _o, _dm = _bok_oos[b]
+            _lab = f'{b}({BOK_NAME.get(b, "")})'
             if _dm < 30:
                 bc[j].markdown(
-                    f'<div class="kpi-card"><div class="kpi-label">복종 {b}</div>'
+                    f'<div class="kpi-card"><div class="kpi-label">{_lab}</div>'
                     f'<div class="kpi-value" style="color:#9FB0C0">—</div>'
                     f'<div class="kpi-sub">표본 부족({_dm})</div></div>', unsafe_allow_html=True)
             else:
                 _rt = _o / _dm * 100
                 _col = '#FF6B6B' if _rt >= 15 else ('#F5B24A' if _rt >= 8 else '#4AE3B5')
                 bc[j].markdown(
-                    f'<div class="kpi-card"><div class="kpi-label">복종 {b}</div>'
+                    f'<div class="kpi-card"><div class="kpi-label">{_lab}</div>'
                     f'<div class="kpi-value" style="color:{_col}">{_rt:.1f}%</div>'
                     f'<div class="kpi-sub">{_o:,}/{_dm:,}건</div></div>', unsafe_allow_html=True)
         urgent_loss = 0
@@ -2553,7 +2557,7 @@ def render_channel_tab():
             '<span style="color:#9FB0C0;font-weight:normal;font-size:11px">(통계·규칙 기반 자동 진단)</span></div>'
             '<div style="color:#FFFFFF;font-size:13px;line-height:1.7">'
             f'<b>진단</b> — 온라인 <b>회전 결품 {oos0_rate:.1f}%</b>(재고는 타 채널에 있는데 판매 채널엔 0 · 주문≥2·신상). '
-            f'하루 1회 재배치로 <b>{resolve_rate:.0f}% 해소</b>(전 {oos0_rate:.1f}% → 후 {oos_after_rate:.1f}%), 실측 회피매출 <b>연 약 {REALIZED_ANNUAL}억</b>(8일 실행). '
+            f'하루 1회 재배치로 <b>▼{delta_pp:.1f}%p</b> 감소(전 {oos0_rate:.1f}% → 후 {oos_after_rate:.1f}%), 실측 회피매출 <b>연 약 {REALIZED_ANNUAL}억</b>(8일 실행). '
             f'긴급결품(재고주수&lt;1주) {n_urgent:,}건은 조기경보.<br>'
             '<b>제안</b> — ① 회전(온라인 잉여→결품 채널) 우선 충전 · '
             f'② {dist_note} · ③ 회전·분배로 못 메우는 단품(A·C)은 리오더 요청(🤖 AICA 2.0 허브) 처리 권장.'
