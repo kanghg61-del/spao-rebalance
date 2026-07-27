@@ -786,7 +786,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
         except Exception:
             _status = None
 
-    def _think(msg, sec=0.25):
+    def _think(msg, sec=0.5):  # 7/27 사용자: 시퀀스 속도 절반으로 (0.25→0.5s/단계)
         # msg = HTML (주요 수치 컬러 스팬 포함) — ✓ 마커·진행률 막대 자동 갱신
         if _status is not None:
             try:
@@ -798,7 +798,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
                     unsafe_allow_html=True)
                 if _think_state['prog'] is not None:
                     _pct0 = min(int(_n0 / _tot0 * 100), 100)
-                    _eta0 = max(0.0, (_tot0 - _n0) * 0.35)
+                    _eta0 = max(0.0, (_tot0 - _n0) * 0.7)
                     _txt0 = (f'진행률 {_pct0}% · 예상 완료 {_eta0:.1f}초' if _pct0 < 100
                              else '진행률 100% · 사고 시퀀스 완료')
                     _think_state['prog'].progress(_pct0, text=_txt0)
@@ -872,7 +872,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
                    f'<span style="color:#FFC000;font-weight:800">{int(move_cap_pct*100)}%</span> · '
                    f'채널 IN-OUT 규칙 <span style="color:#FFC000;font-weight:800">{_rules_n0}건</span> {_chx_lbl0}')
             _think(f'<b>최종안 확정</b> — 재배치 <span style="color:#8AB4F8;font-weight:800">{len(_mv_items0):,}건</span> · '
-                   f'기대 회수 <span style="color:#4AE3B5;font-weight:800">{_rev0/1e8:.2f}억</span> → 결재 대기', sec=0.15)
+                   f'기대 회수 <span style="color:#4AE3B5;font-weight:800">{_rev0/1e8:.2f}억</span> → 결재 대기', sec=0.3)
             _now_hm0 = _dt_think.now().strftime('%H:%M')
             _status.update(label=f'✅ 검토 완료 ({_now_hm0}) — 재배치안 {len(_mv_items0):,}건 · 기대 회수 {_rev0/1e8:.2f}억',
                            state='complete', expanded=False)
