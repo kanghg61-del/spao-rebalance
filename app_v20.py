@@ -884,9 +884,17 @@ def render_scenario(scenario_key, container, allow_slider=False):
         d = r['data']; mv = r['moves']; af = r['after']; inv = d['inv']
         name = d['name']
         cum = d.get('cum_rate', 0) * 100; wk = d.get('wk_rate', 0) * 100
+        # 7/27 사용자 요청: 이월재고 매출 0 → 정상가 × 주간주문량으로 대체 (판매가 반영)
         sv = d.get('wk_sales', 0)
+        if not sv:
+            _price = d.get('price', 0) or 0
+            _wk_ord = sum(d.get('orders', {}).values())
+            sv = _price * _wk_ord
         sales_str = f"{round(sv/10000):,}만" if sv else '-'
-        row = [r['code'], name, sales_str, f"{cum:.0f}%", f"{wk:.0f}%", f"{int(d['ship_rate']*100)}%",
+        # 7/27 사용자 요청: 누판/주판 0%인 경우 '이월'로 문구 표시
+        cum_str = '이월' if cum == 0 else f"{cum:.0f}%"
+        wk_str = '이월' if wk == 0 else f"{wk:.0f}%"
+        row = [r['code'], name, sales_str, cum_str, wk_str, f"{int(d['ship_rate']*100)}%",
                f"{inv.get('반응과', 0):,}"]
         for c in CHANNELS:
             o = d['orders'].get(c, 0)
