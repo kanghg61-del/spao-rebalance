@@ -389,7 +389,9 @@ def _resolve_test_csv_path() -> str:
                 files = [f for f in _os.listdir(cand_dir)
                          if f.lower().endswith(('.csv', '.csv.gz')) and not f.startswith('.')]
                 if files:
-                    files.sort(key=lambda f: _os.path.getmtime(_os.path.join(cand_dir, f)), reverse=True)
+                    # 7/27 fix: mtime → 파일명 기준 정렬 (Streamlit Cloud git checkout 시
+                    # 파일 mtime이 커밋 순서와 어긋나는 이슈 해결 · 파일명 data_spao_YYMMDD.csv.gz 형식이라 알파벳 역순 = 날짜 역순)
+                    files.sort(reverse=True)
                     return _os.path.join(cand_dir, files[0])
         except Exception:
             continue
