@@ -95,6 +95,23 @@ _HERE = Path(__file__).parent
 # Cowork sandbox 마운트 경로 — 세션명이 매번 달라지므로 자동 감지 (7/21 fix)
 _upload_candidates = sorted(Path("/sessions").glob("*/mnt/uploads")) if Path("/sessions").exists() else []
 UPLOAD_DIR = _upload_candidates[0] if _upload_candidates else Path("/sessions/quirky-dazzling-wozniak/mnt/uploads")
+
+# 로컬 실행 fallback: sandbox 경로가 없으면 환경변수 → Downloads → Desktop → 스크립트 폴더 순으로 탐색
+if not UPLOAD_DIR.exists():
+    import os
+    env_dir = os.environ.get("REBA_UPLOAD_DIR", "").strip()
+    if env_dir and Path(env_dir).exists():
+        UPLOAD_DIR = Path(env_dir)
+    else:
+        home = Path.home()
+        for cand in [home / "Downloads", home / "Desktop", _HERE]:
+            if cand.exists() and any(cand.glob("*단품별판매재고*")):
+                UPLOAD_DIR = cand
+                break
+        else:
+            # 마지막 fallback: 스크립트 폴더
+            UPLOAD_DIR = _HERE
+    print(f"[LOCAL] UPLOAD_DIR = {UPLOAD_DIR}")
 # 출력 — 세션 outputs 자동 감지 (7/21 fix), 실패 시 스크립트 폴더 하위
 _out_candidates = sorted(Path("/sessions").glob("*/mnt/outputs")) if Path("/sessions").exists() else []
 OUT_DIR = (_out_candidates[0] / "reba_run" / "data" / "test") if _out_candidates else (_HERE / "data" / "test")
@@ -814,6 +831,30 @@ def stage7_finalize(skus_master: dict, bw_qty: dict, bw_name: dict,
     style_avg = {s: int(sum(ps) / len(ps)) for s, ps in style_prices.items()}
     log.info(f"  스타일 평균가: {len(style_avg):,} 스타일")
 
+    # 7/27 신규: data/master/스타일정보2.csv (전 브랜드 마스터 · 이월재고 판매가 fallback 4단계)
+    #   ─ 브랜드별 스타일→판매가 매핑 로드 (SP뿐 아니라 MI/RM/NB/WH/NK/CV/EB 등 확산 대비)
+    #   ─ 매칭 우선순위: ① 마스터 → ② price_fallback → ③ style_avg(신상) → ④ 스타일정보2 (이월 포함)
+    style_master = {}
+    try:
+        import csv as _csv
+        _sp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "master", "스타일정보2.csv")
+        if os.path.exists(_sp_path):
+            with open(_sp_path, "r", encoding="utf-8-sig") as _f:
+                _r = _csv.DictReader(_f)
+                for _row in _r:
+                    _st = _row.get("스타일", "").strip()
+                    _pr = _row.get("판매가", "").strip().replace(",", "")
+                    try:
+                        _p = int(_pr) if _pr else 0
+                    except Exception:
+                        _p = 0
+                    if _p > 0 and _st:
+                        # 스타일당 최대값 사용 (다양한 컬러/사이즈 라인)
+                        style_master[_st] = max(style_master.get(_st, 0), _p)
+            log.info(f"  스타일정보2 마스터: {len(style_master):,} 스타일 (전 브랜드)")
+    except Exception as _e:
+        log.warning(f"  스타일정보2 로드 실패 (무시): {_e}")
+
     # 등장하는 모든 단품 집합
     all_codes = set(skus_master) | set(bw_qty)
     for m in inv_int.values():
@@ -862,12 +903,14 @@ def stage7_finalize(skus_master: dict, bw_qty: dict, bw_name: dict,
             r["단품명"] = bw_name[code]
         if not r["단품명"] and code in name_fallback:
             r["단품명"] = name_fallback[code]
-        # 정상가 fallback: 우선순위 - 마스터 → 개별 → 스타일 평균
+        # 정상가 fallback: 우선순위 - 마스터 → 개별 → 스타일 평균(신상) → 스타일정보2(이월 포함)
         if r["정상가"] == 0:
             if code in price_fallback:
                 r["정상가"] = price_fallback[code]
             elif code[:10] in style_avg:
                 r["정상가"] = style_avg[code[:10]]
+            elif code[:10] in style_master:  # 7/27 신규: 이월재고 판매가
+                r["정상가"] = style_master[code[:10]]
         # 재고: 내부 + 외부창고 (대시보드 뺄셈 로직 정합)
         for ch in CHANNELS:
             internal = max(0, int(inv_int.get(ch, {}).get(code, 0)))
