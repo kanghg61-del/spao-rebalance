@@ -716,7 +716,22 @@ def render_scenario(scenario_key, container, allow_slider=False):
     _chx_key = f'chx_use_{scenario_key}'
     if _chx_key not in st.session_state:
         st.session_state[_chx_key] = '적용'
+    # 7/27 사용자 리포트 fix — IN-OUT 적용/미적용 토글이 결과에 반영 안 되던 버그:
+    # _KeyIsolator가 radio key에 '__{mode}' 접미를 붙여 실제 위젯 상태는
+    # f'{_chx_key}__{mode}'에 저장되는데, 여기서는 접미 없는 raw 키만 읽어
+    # 항상 초기값 '적용'으로 해석됨 → 위젯(접미) 키 우선으로 해석하도록 수정.
     _chx_use = st.session_state.get(_chx_key, '적용')
+    try:
+        _chx_w = st.session_state.get(f'{_chx_key}__{_current_reba_mode()}')
+        if _chx_w not in ('적용', '미적용'):
+            # 모드 키 미설정 등 예외 상황 대비 — 접미 붙은 위젯 키 전수 스캔
+            _chx_w = next((st.session_state[_k0] for _k0 in list(st.session_state.keys())
+                           if str(_k0).startswith(_chx_key + '__')
+                           and st.session_state[_k0] in ('적용', '미적용')), None)
+        if _chx_w in ('적용', '미적용'):
+            _chx_use = _chx_w
+    except Exception:
+        pass
 
     ship_th = 0.0
     if allow_slider:
@@ -748,6 +763,54 @@ def render_scenario(scenario_key, container, allow_slider=False):
         st.session_state.pop('move_overrides', None)
     st.session_state['_last_params_key'] = _new_pkey
 
+    # ── 7/27 사용자 요청 (STEP 1): AI 사고 과정 스트리밍 ──────────────────────
+    # 실제 계산 단계에 실제 숫자를 붙여 순차 공개 (가짜 딜레이 아님 — 계산 중계).
+    # 데이터 파일 기준 1회만 풀 시퀀스 · 이후엔 '분석 완료' 배지 + [다시 보기] (피로 방지).
+    import time as _time
+    from datetime import datetime as _dt_think
+    _think_flag = f'_reba_think_{scenario_key}'
+    _think_sum_key = f'_reba_think_sum_{scenario_key}'
+    _data_day = str(_csv_cache_key())
+    _do_think = st.session_state.get(_think_flag) != _data_day
+    _status = None
+    if _do_think:
+        try:
+            _status = container.status('🤖 에이전트가 오늘의 재배치 안을 검토하고 있습니다...', expanded=True)
+        except Exception:
+            _status = None
+
+    def _think(msg, sec=0.25):
+        if _status is not None:
+            try:
+                _status.write(msg)
+                _time.sleep(sec)
+            except Exception:
+                pass
+
+    if _status is not None:
+        try:
+            _skus_cnt = len(load_data_v20(_csv_cache_key()))
+            _think(f'✓ **데이터 로드** — {get_last_update_time()} 갱신 · {_skus_cnt:,} 단품 × 6채널 스캔')
+        except Exception:
+            pass
+        try:
+            _imm0 = imminent_rows()
+            _fill0 = sum(max(0, int(x['ord']) - int(x['inv'])) for x in _imm0)
+            _think(f'✓ **결품 임박 감지** — {len(_imm0):,}개 단품 · 필업 필요 {_fill0:,}장 (방치 시 결품손실)')
+        except Exception:
+            pass
+        try:
+            _mlog = [x for x in effect_log.load_log() if str(x.get('실제효과_만원') or '').strip()]
+            if _mlog:
+                _lr = _mlog[-1]
+                _exp0 = float(_lr.get('기대효과_만원') or 0)
+                _act0 = float(_lr.get('실제효과_만원') or 0)
+                _rate0 = f' (달성률 {_act0/_exp0*100:.0f}%)' if _exp0 > 0 else ''
+                _think(f"✓ **직전 실측 학습** — {str(_lr.get('실행일시', ''))[:10]} 실행분 "
+                       f"{int(float(_lr.get('추가판매_장') or 0)):,}장 · {int(_act0):,}만원 회수 확인{_rate0}")
+        except Exception:
+            pass
+
     with st.spinner('계산 중...'):
         # 사용자 7/8 — 라디오가 '미적용' 이면 규칙을 빈 튜플로 override
         _ch_excl_active = _ch_excl_key() if _chx_use == '적용' else ()
@@ -769,6 +832,37 @@ def render_scenario(scenario_key, container, allow_slider=False):
         results = calc_results_v20(params_key, _csv_cache_key())
     results = _apply_exclusion(results)
     results = _apply_overrides(results)
+
+    # ── 7/27 STEP 1 마무리: 후보 산출·가드레일·최종안 단계 공개 + 완료 배지 전환 ──
+    if _status is not None:
+        try:
+            _mv_items0 = [r for r in results if any(v > 0 for v in r['moves'].values())]
+            _mv_qty0 = sum(sum(v for v in r['moves'].values() if v > 0) for r in _mv_items0)
+            _rules_n0 = sum(len(_p0) if _p0 else 0 for _c0x, _d0x, _p0 in (_ch_excl_active or ()))
+            _rev0 = sum(r['revenue'] for r in _mv_items0)
+            _think(f'✓ **이동 후보 산출** — 과잉↔결품 매칭 {_mv_qty0:,}장 · {len(_mv_items0):,}건')
+            _think(f'✓ **가드레일 검증** — 채널 이동 상한 {int(move_cap_pct*100)}% · 채널 IN-OUT 규칙 {_rules_n0}건 반영')
+            _think(f'✓ **최종안 확정** — 재배치 {len(_mv_items0):,}건 · 기대 회수 {_rev0/1e8:.2f}억 → 결재 대기', sec=0.15)
+            _now_hm0 = _dt_think.now().strftime('%H:%M')
+            _status.update(label=f'✅ 검토 완료 ({_now_hm0}) — 재배치안 {len(_mv_items0):,}건 · 기대 회수 {_rev0/1e8:.2f}억',
+                           state='complete', expanded=False)
+            st.session_state[_think_sum_key] = (f'{_now_hm0} 분석 완료 — 재배치안 {len(_mv_items0):,}건 · '
+                                                f'기대 회수 {_rev0/1e8:.2f}억')
+        except Exception:
+            pass
+        st.session_state[_think_flag] = _data_day
+    else:
+        try:
+            _tc1, _tc2 = container.columns([5, 1.6])
+            _sum_txt0 = st.session_state.get(_think_sum_key) or '오늘 분석 완료'
+            _tc1.markdown(f'<div style="background:#0F1E1A;border:1px solid #4AE3B5;border-radius:10px;'
+                          f'padding:8px 14px;color:#4AE3B5;font-weight:700;font-size:13px">✓ 오늘 {_sum_txt0}</div>',
+                          unsafe_allow_html=True)
+            if _tc2.button('🧠 사고 과정 다시 보기', key=f'rethink_{scenario_key}', use_container_width=True):
+                st.session_state.pop(_think_flag, None)
+                st.rerun()
+        except Exception:
+            pass
 
     # 사용자 7/9 — 채널 IN-OUT 규칙 요약 caption 축소 (한 줄 · placeholder에 저장하여 나중 렌더)
     _rules_by_ch: dict = {}
@@ -979,6 +1073,58 @@ def render_scenario(scenario_key, container, allow_slider=False):
         '효과 = 결품해소 회수매출(만원)   |   ※ 이동수량은 외부창고(AENS·ADU3·ADQS) 보관분 제외'
     )
 
+    # ── 7/27 사용자 요청 ②: 단품별 이동 근거 (에이전트 추천 사유 설명) ──────────
+    # st.dataframe 셀 안에는 버튼을 넣을 수 없어(스트림릿 제약) — 행 ☑ 선택 시 하단에
+    # 근거 카드 자동 표시 + 미선택 시 드롭다운(효과 큰 순)으로 단품 지정 조회.
+    _mv_pool = [r for r in filtered if any(v > 0 for v in r['moves'].values())]
+    if _mv_pool:
+        _rank_srt = sorted(_mv_pool, key=lambda x: -x['revenue'])
+        _rank_map = {r['code']: i + 1 for i, r in enumerate(_rank_srt)}
+        with container.expander('💡 이동 근거 — 에이전트가 이 이동을 추천한 이유 (행 ☑ 선택 시 자동 표시)',
+                                expanded=bool(selected_rows)):
+            _picked_r = []
+            try:
+                if selected_rows:
+                    _picked_r = [filtered[i] for i in selected_rows if i < len(filtered)]
+                    _picked_r = [r for r in _picked_r if any(v > 0 for v in r['moves'].values())][:5]
+                    if len(selected_rows) > 5:
+                        st.caption(f'선택 {len(selected_rows):,}건 중 상위 5건만 표시')
+            except Exception:
+                _picked_r = []
+            if not _picked_r:
+                _opts = [r['code'] for r in _rank_srt[:300]]
+                _pick_code = st.selectbox('단품 선택 (효과 큰 순)', _opts, key=f'why_{scenario_key}')
+                _picked_r = [r for r in _mv_pool if r['code'] == _pick_code][:1]
+            for _r in _picked_r:
+                _d = _r['data']; _mv2 = _r['moves']; _af2 = _r['after']
+                _tos = [(c, v) for c, v in _mv2.items() if v > 0]
+                _frs = [(c, -v) for c, v in _mv2.items() if v < 0]
+                _to_txt = ' · '.join(f'{c} +{v:,}장' for c, v in _tos)
+                _fr_txt = ' · '.join(f'{c} −{v:,}장' for c, v in _frs)
+                _lines = []
+                for _c2, _v2 in _frs:
+                    _o2 = _d['orders'].get(_c2, 0); _i2 = _d['inv'].get(_c2, 0)
+                    _w2 = f'{_i2/_o2:.1f}주' if _o2 > 0 else '수요 0'
+                    _lines.append(f'├ <b>{_c2}</b> (OUT): 재고주수 <span style="color:#FFC000">{_w2}</span>'
+                                  f' — 과잉·회전율 낮음 ({_i2:,}장 보유 · 주간주문 {_o2:,}장)')
+                for _c2, _v2 in _tos:
+                    _o2 = _d['orders'].get(_c2, 0); _i2 = _d['inv'].get(_c2, 0)
+                    _w2 = f'{_i2/_o2:.1f}주' if _o2 > 0 else '-'
+                    _aw2 = _af2.get(_c2)
+                    _aw_txt = f' → 이동 후 <span style="color:#4AE3B5">{_aw2:.1f}주</span>' if _aw2 is not None else ''
+                    _lines.append(f'├ <b>{_c2}</b> (IN): 재고주수 <span style="color:#FF6B6B">{_w2}</span>'
+                                  f' — 긴급결품 (주간주문 {_o2:,}장 · 현재고 {_i2:,}장){_aw_txt}')
+                _rev2 = _r['revenue']
+                _lines.append(f'├ 예상 회수매출 <span style="color:#4AE3B5"><b>{_rev2/1e4:,.0f}만원</b></span> (결품 해소 기준 · 주간)')
+                _lines.append(f'└ 연 환산 <b>{_rev2*52/1e4:,.0f}만원</b> · 효과 우선순위 <b>{_rank_map.get(_r["code"], "-")}위</b> / {len(_mv_pool):,}건')
+                st.markdown(
+                    f'<div style="background:#0F1A12;border:1px solid #3E5E3E;border-radius:10px;padding:12px 16px;margin-bottom:8px">'
+                    f'<div style="color:#4AE3B5;font-weight:800;font-size:13px">💡 이 이동을 추천한 이유</div>'
+                    f'<div style="color:#FFFFFF;font-weight:800;font-size:15px;margin:4px 0 8px 0">{_r["code"]} · {_d.get("name", "")}'
+                    f' <span style="font-size:12px;color:#9AB4C8;font-weight:400">| IN: {_to_txt or "-"} · OUT: {_fr_txt or "-"}</span></div>'
+                    f'<div style="color:#D7E3EE;font-size:13px;line-height:1.9">{"<br>".join(_lines)}</div>'
+                    f'</div>', unsafe_allow_html=True)
+
     # 사용자 7/9 fix — 승인 대상 = 전체 results (KPI 정합성).
     # 이전: 화면 표시분(filtered=상위 2,000건)만 승인 대상 → KPI 13,329장 vs 승인 11,001장 불일치.
     # 수정: 사용자 선택 없으면 전체 이동 발생 items 승인 (results 중 이동수량>0인 모든 SKU).
@@ -1003,7 +1149,7 @@ def render_scenario(scenario_key, container, allow_slider=False):
         st.radio(
             '🚫 채널 IN-OUT',
             options=['적용', '미적용'],
-            index=0 if st.session_state.get(_chx_key, '적용') == '적용' else 1,
+            index=0 if _chx_use == '적용' else 1,  # 7/27 fix: 위젯(접미) 키 기준 해석값 사용
             horizontal=True,
             key=_chx_key,
             label_visibility='collapsed',
@@ -5703,3 +5849,13 @@ if __name__ == '__main__':
 #                        이동 0건이어도 매일 산출) ② 회피 손실 누적(베이스라인 12% 대비 추정)
 #                        ③ 실현 추가판매(실측 하한 증명) ④ 결품률 유지(상태). 결품률 트렌드(risk_log.csv
 #                        접속일 자동 축적) · 주간 롤업(실현+회피) · 위험액 TOP15 스타일 · 핑퐁 방지 규칙 4종.
+# v0.9.18 (2026-07-27) — 재배치(기본·임의) AI화 2종 (사용자 승인 시안 구현):
+#                        ① AI 사고 과정 스트리밍 — st.status로 실제 계산 단계 순차 공개 (데이터 로드→결품
+#                           감지→직전 실측 학습→후보 산출→가드레일→최종안, 실제 숫자 표기). 첫 멘트
+#                           '에이전트가 오늘의 재배치 안을 검토하고 있습니다...'. 데이터 파일 기준 1회만
+#                           풀 시퀀스, 이후 '분석 완료' 배지 + [사고 과정 다시 보기] (피로 방지).
+#                        ② 단품별 이동 근거 카드 — 행 ☑ 선택 시(최대 5건) / 드롭다운 선택 시 OUT(과잉
+#                           재고주수)·IN(결품 재고주수→이동 후)·예상 회수매출·연 환산·우선순위 표시.
+#                           (st.dataframe 셀 내 버튼 불가 제약 → 선택 연동 방식으로 구현)
+#                        ③ [버그 fix] IN-OUT 적용/미적용 토글 미반영 — _KeyIsolator 접미('__test') 키에
+#                           위젯 상태가 저장되는데 raw 키만 읽어 항상 '적용' 해석 → 접미 키 우선 해석.
