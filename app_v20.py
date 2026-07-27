@@ -1927,24 +1927,36 @@ def render_excluded_tab():
                     'warn', f'☑️ {action_txt} 완료 (현재 세션에는 반영) · ⚠️ 영구 저장 실패: {str(_errg)[:120]} '
                             f'— 하단 "💾 GitHub 영구 저장" 버튼으로 재시도하세요.')
 
-        def _row_end(r):
-            e = r.get('종료일')
-            if not e:
+        def _norm_d0(v):
+            """무엇이 오든(date/datetime/pd.Timestamp/NaT/str/None) 순수 datetime.date 또는 None으로 정규화.
+            7/27 버그 fix: data_editor 경유 규칙은 pd.Timestamp라 date와 직접 비교 시 TypeError."""
+            if v is None or v == '':
                 return None
             try:
-                return e if hasattr(e, 'toordinal') else _d0.fromisoformat(str(e)[:10])
+                if hasattr(v, 'to_pydatetime'):   # pandas Timestamp/NaT
+                    v = v.to_pydatetime()
+                if hasattr(v, 'hour'):            # datetime → date
+                    v = v.date()
+                if not hasattr(v, 'toordinal'):
+                    v = _d0.fromisoformat(str(v)[:10])
+                v.toordinal()                     # NaT 등 비정상 값 방어
+                return v
             except Exception:
                 return None
 
+        def _row_end(r):
+            return _norm_d0(r.get('종료일'))
+
         def _row_active(r):
-            s, e = r.get('시작일'), r.get('종료일')
-            if not (s or e):
+            s_raw, e_raw = r.get('시작일'), r.get('종료일')
+            _has_s = not (s_raw is None or str(s_raw) in ('', 'NaT', 'None', 'nan'))
+            _has_e = not (e_raw is None or str(e_raw) in ('', 'NaT', 'None', 'nan'))
+            if not (_has_s or _has_e):
                 return True
-            if not (s and e):
+            s_, e_ = _norm_d0(s_raw), _norm_d0(e_raw)
+            if not (s_ and e_):
                 return False
             try:
-                s_ = s if hasattr(s, 'toordinal') else _d0.fromisoformat(str(s)[:10])
-                e_ = e if hasattr(e, 'toordinal') else _d0.fromisoformat(str(e)[:10])
                 return s_ <= _today0 <= e_
             except Exception:
                 return False
@@ -2151,7 +2163,7 @@ def render_excluded_tab():
         _smap0 = _load_style_map()
         _tbl = []
         for _p, g in sorted(_sty_ch.items(), key=lambda kv: (-len(kv[1]['chs']), kv[0])):
-            _ends = [e for e in g['ends'] if e and e.year < 2999]
+            _ends = [e for e in g['ends'] if e is not None and e.year < 2999]
             _has_perm = any(e is None or e.year >= 2999 for e in g['ends'])
             _exp_txt = '상시' if _has_perm else ('~' + max(_ends).strftime('%m/%d') if _ends else '상시')
             _tbl.append({
@@ -6198,3 +6210,6 @@ if __name__ == '__main__':
 # v0.9.21 (2026-07-27) — 엑셀 병합/전체 교체 클릭 시 GitHub 영구 저장까지 자동 실행 (사용자 요청):
 #                        버튼 라벨에 '· 영구 저장' 명시 + 사전 안내 캡션 + 저장 결과 flash 멘트
 #                        (rerun 후 표시 — 성공: "모든 사용자에게 즉시 반영" / 실패: 수동 저장 재시도 안내).
+# v0.9.21a (2026-07-27) — [버그 fix] '≡ 전체' 탭 TypeError (Timestamp vs date 비교 불가): data_editor
+#                        경유 규칙의 시작/종료일이 pd.Timestamp로 저장돼 date와 직접 비교 시 크래시 →
+#                        _norm_d0 정규화(Timestamp/datetime/NaT/str → date) 후 비교하도록 수정.
