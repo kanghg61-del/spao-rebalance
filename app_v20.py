@@ -1907,6 +1907,26 @@ def render_excluded_tab():
 
         _today0 = _d0.today()
 
+        # 7/27 사용자: 병합/교체 시 자동 영구 저장 — rerun 후에도 결과 멘트 유지 (flash)
+        _flash0 = st.session_state.pop('_inout_flash', None)
+        if _flash0:
+            (st.success if _flash0[0] == 'ok' else st.warning)(_flash0[1])
+
+        def _auto_gh_save(rows_to_save, action_txt):
+            """병합/교체 직후 GitHub 영구 저장까지 자동 실행 — 결과 멘트를 flash로 예약."""
+            try:
+                _okg, _errg = _gh_save('data/ch_excl.json', rows_to_save,
+                                       commit_msg=f'채널 IN-OUT {action_txt} (대시보드 엑셀 업로드)')
+            except Exception as _geg:
+                _okg, _errg = False, str(_geg)
+            if _okg:
+                st.session_state['_inout_flash'] = (
+                    'ok', f'✅ {action_txt} + 💾 GitHub 영구 저장까지 완료 — 모든 사용자·재배치 계산에 즉시 반영됩니다.')
+            else:
+                st.session_state['_inout_flash'] = (
+                    'warn', f'☑️ {action_txt} 완료 (현재 세션에는 반영) · ⚠️ 영구 저장 실패: {str(_errg)[:120]} '
+                            f'— 하단 "💾 GitHub 영구 저장" 버튼으로 재시도하세요.')
+
         def _row_end(r):
             e = r.get('종료일')
             if not e:
@@ -2033,19 +2053,24 @@ def render_excluded_tab():
                 if _errs:
                     st.caption('⚠️ ' + ' / '.join(_errs[:5]) + (' 외' if len(_errs) > 5 else ''))
                 _bc0, _bc1, _bc2 = st.columns(3)
+                st.caption('💾 [기존에 병합] · [전체 교체] 클릭 시 **GitHub 영구 저장까지 자동 실행**됩니다 (별도 저장 버튼 불필요).')
                 with _bc0:
-                    if st.button(f'✓ 기존에 병합 (+{len(_new0)}건)', type='primary',
+                    if st.button(f'✓ 기존에 병합 (+{len(_new0)}건) · 영구 저장', type='primary',
                                  use_container_width=True, key='xl_merge', disabled=(not _new0)):
-                        st.session_state['ch_excl_rows'] = all_rows + _new0
+                        _rows_m0 = all_rows + _new0
+                        st.session_state['ch_excl_rows'] = _rows_m0
                         st.session_state.pop('up_xl_all', None)
-                        st.success(f'병합 완료 (+{len(_new0)}건) — 하단 "💾 GitHub 영구 저장"으로 확정하세요.')
+                        with st.spinner('GitHub 영구 저장 중...'):
+                            _auto_gh_save(_rows_m0, f'엑셀 병합 +{len(_new0)}건')
                         st.rerun()
                 with _bc1:
-                    if st.button(f'전체 교체 ({len(_parsed)}건으로)', use_container_width=True,
+                    if st.button(f'전체 교체 ({len(_parsed)}건으로) · 영구 저장', use_container_width=True,
                                  key='xl_replace', disabled=(not _parsed)):
-                        st.session_state['ch_excl_rows'] = list(_parsed)
+                        _rows_r0 = list(_parsed)
+                        st.session_state['ch_excl_rows'] = _rows_r0
                         st.session_state.pop('up_xl_all', None)
-                        st.success(f'전체 교체 완료 ({len(_parsed)}건) — 하단 "💾 GitHub 영구 저장"으로 확정하세요.')
+                        with st.spinner('GitHub 영구 저장 중...'):
+                            _auto_gh_save(_rows_r0, f'엑셀 전체 교체 {len(_parsed)}건')
                         st.rerun()
                 with _bc2:
                     if st.button('취소', use_container_width=True, key='xl_cancel'):
@@ -6170,3 +6195,6 @@ if __name__ == '__main__':
 #                        ③ 유효기간(자동 만료) 빠른 등록 — 채널·방향·스타일 복붙·만료일(또는 상시),
 #                           만료 경과 시 재배치 계산 자동 비활성 (기존 _ch_excl_key 기간 로직 재사용)
 #                        + 사고 시퀀스 속도 체감 ~6초 (1.0s/단계)
+# v0.9.21 (2026-07-27) — 엑셀 병합/전체 교체 클릭 시 GitHub 영구 저장까지 자동 실행 (사용자 요청):
+#                        버튼 라벨에 '· 영구 저장' 명시 + 사전 안내 캡션 + 저장 결과 flash 멘트
+#                        (rerun 후 표시 — 성공: "모든 사용자에게 즉시 반영" / 실패: 수동 저장 재시도 안내).
