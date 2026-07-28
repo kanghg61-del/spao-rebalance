@@ -787,6 +787,25 @@ def _chan_recovery_bar(items):
             f'<div style="line-height:1.3">{leg}</div>')
 
 
+_EXEC_PW = 'SPAO'   # 실행(승인) 2차 비밀번호 — 팀장급 전용 (1차 조회 비번과 별도)
+
+
+@st.dialog('🔒 실행 2차 인증 (팀장급)')
+def _exec_pw_dialog():
+    st.write('재배치 **실행(승인)** 은 팀장급만 가능합니다. 2차 비밀번호를 입력하세요.')
+    st.caption('팀원은 1차 비밀번호로 재배치안 조회는 가능하나, 실행은 2차 인증이 필요합니다.')
+    _pw = st.text_input('2차 비밀번호', type='password', key='_exec_pw_input')
+    c1, c2 = st.columns(2)
+    if c1.button('확인', type='primary', use_container_width=True, key='_exec_pw_ok'):
+        if _pw == _EXEC_PW:
+            st.session_state['_exec_authed'] = True
+            st.rerun()
+        else:
+            st.error('비밀번호가 일치하지 않습니다.')
+    if c2.button('취소', use_container_width=True, key='_exec_pw_cancel'):
+        st.rerun()
+
+
 def render_scenario(scenario_key, container, allow_slider=False):
     preset = SCENARIOS[scenario_key]
 
@@ -1276,6 +1295,9 @@ def render_scenario(scenario_key, container, allow_slider=False):
         # 사용자 7/9 fix — 승인 라벨을 실제 승인 대상 수(len(sel_items))로 표시 (KPI 정합성)
         _approve_n = len(sel_items)
         if st.button(f'✅ 선택 {_approve_n:,}건 승인(회전)', use_container_width=True, type='primary', key=f'approve_{scenario_key}'):
+            if not st.session_state.get('_exec_authed', False):
+                _exec_pw_dialog()   # 팀장급 2차 비밀번호 게이트 — 미인증 시 실행 중단
+                st.stop()
             details = []
             ch_in, ch_out = {}, {}
             sel_amt = 0
@@ -4374,6 +4396,82 @@ def _hl_sum_unified(row):
     return [''] * len(row)
 
 
+def render_overstock_tab():
+    """🧊 과재고·워스트 (Dead Stock) — 재배치의 반대 축.
+    전 채널 판매 저조 + 재고주수 ≥ 8주 스타일. 노출채널 부족분은 채널확대(회전 가능),
+    전채널 노출분은 마크다운/반품 손절로 자동 분류."""
+    import pandas as pd
+    st.markdown('### 🧊 과재고 · 워스트 (Dead Stock)')
+    st.caption('전 채널 판매 저조 + 재고주수 ≥ 8주 = 재배치로 못 푸는 죽은 재고. 스타일 단위 · 묶인 자본순. '
+               '노출채널 부족분은 채널 확대(추가분배)로 회전 가능 · 전채널 노출분은 마크다운/반품 대상.')
+    WOC_MIN = 8
+    skus = load_data_v20(_csv_cache_key())
+    _smap = _load_style_map()
+    agg = {}
+    for code, d in skus.items():
+        s = code[:10]
+        g = agg.get(s)
+        if g is None:
+            g = agg[s] = {'inv': 0, 'ord': 0.0, 'amt': 0.0, 'name': d.get('name', ''),
+                          'bok': _bok(code), 'chn': set()}
+        pr = d.get('price', 0)
+        for c in CHANNELS:
+            iv = d['inv'].get(c, 0)
+            g['inv'] += iv; g['amt'] += iv * pr; g['ord'] += d['orders'].get(c, 0)
+            if iv > 0:
+                g['chn'].add(c)
+    rows = []
+    for s, g in agg.items():
+        if g['inv'] < 50:
+            continue
+        woc = g['inv'] / g['ord'] if g['ord'] > 0 else 999
+        if woc < WOC_MIN:
+            continue
+        nch = len(g['chn'])
+        if woc >= 52:
+            grade = '🔴 초과재고'
+        elif woc >= 12:
+            grade = '🟠 과재고'
+        else:
+            grade = '🟡 둔화'
+        if nch <= 2 and woc < 52:
+            action = '★ 채널 확대(추가분배) — 회전 가능'
+        elif woc >= 52:
+            action = '마크다운·반품·오프라인 이관'
+        else:
+            action = '기획전·프로모션'
+        rows.append({'등급': grade, '스타일': s, '스타일명': (_smap.get(s) or g['name'])[:28],
+                     '복종': g['bok'], '총재고(장)': int(g['inv']), '재고자본(억)': round(g['amt'] / 1e8, 2),
+                     '재고주수': ('999+' if woc >= 999 else int(round(woc))),
+                     '노출채널': f"{nch}/{len(CHANNELS)}", '권장 액션': action})
+    rows.sort(key=lambda r: -r['재고자본(억)'])
+    n_over = sum(1 for r in rows if r['등급'].startswith('🔴'))
+    n_heavy = sum(1 for r in rows if r['등급'].startswith('🟠'))
+    n_slow = sum(1 for r in rows if r['등급'].startswith('🟡'))
+    tot_amt = sum(r['재고자본(억)'] for r in rows)
+    tot_inv = sum(r['총재고(장)'] for r in rows)
+
+    def _kc(col, label, value, sub=''):
+        col.markdown(f'<div class="kpi-card"><div class="kpi-label">{label}</div>'
+                     f'<div class="kpi-value">{value}</div><div class="kpi-sub">{sub}</div></div>',
+                     unsafe_allow_html=True)
+    k = st.columns(5)
+    _kc(k[0], '워스트 스타일', f'{len(rows):,}개', '재고주수 ≥ 8주')
+    _kc(k[1], '묶인 재고자본', f'{tot_amt:.1f}억', f'총재고 {tot_inv:,}장')
+    _kc(k[2], '🔴 초과재고', f'{n_over:,}개', '≥52주')
+    _kc(k[3], '🟠 과재고', f'{n_heavy:,}개', '12~52주')
+    _kc(k[4], '🟡 둔화', f'{n_slow:,}개', '8~12주')
+    st.caption('판정 = 전 채널 판매 저조(주간수요 대비 재고주수 ≥ 8주) · 등급: 🔴초과(≥52) 🟠과재고(12~52) 🟡둔화(8~12) · '
+               '액션은 노출채널로 채널확대(회전) vs 손절 자동 분류.')
+    if rows:
+        st.dataframe(pd.DataFrame(rows[:300]), use_container_width=True, hide_index=True, height=460)
+        _csv = pd.DataFrame(rows).to_csv(index=False).encode('utf-8-sig')
+        st.download_button('📥 워스트 스타일 리스트 다운로드 (CSV)', _csv,
+                           file_name='overstock_worst.csv', mime='text/csv', key='overstock_dl')
+    else:
+        st.success('🎉 과재고 워스트 스타일이 없습니다.')
+
+
 def render_unified_tab():
     st.markdown('### 🏬 통합 재고뷰')
     st.markdown('<div class="scenario-box">온라인 6채널 통합 재고를 한 화면에서 — <b>내부창고 vs 외부창고(FASS·이플렉스·CJ·풀필먼트) 분리</b>. '
@@ -6054,7 +6152,7 @@ def render_performance_v2_tab():
     from datetime import datetime as _dt, date as _date, timedelta as _td
     from pathlib import Path as _Path
 
-    st.markdown('### 📉 성과 측정 v2 — 일 단위 운영 체제')
+    st.markdown('### 📉 성과 측정 — 일 단위 운영 체제')
     st.caption('KPI 트리: **① 회피 손실**(카운터팩추얼 · 북극성) · **② 실현 추가판매**(실측 · 하한 증명) · '
                '**③ 결품률 유지**(상태) — 이동량이 줄어도 ①·③이 실적을 지탱합니다.')
 
@@ -6406,9 +6504,10 @@ def _render_dashboard_body(mode: str) -> None:
         ('🎛️ 재배치(임의)', lambda: render_scenario('🎛️ 임의', st, allow_slider=True)),
         ('📈 실행 효과', render_effect_tab),
         # 7/21 사용자 승인 시안 → 신설: 일 단위 운영 체제 실적 측정 (회피 손실·결품률 유지)
-        ('📉 성과 측정 v2', render_performance_v2_tab),
+        ('📉 성과 측정', render_performance_v2_tab),
         ('🏬 통합 재고뷰', render_unified_tab),
         ('📊 채널 별 세부', render_channel_tab),
+        ('🧊 과재고·워스트', render_overstock_tab),
         ('🚫 채널 IN-OUT (MD 기입)', render_excluded_tab),
         # 7/14 사용자: AI 일일 요약(TEST)은 맨 오른쪽 배치 (채널 IN-OUT 오른편)
         ('🤖 AI 일일 요약(TEST)', render_ai_summary_tab),
