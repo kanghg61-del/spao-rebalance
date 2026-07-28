@@ -155,24 +155,55 @@ def _save(rows):
         pass
 
 
-def _save_details(rows):
+def _save_details(rows) -> bool:
+    """execution_details.csv 저장 + GH push (실패 시 재시도 3회 · 최종 실패 시 pending 파일).
+    7/28 사용자 요청: 정확한 자동 실측 보장 위해 저장 강화.
+    Returns: True = GH push 성공 · False = 로컬만 저장 (pending)"""
     with open(DETAILS_PATH, 'w', encoding='utf-8-sig', newline='') as f:
         w = csv.DictWriter(f, fieldnames=DETAIL_FIELDS)
         w.writeheader()
         for r in rows:
             w.writerow({k: r.get(k, '') for k in DETAIL_FIELDS})
+    # GH push · 재시도 3회 (지수 백오프 1s → 2s → 4s)
+    import time
+    last_err = None
+    for attempt in range(3):
+        try:
+            with open(DETAILS_PATH, 'rb') as f:
+                _gh_push_file(_GH_DETAILS_PATH, f.read(),
+                              f'실행 상세 자동 저장 (n={len(rows)}) [{_now_kst_str()}]')
+            # 성공 시 pending flag 제거
+            try:
+                pending = DETAILS_PATH + '.pending'
+                if os.path.exists(pending): os.remove(pending)
+            except Exception: pass
+            return True
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                time.sleep(2 ** attempt)  # 1, 2초 대기
+    # 최종 실패 시 pending 파일 남김 (다음 load 시 재시도 트리거)
     try:
-        with open(DETAILS_PATH, 'rb') as f:
-            _gh_push_file(_GH_DETAILS_PATH, f.read(),
-                          f'실행 상세 자동 저장 (n={len(rows)}) [{_now_kst_str()}]')
-    except Exception:
-        pass
+        with open(DETAILS_PATH + '.pending', 'w', encoding='utf-8') as f:
+            f.write(f'GH push 실패: {last_err}\n{_now_kst_str()}\n')
+    except Exception: pass
+    return False
 
 
 def log_execution(scenario, sku_count, qty, expected_rev_won, details=None, memo=''):
-    """승인 실행 기록. details: [(단품코드, 채널, 전일재고, 이동IN, 정상가)] — IN 발생분만"""
+    """승인 실행 기록. details: [(단품코드, 채널, 전일재고, 이동IN, 정상가)] — IN 발생분만.
+    7/28 사용자 요청: details 저장 결과를 log에 남겨 · 실패 시 UI에서 재시도 가능."""
     rows = load_log()
     rid = max([int(r['id']) for r in rows], default=0) + 1
+    details_status = ''
+    if details:
+        drows = load_details()
+        for code, ch, prev_inv, in_qty, price in details:
+            drows.append({'exec_id': rid, '단품코드': code, '채널': ch,
+                          '전일재고_장': int(prev_inv), '이동IN_장': int(in_qty),
+                          '정상가': int(price), '실제판매_장': '', '추가판매_장': ''})
+        ok = _save_details(drows)
+        details_status = f' · 상세 {len(details)}건 {"저장" if ok else "저장 실패(재시도 pending)"}'
     rows.append({
         'id': rid,
         '실행일시': _now_kst_str('%Y-%m-%d %H:%M'),
@@ -181,17 +212,20 @@ def log_execution(scenario, sku_count, qty, expected_rev_won, details=None, memo
         '이동량_장': qty,
         '기대효과_만원': round(expected_rev_won / 10000),
         '실제효과_만원': '', '추가판매_장': '',
-        '실측일': '', '상태': '실측 대기', '메모': memo,
+        '실측일': '', '상태': '실측 대기', '메모': (memo or '') + details_status,
     })
     _save(rows)
-    if details:
-        drows = load_details()
-        for code, ch, prev_inv, in_qty, price in details:
-            drows.append({'exec_id': rid, '단품코드': code, '채널': ch,
-                          '전일재고_장': int(prev_inv), '이동IN_장': int(in_qty),
-                          '정상가': int(price), '실제판매_장': '', '추가판매_장': ''})
-        _save_details(drows)
     return rid
+
+
+def retry_pending_details() -> bool:
+    """Pending 파일 있으면 details 재저장 시도. 성공 시 True."""
+    pending = DETAILS_PATH + '.pending'
+    if not os.path.exists(pending): return True
+    if not os.path.exists(DETAILS_PATH): return False
+    with open(DETAILS_PATH, encoding='utf-8-sig') as f:
+        rows = list(csv.DictReader(f))
+    return _save_details(rows)
 
 
 def save_rows(rows):

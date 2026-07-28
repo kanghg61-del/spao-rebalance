@@ -1202,9 +1202,17 @@ def render_scenario(scenario_key, container, allow_slider=False):
                     elif v < 0:
                         ch_out[ch] = ch_out.get(ch, 0) - v
             # 사용자 7/9 — 저장 결과 명시 표시 (silent fail 방지)
+            # 7/28 강화: details 저장 상태를 명확히 표시 · pending 시 재시도 버튼
             try:
                 exec_id = effect_log.log_execution(scenario_key, len(sel_items), sel_qty, sel_rev, details=details)
-                st.toast(f'✅ 실행 이력 저장 완료 (id={exec_id}) — 실행 효과 탭에서 확인', icon='💾')
+                # details 저장 실패 감지 (pending 파일 존재)
+                import os as _os2
+                _pending_p = effect_log.DETAILS_PATH + '.pending'
+                if _os2.path.exists(_pending_p):
+                    st.warning(f'⚠️ 실행 이력 id={exec_id} 저장 · 상세 {len(details)}건 GH push 실패 (재시도 대기). '
+                               f'다음 페이지 새로고침 시 자동 재시도됩니다.')
+                else:
+                    st.toast(f'✅ 실행 이력 저장 완료 (id={exec_id}) · 상세 {len(details)}건 — 실행 효과 탭에서 확인', icon='💾')
             except Exception as _e:
                 exec_id = -1
                 st.error(f'⚠️ 실행 이력 저장 실패: {str(_e)[:200]}')
@@ -6170,6 +6178,14 @@ def _render_dashboard_body(mode: str) -> None:
 
 
 def render():
+    # 7/28 강화: pending 상세 저장 자동 재시도 (페이지 로드 시)
+    try:
+        import os as _os3
+        if _os3.path.exists(effect_log.DETAILS_PATH + '.pending'):
+            if effect_log.retry_pending_details():
+                st.toast('✅ 이전 저장 실패한 execution_details 자동 복구 완료', icon='🔁')
+    except Exception:
+        pass
     # 7/24 신규: 뉴발란스 스타일 chip UI + 라이트/다크 테마 스위처
     st.markdown('''<style>
       .stTabs [data-baseweb="tab-list"] { gap: 6px; }
