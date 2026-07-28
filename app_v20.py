@@ -6184,34 +6184,67 @@ def render_performance_v2_tab():
 
     c_l, c_r = st.columns(2)
     with c_l:
-        st.markdown('#### 결품률 트렌드 (정의1) — 재배치 전 vs 후')
-        # 7/28 신규: 오늘자 결품률 스냅샷 (재검증 로직 복구)
-        # 정의: 재고=0 & 주간판매>0 · 신상(5th='G') · 건수(단품×채널) 기준
+        st.markdown('#### 회전 결품률 (정의B) — 재배치 전 vs 후')
+        # 7/28 신규: 정의B (task #226 확정 · 회전 결품률)
+        #   분모: 주간판매 ≥ 2장 대상 · 신상(단품코드 5번째='G') · (단품×채널) 건수
+        #   분자: 재고=0 AND 주간판매 ≥ 2장 AND 타 채널에 재고 있음(=재배치로 해소 가능) · 신상 · 건수
+        # 재배치 후 = 재배치 결과의 mv(IN) 반영 후 재고 기반 동일 로직
         try:
             _skus_today = load_data_v20(_csv_cache_key())
-            _n_g_total = _n_g_oos = 0
-            _n_all_total = _n_all_oos = 0
+            # 재배치 결과 (전체 · 기본 시나리오)
+            _preset = SCENARIOS['🛡️ 기본']
+            _params_key = (_preset['shortage_th'], _preset['target_woc'], _preset['ship_th'],
+                           _preset['min_move'], _preset.get('min_recv', 4), _ch_excl_key(),
+                           _preset.get('move_cap_pct', 0.3))
+            _res = _apply_exclusion(calc_results_v20(_params_key, _csv_cache_key()))
+            _mv_by_code = {r['code']: r['moves'] for r in _res}
+            # 스타일별 다채널 재고 유무 사전 계산 (컬러 12자리 그룹 or SKU 자체)
+            _color_inv = {}  # {code10: {ch: total_inv}}
             for _c, _d in _skus_today.items():
-                if not _c or len(_c) < 5: continue
-                _is_new = _c[4].upper() == 'G'
+                if not _c or len(_c) < 10: continue
+                _k = _c[:10]
+                _color_inv.setdefault(_k, {ch: 0 for ch in CHANNELS})
                 for _ch in CHANNELS:
-                    _o = _d.get('orders', {}).get(_ch, 0)
-                    _i = _d.get('inv', {}).get(_ch, 0)
-                    if _o > 0:
-                        _n_all_total += 1
-                        if _i == 0: _n_all_oos += 1
-                        if _is_new:
-                            _n_g_total += 1
-                            if _i == 0: _n_g_oos += 1
-            _rate_g = (_n_g_oos / _n_g_total * 100) if _n_g_total else 0
-            _rate_all = (_n_all_oos / _n_all_total * 100) if _n_all_total else 0
-            _cc1, _cc2 = st.columns(2)
-            _cc1.metric('결품률 (신상 G)', f'{_rate_g:.1f}%',
-                        f'{_n_g_oos:,} / {_n_g_total:,} 건')
-            _cc2.metric('결품률 (전체 참고)', f'{_rate_all:.1f}%',
-                        f'{_n_all_oos:,} / {_n_all_total:,} 건')
-            st.caption(f'📐 오늘자 스냅샷 · 신상(단품코드 5번째 G) 기준 · 데이터: {_csv_cache_key().split("|")[0].split("/")[-1] if _csv_cache_key() else "N/A"}')
-            st.caption('※ 재배치 전 vs 후 시계열 트렌드는 매일 자동 축적 예정 · 현재는 당일 결품률만 표기')
+                    _color_inv[_k][_ch] += _d.get('inv', {}).get(_ch, 0)
+
+            def _calc_oos_b(after_moves=False):
+                """정의B 계산 · after_moves=True면 재배치 후 재고 기준"""
+                _tot = 0; _oos = 0
+                for _c, _d in _skus_today.items():
+                    if not _c or len(_c) < 5: continue
+                    if _c[4].upper() != 'G': continue  # 신상만
+                    _mv = _mv_by_code.get(_c, {}) if after_moves else {}
+                    for _ch in CHANNELS:
+                        _o = _d.get('orders', {}).get(_ch, 0)
+                        if _o < 2: continue  # 주판 ≥ 2 대상만
+                        _tot += 1
+                        _i0 = _d.get('inv', {}).get(_ch, 0)
+                        _i = _i0 + max(0, _mv.get(_ch, 0))  # 재배치 후 IN 반영
+                        if _i == 0:
+                            # 타 채널에 재고 있는지 (같은 스타일 · 다른 채널)
+                            _k = _c[:10]
+                            _has_other = any(
+                                (_color_inv.get(_k, {}).get(_ch2, 0) - (_i0 if _ch2 == _ch else 0)) > 0
+                                for _ch2 in CHANNELS if _ch2 != _ch
+                            )
+                            if _has_other: _oos += 1
+                return _tot, _oos
+
+            _tot_b, _oos_b = _calc_oos_b(after_moves=False)
+            _tot_ba, _oos_ba = _calc_oos_b(after_moves=True)
+            _rate_b = (_oos_b / _tot_b * 100) if _tot_b else 0
+            _rate_ba = (_oos_ba / _tot_ba * 100) if _tot_ba else 0
+            _delta = _rate_b - _rate_ba
+            _cc1, _cc2, _cc3 = st.columns(3)
+            _cc1.metric('회전 결품률 前 (B)', f'{_rate_b:.1f}%',
+                        f'{_oos_b:,} / {_tot_b:,} 건')
+            _cc2.metric('회전 결품률 後 (B)', f'{_rate_ba:.1f}%',
+                        f'{_oos_ba:,} / {_tot_ba:,} 건',
+                        delta=f'▼{_delta:.1f}%p' if _delta > 0 else f'{_delta:.1f}%p')
+            _cc3.metric('재배치 해소', f'▼{_delta:.1f}%p',
+                        f'{(_delta/_rate_b*100 if _rate_b else 0):.0f}% 감소율')
+            st.caption(f'📐 정의B (task #226 확정): 재고=0 AND 주판≥2 AND 타채널 재고 있음 · 신상(단품코드 5번째 G) · (단품×채널) 건수')
+            st.caption(f'   데이터: {_csv_cache_key().split("|")[0].split("/")[-1] if _csv_cache_key() else "N/A"} · 재배치 후 = 기본 시나리오 IN 반영')
         except Exception as _e:
             st.info(f'결품률 산출 오류 · {str(_e)[:80]}')
     with c_r:
