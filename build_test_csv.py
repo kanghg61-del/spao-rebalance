@@ -1198,6 +1198,28 @@ def main() -> None:
     log.info("완료. GitHub push 필요:")
     log.info(f"  -> data/test/{OUT_PATH.name}")
 
+    # 7/28 신규: 자동 실측 (execution_details 기반 · id별 실측치 갱신)
+    # 사용자 요청 · 데이터 재빌드 시마다 자동으로 execution_log 실측 갱신
+    log.info("─" * 60)
+    log.info("Stage 10: 자동 실측 (update_execution_actuals)")
+    try:
+        import subprocess as _sp, sys as _sys
+        _script = _HERE / "update_execution_actuals.py"
+        if _script.exists():
+            _r = _sp.run([_sys.executable, str(_script)], capture_output=True, text=True, timeout=60)
+            if _r.returncode == 0:
+                log.info("  ✓ 자동 실측 완료 (execution_log.csv 갱신)")
+                # stdout 마지막 줄 · 요약만
+                _lines = [l for l in _r.stdout.splitlines() if l.strip()]
+                for _l in _lines[-5:]:
+                    log.info(f"    {_l}")
+            else:
+                log.warning(f"  ✗ 자동 실측 실패 (returncode {_r.returncode}): {_r.stderr[:300]}")
+        else:
+            log.warning("  · update_execution_actuals.py 없음 · skip")
+    except Exception as _e:
+        log.warning(f"  · 자동 실측 예외 (수동 실행 권장): {str(_e)[:200]}")
+
 
 if __name__ == "__main__":
     main()
