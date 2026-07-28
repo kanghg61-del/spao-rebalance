@@ -358,6 +358,35 @@ def _current_reba_mode() -> str:
 
 
 @st.cache_data(show_spinner=False, ttl=3600)
+def _load_hanman_pyeong() -> dict:
+    """7/28 신규: 항만(1091)/부평(1109) 재고 마스터 로드.
+    반환: {단품코드: {'항만': N, '부평': N}}"""
+    import os as _os, csv as _csv, glob as _glob
+    _base = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'data', 'master')
+    if not _os.path.isdir(_base):
+        return {}
+    files = sorted(_glob.glob(_os.path.join(_base, 'hanman_pyeong_*.csv')), reverse=True)
+    if not files:
+        return {}
+    result = {}
+    try:
+        with open(files[0], 'r', encoding='utf-8-sig') as _f:
+            for row in _csv.DictReader(_f):
+                code = (row.get('단품코드', '') or '').strip().upper()
+                if not code: continue
+                def _i(v):
+                    try: return int(float(v)) if v else 0
+                    except: return 0
+                result[code] = {
+                    '항만': _i(row.get('항만_재고')),
+                    '부평': _i(row.get('부평_재고')),
+                }
+    except Exception:
+        pass
+    return result
+
+
+@st.cache_data(show_spinner=False, ttl=3600)
 def _load_campaigns() -> dict:
     """7/28 신규: 지그재그 캠페인 마스터 로드 (data/master/campaigns_zigzag.csv).
     반환: {스타일: {ch_rank, carr, indep, orig, sale, disc_pct, live, mega, celeb}}"""
@@ -2883,18 +2912,26 @@ def _ch_effect(d, mv_ch, ch):
     return int((max(0, o - i) - max(0, o - (i + mv_ch))) * p)
 
 
-def _render_group(results_ch, keyfn, g_inv, g_ord, g_move, g_eff, g_ext, keycol, namefn=False):
+def _render_group(results_ch, keyfn, g_inv, g_ord, g_move, g_eff, g_ext, keycol, namefn=False,
+                  campaigns_map=None, hanman_pyeong_map=None, is_style=False):
     """아이템별/스타일별 집계표 — 단품 상세와 동일 지표를 그룹 합산하여 렌더(맨 위 합계행).
-    스타일별 누판율/주판율 = Σ누판량(M)/Σ입고량(G) · Σ주판량(N)/Σ입고량(G)."""
+    스타일별 누판율/주판율 = Σ누판량(M)/Σ입고량(G) · Σ주판량(N)/Σ입고량(G).
+    7/28 신규: 스타일별에는 캠페인 배지/판매가·항만/부평 재고 합산 컬럼 추가."""
+    campaigns_map = campaigns_map or {}
+    hanman_pyeong_map = hanman_pyeong_map or {}
     agg = {}
     nm = {}
     for r in results_ch:
         d = r['data']; k = keyfn(r['code']); p = d.get('price', 0)
         o = g_ord(d); i = g_inv(d)
         a = agg.setdefault(k, dict(sku=0, ordd=0, inv=0, invamt=0, salesamt=0, ext=0, mv=0, eff=0, item=0, urg=0,
-                                    in_qty=0, cum_qty=0, wk_qty=0))
+                                    in_qty=0, cum_qty=0, wk_qty=0, hanman=0, pyeong=0))
         a['sku'] += 1; a['ordd'] += o; a['inv'] += i; a['invamt'] += i * p; a['salesamt'] += o * p
         a['ext'] += g_ext(d); a['mv'] += max(0, g_move(r)); a['eff'] += g_eff(r)
+        # 7/28: 항만/부평 재고 합산 (단품 단위)
+        _hp = hanman_pyeong_map.get(r['code'], {})
+        a['hanman'] += _hp.get('항만', 0)
+        a['pyeong'] += _hp.get('부평', 0)
         # 스타일 합산 누판/주판 — 단품 단위 누적입고량/누적판매량/기간판매량 (전 채널 합)
         a['in_qty'] += d.get('in_qty', 0)
         a['cum_qty'] += d.get('cum_qty', 0)
@@ -2914,6 +2951,11 @@ def _render_group(results_ch, keyfn, g_inv, g_ord, g_move, g_eff, g_ext, keycol,
         wk_r = (a['wk_qty'] / a['in_qty'] * 100) if a['in_qty'] > 0 else 0.0
         # 이미지는 스타일/아이템 코드 기준 mock SVG (7월 본연동 시 실 SPAO 이미지로 교체)
         row = {'이미지': _spao_img_url(k), keycol: k}
+        # 7/28 신규: 스타일별에만 캠페인 배지·판매가 (아이템별은 공란)
+        if is_style:
+            _cinfo = campaigns_map.get(k, {})
+            row['🏷️ 배지'] = _campaign_badges(_cinfo)
+            row['판매가'] = _price_display(_cinfo, a['invamt'] / a['inv'] if a['inv'] > 0 else 0)
         if namefn:
             v = nm.get(k, '')
             row['대표 상품명'] = (v[:18] + '…') if len(v) > 18 else v
@@ -2923,7 +2965,10 @@ def _render_group(results_ch, keyfn, g_inv, g_ord, g_move, g_eff, g_ext, keycol,
         row.update({
             '주간 판매량': a['ordd'], '일평균 판매량': round(daily, 1),
             '일평균 매출(만원)': round(a['salesamt'] / 7 / 10000), '현 재고량': a['inv'],
-            '현 재고금액(만원)': round(a['invamt'] / 10000), '외부창고': a['ext'],
+            '현 재고금액(만원)': round(a['invamt'] / 10000),
+            # 7/28 신규: 내부창고(항만+부평 합계)/항만/부평 분리 · 외부창고 유지
+            '내부창고': a['hanman'] + a['pyeong'], '🔌항만': a['hanman'], '🔌부평': a['pyeong'],
+            '외부창고': a['ext'],
             '현 재고주수': round(woc) if woc is not None else None,
             '소진예상(일)': round(a['inv'] / daily) if daily > 0 else None,
             '추천이동(회전)': a['mv'],
@@ -2995,6 +3040,10 @@ def render_channel_tab():
 
     # 7/28 신규: 캠페인 마스터 로드 (지그재그 · 나머지 채널은 향후 추가)
     _CAMPAIGNS_MAP = _load_campaigns()
+    # 7/28 신규: 항만(1091)/부평(1109) 재고 마스터 로드
+    _HANMAN_PYEONG_MAP = _load_hanman_pyeong()
+    # 7/28 신규: 채널 순위 = 일평균 매출(만원) 기준으로 사전 계산 (results_ch 전체 · 채널별)
+    # 각 채널 선택 시 그 채널의 ord/price로 일평균 매출을 계산해서 rank 부여
 
     preset = SCENARIOS['🛡️ 기본']
     params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'],
@@ -3165,7 +3214,8 @@ def render_channel_tab():
     # ───────────── 아이템별 ─────────────
     with sub_item:
         st.caption('아이템 = 상품코드 3~4번째 자리(예: SPPG23U07 → PG). 선택 채널 기준 집계 · 단품 상세 지표 동일 · 맨 위 합계.')
-        _render_group(results_ch, _item, g_inv, g_ord, g_move, g_eff, g_ext, '아이템')
+        _render_group(results_ch, _item, g_inv, g_ord, g_move, g_eff, g_ext, '아이템',
+                      hanman_pyeong_map=_HANMAN_PYEONG_MAP, is_style=False)
 
     # ───────────── 스타일별 (상품코드 10자리) ─────────────
     with sub_style:
@@ -3184,7 +3234,8 @@ def render_channel_tab():
         if sty_pick_s:
             _spset = set(sty_pick_s)
             filtered_style = [r for r in filtered_style if r['code'][:10] in _spset]
-        _render_group(filtered_style, lambda c: c[:10], g_inv, g_ord, g_move, g_eff, g_ext, '스타일코드', namefn=True)
+        _render_group(filtered_style, lambda c: c[:10], g_inv, g_ord, g_move, g_eff, g_ext, '스타일코드', namefn=True,
+                      campaigns_map=_CAMPAIGNS_MAP, hanman_pyeong_map=_HANMAN_PYEONG_MAP, is_style=True)
 
     # ───────────── 단품 상세 ─────────────
     with sub_sku:
@@ -3206,8 +3257,19 @@ def render_channel_tab():
             ch_sort = st.selectbox('정렬', ['온라인 매출 순위 ↑', '기대효과 ↓', '이동수량 ↓', '단품코드'], key='ch_sort')
         _sty_pick_set = set(sty_pick_sku) if sty_pick_sku else None
 
+        # 7/28 신규: 채널 순위 = 일평균 매출(만원) 기준 사전 계산
+        # 필터 적용 전 · 전체 대상으로 매출 계산 후 rank
+        _rank_calc = []
+        for _r in results_ch:
+            _o = g_ord(_r['data']); _p = _r['data'].get('price', 0)
+            _daily_amt = (_o / 7 * _p) if _o > 0 else 0
+            _rank_calc.append((_r['code'], _daily_amt))
+        _rank_calc.sort(key=lambda x: -x[1])
+        _rank_map = {code: i+1 for i, (code, amt) in enumerate(_rank_calc) if amt > 0}
+
         rows = []
         s_daily = s_damt = s_inv = s_iamt = s_ext = s_mv = s_ni = s_eff = 0.0
+        s_hanman = s_pyeong = 0
         for r in results_ch:
             d = r['data']
             o = g_ord(d); i = g_inv(d); mv = g_move(r); p = d.get('price', 0)
@@ -3227,6 +3289,12 @@ def render_channel_tab():
             ni = i + (0 if is_all else mv)
             woc2 = (ni / o) if o > 0 else None
             ext = g_ext(d); eff = g_eff(r)
+            # 7/28 신규: 항만/부평 재고 조회
+            _hp = _HANMAN_PYEONG_MAP.get(r['code'], {})
+            _hanman = _hp.get('항만', 0)
+            _pyeong = _hp.get('부평', 0)
+            _internal = _hanman + _pyeong
+            s_hanman += _hanman; s_pyeong += _pyeong
             if woc is None:
                 stat = '– 무판매'
             elif woc < 1:
@@ -3235,19 +3303,20 @@ def render_channel_tab():
                 stat = '🟡 주의'
             else:
                 stat = '🟢 정상'
-            # 7/28 신규: 캠페인 마스터 조회 (지그재그 채널만) · 배지/순위/할인가
-            _cinfo = _CAMPAIGNS_MAP.get(r['code'][:10], {}) if channel_pick in ('지그재그', '전체') else {}
+            # 7/28 신규: 캠페인 마스터 조회 (모든 채널 · 지그재그만 배지 있음 · 나머지는 공란)
+            _cinfo = _CAMPAIGNS_MAP.get(r['code'][:10], {})
             _badges = _campaign_badges(_cinfo)
-            _ch_rank = _cinfo.get('ch_rank') if _cinfo.get('ch_rank') else None
             _price_str = _price_display(_cinfo, d.get('price', 0))
+            # 7/28 fix: 채널순위 = 일평균 매출 기준 (rank_map 사용 · 모든 채널 공통)
+            _ch_rank = _rank_map.get(r['code'])
             row = {
                 '이미지': _spao_img_url(r['code'][:10]),
                 '상태': stat, '복종': _bok(r['code']),
-                # 7/28 신규: 채널 내 순위 (지그재그만) · TOP 3은 🥇🥈🥉
+                # 7/28 fix: 채널 순위 (일평균 매출 기준) · TOP 3 🥇🥈🥉
                 '채널순위': ('🥇' if _ch_rank == 1 else '🥈' if _ch_rank == 2 else '🥉' if _ch_rank == 3 else f'{_ch_rank}') if _ch_rank else '',
                 '상품코드': r['code'][:10], '단품코드(SKU)': r['code'],
                 '상품명': (d['name'][:22] + '…') if len(d['name']) > 22 else d['name'],
-                # 7/28 신규: 배지 (캐리오버/단독/LIVE/메가/셀럽)
+                # 7/28 신규: 배지 (캐리오버/단독/LIVE/메가/셀럽) · 지그재그 마스터에 있는 것만
                 '🏷️ 배지': _badges,
                 # 7/28 신규: 판매가 (할인가/할인율 반영)
                 '판매가': _price_str,
@@ -3256,7 +3325,8 @@ def render_channel_tab():
                 '주판율(%)': round(d.get('wk_rate', 0) * 100, 1),
                 '일평균 판매량': round(daily, 1), '일평균 매출(만원)': round(daily * p / 10000, 1),
                 '현 재고량': i, '현 재고금액(만원)': round(i * p / 10000),
-                '내부창고': '—', '🔌항만': '—', '🔌부평': '—', '외부창고': ext,
+                # 7/28 fix: 항만(1091)/부평(1109) 실값 · 내부창고 = 합계
+                '내부창고': _internal, '🔌항만': _hanman, '🔌부평': _pyeong, '외부창고': ext,
                 '현 재고주수': round(woc) if woc is not None else None,
                 '소진예상(일)': sojin if sojin is not None else None,
                 '추천이동': mv, '이동후재고': ni,
@@ -6115,7 +6185,35 @@ def render_performance_v2_tab():
     c_l, c_r = st.columns(2)
     with c_l:
         st.markdown('#### 결품률 트렌드 (정의1) — 재배치 전 vs 후')
-        st.info('📐 결품률 계산 로직 재검증 중 — 정확한 로직 반영 후 다시 표시 예정 (일시 공란).')
+        # 7/28 신규: 오늘자 결품률 스냅샷 (재검증 로직 복구)
+        # 정의: 재고=0 & 주간판매>0 · 신상(5th='G') · 건수(단품×채널) 기준
+        try:
+            _skus_today = load_data_v20(_csv_cache_key())
+            _n_g_total = _n_g_oos = 0
+            _n_all_total = _n_all_oos = 0
+            for _c, _d in _skus_today.items():
+                if not _c or len(_c) < 5: continue
+                _is_new = _c[4].upper() == 'G'
+                for _ch in CHANNELS:
+                    _o = _d.get('orders', {}).get(_ch, 0)
+                    _i = _d.get('inv', {}).get(_ch, 0)
+                    if _o > 0:
+                        _n_all_total += 1
+                        if _i == 0: _n_all_oos += 1
+                        if _is_new:
+                            _n_g_total += 1
+                            if _i == 0: _n_g_oos += 1
+            _rate_g = (_n_g_oos / _n_g_total * 100) if _n_g_total else 0
+            _rate_all = (_n_all_oos / _n_all_total * 100) if _n_all_total else 0
+            _cc1, _cc2 = st.columns(2)
+            _cc1.metric('결품률 (신상 G)', f'{_rate_g:.1f}%',
+                        f'{_n_g_oos:,} / {_n_g_total:,} 건')
+            _cc2.metric('결품률 (전체 참고)', f'{_rate_all:.1f}%',
+                        f'{_n_all_oos:,} / {_n_all_total:,} 건')
+            st.caption(f'📐 오늘자 스냅샷 · 신상(단품코드 5번째 G) 기준 · 데이터: {_csv_cache_key().split("|")[0].split("/")[-1] if _csv_cache_key() else "N/A"}')
+            st.caption('※ 재배치 전 vs 후 시계열 트렌드는 매일 자동 축적 예정 · 현재는 당일 결품률만 표기')
+        except Exception as _e:
+            st.info(f'결품률 산출 오류 · {str(_e)[:80]}')
     with c_r:
         st.markdown('#### 주간 성과 롤업 — 실현(실측) + 회피(추정)')
         try:
