@@ -2138,6 +2138,31 @@ def render_excluded_tab():
                                    use_container_width=True, key='dl_xl_sample')
             except Exception:
                 pass
+            # 현재 리스트 다운로드 (세션에 등록된 제외 규칙 전체 — 샘플과 동일 양식)
+            try:
+                import io as _iocur
+                from openpyxl import Workbook as _WBc
+                _rows_cur = st.session_state.get('ch_excl_rows', []) or []
+                _wbc = _WBc(); _wsc = _wbc.active; _wsc.title = '현재제외리스트'
+                _wsc.append(['채널', '방향(IN/OUT)', '스타일', '시작일', '종료일'])
+                for _rw in _rows_cur:
+                    _wsc.append([
+                        _rw.get('채널', ''),
+                        str(_rw.get('방향', '') or '').upper(),
+                        (_rw.get('스타일') or _rw.get('스타일 패턴') or ''),
+                        (str(_rw.get('시작일')) if _rw.get('시작일') else ''),
+                        (str(_rw.get('종료일')) if _rw.get('종료일') else ''),
+                    ])
+                for _colc, _wc in zip('ABCDE', (12, 14, 18, 12, 12)):
+                    _wsc.column_dimensions[_colc].width = _wc
+                _bc = _iocur.BytesIO(); _wbc.save(_bc)
+                st.download_button(
+                    f'📋 현재 리스트 다운로드 ({len(_rows_cur)}건 · xlsx)', data=_bc.getvalue(),
+                    file_name=f'채널IN-OUT제외_현재리스트_{_today0.strftime("%y%m%d")}.xlsx',
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    use_container_width=True, key='dl_xl_current')
+            except Exception:
+                pass
             st.caption('종료일 비우면 상시 제외 · 종료일 지나면 자동 해제 · 채널명 부분 일치 허용')
 
         if _xl_up is not None:
