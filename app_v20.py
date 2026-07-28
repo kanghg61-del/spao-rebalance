@@ -6154,11 +6154,46 @@ def render_performance_v2_tab():
               f'재배치 전−후 결품매출 방어 · {weeks:.1f}주')
     k3.metric('실현 추가판매 누적 (실측)', f'{realized_man/1e4:.2f}억',
               '회피 손실의 하한 증명 (strict CAP)')
-    k4.metric('재고0 결품률 (재배치 전→후)', '—',
-              '재검증 중 · 로직 업데이트 예정',
-              delta_color='off')
-    st.caption('📐 결품률 계산 로직 재검증 중 — 정확한 로직 반영 후 다시 표시 예정 (일시 공란).')
-    st.caption('🔎 결품 분해 (B·A·C 몫) — 로직 재검증 중 · 추후 업데이트 예정.')
+    # 7/28: 정의B(회전 결품률) 오늘자 스냅샷을 상단 카드에도 표시 (아래 트렌드 섹션과 동일 로직)
+    try:
+        _sk = load_data_v20(_csv_cache_key())
+        _pk = (SCENARIOS['🛡️ 기본']['shortage_th'], SCENARIOS['🛡️ 기본']['target_woc'],
+               SCENARIOS['🛡️ 기본']['ship_th'], SCENARIOS['🛡️ 기본']['min_move'],
+               SCENARIOS['🛡️ 기본'].get('min_recv', 4), _ch_excl_key(),
+               SCENARIOS['🛡️ 기본'].get('move_cap_pct', 0.3))
+        _rs = _apply_exclusion(calc_results_v20(_pk, _csv_cache_key()))
+        _mv_map = {r['code']: r['moves'] for r in _rs}
+        _ci = {}
+        for _c, _d in _sk.items():
+            if not _c or len(_c) < 10: continue
+            _kk = _c[:10]
+            _ci.setdefault(_kk, {ch: 0 for ch in CHANNELS})
+            for _ch in CHANNELS:
+                _ci[_kk][_ch] += _d.get('inv', {}).get(_ch, 0)
+        def _oos_b_calc(after=False):
+            _tt = _oo = 0
+            for _c, _d in _sk.items():
+                if not _c or len(_c) < 5 or _c[4].upper() != 'G': continue
+                _mv = _mv_map.get(_c, {}) if after else {}
+                for _ch in CHANNELS:
+                    _o = _d.get('orders', {}).get(_ch, 0)
+                    if _o < 2: continue
+                    _tt += 1
+                    _i0 = _d.get('inv', {}).get(_ch, 0)
+                    _i = _i0 + max(0, _mv.get(_ch, 0))
+                    if _i == 0:
+                        _kk = _c[:10]
+                        if any((_ci.get(_kk, {}).get(_ch2, 0) - (_i0 if _ch2 == _ch else 0)) > 0
+                               for _ch2 in CHANNELS if _ch2 != _ch): _oo += 1
+            return _tt, _oo
+        _t1, _o1 = _oos_b_calc(False); _t2, _o2 = _oos_b_calc(True)
+        _r1 = _o1 / _t1 * 100 if _t1 else 0; _r2 = _o2 / _t2 * 100 if _t2 else 0
+        k4.metric('회전 결품률 (B) 前→後', f'{_r1:.1f}% → {_r2:.1f}%',
+                  delta=f'▼{_r1-_r2:.1f}%p' if _r1 > _r2 else f'{_r1-_r2:.1f}%p',
+                  delta_color='inverse')
+    except Exception:
+        k4.metric('회전 결품률 (B) 前→後', '—', '산출 오류', delta_color='off')
+    st.caption('📐 회전 결품률(B) = 재고0 · 주판≥2 · 타채널 재고 있음 · 신상(G) · (단품×채널) 건수 · 아래 상세 참조')
 
     # ── 결품률 이력 자동 축적 (risk_log.csv — 접속일마다 1회) ──
     _rl = _Path(__file__).parent / 'risk_log.csv'
@@ -6236,15 +6271,37 @@ def render_performance_v2_tab():
             _rate_ba = (_oos_ba / _tot_ba * 100) if _tot_ba else 0
             _delta = _rate_b - _rate_ba
             _cc1, _cc2, _cc3 = st.columns(3)
-            _cc1.metric('회전 결품률 前 (B)', f'{_rate_b:.1f}%',
-                        f'{_oos_b:,} / {_tot_b:,} 건')
+            _cc1.metric('회전 결품률 前 (B)', f'{_rate_b:.1f}%')
+            _cc1.caption(f'{_oos_b:,} / {_tot_b:,} 건')
             _cc2.metric('회전 결품률 後 (B)', f'{_rate_ba:.1f}%',
-                        f'{_oos_ba:,} / {_tot_ba:,} 건',
-                        delta=f'▼{_delta:.1f}%p' if _delta > 0 else f'{_delta:.1f}%p')
-            _cc3.metric('재배치 해소', f'▼{_delta:.1f}%p',
-                        f'{(_delta/_rate_b*100 if _rate_b else 0):.0f}% 감소율')
-            st.caption(f'📐 정의B (task #226 확정): 재고=0 AND 주판≥2 AND 타채널 재고 있음 · 신상(단품코드 5번째 G) · (단품×채널) 건수')
-            st.caption(f'   데이터: {_csv_cache_key().split("|")[0].split("/")[-1] if _csv_cache_key() else "N/A"} · 재배치 후 = 기본 시나리오 IN 반영')
+                        delta=f'▼{_delta:.1f}%p' if _delta > 0 else f'{_delta:.1f}%p',
+                        delta_color='inverse')
+            _cc2.caption(f'{_oos_ba:,} / {_tot_ba:,} 건')
+            _cc3.metric('재배치 해소', f'▼{_delta:.1f}%p')
+            _cc3.caption(f'{(_delta/_rate_b*100 if _rate_b else 0):.0f}% 감소율')
+            with st.expander('📐 정의B(회전 결품률) 부연 설명 · 클릭', expanded=False):
+                st.markdown(
+                    '''**한 줄 정의**
+"지금 재고 없는데 · 다른 채널엔 재고 있어서 · **회전만 잘 하면 살릴 수 있는 결품 비율**"
+
+**계산식**
+```
+분모 (Total): 신상(G) · 주판 ≥ 2장 대상 · (단품×채널) 건수
+분자 (OOS)  : 신상(G) · 주판 ≥ 2장 · 재고 = 0 · 타 채널에 같은 스타일 재고 있음 · 건수
+회전 결품률(B) = OOS / Total × 100
+```
+
+**왜 이 정의를 쓰나?** (task #226 · 대표·사업부장 반박 대비 확정 사항)
+- 정의1 (단순 결품률 = 재고0 & 판매>0) 은 **혼자 채널만 재고 있어도 결품 카운트** → 노이즈 많음
+- 정의B는 **재배치로 실제 해소 가능한 결품만** 계산 → REBA 성과와 직결
+- 신상(단품코드 5번째 = 'G') 만 대상 · 이월재고는 회전 대상 아님
+- 주판 ≥ 2장 필터 · 우연히 1건 팔린 롱테일 제외 (노이즈 방지)
+
+**해석 예시**
+- 前 25% → 後 20% · 재배치 해소 ▼5%p · 감소율 20% → REBA 회전 승인 시 결품 20% 감소
+- 대표 보고 시 "REBA로 회전 결품률 N%p 감소" 로 사용
+                    ''')
+            st.caption(f'📅 데이터: {_csv_cache_key().split("|")[0].split("/")[-1] if _csv_cache_key() else "N/A"} · 재배치 후 = 기본 시나리오(1주/2주/30%) IN 반영')
         except Exception as _e:
             st.info(f'결품률 산출 오류 · {str(_e)[:80]}')
     with c_r:
