@@ -357,6 +357,63 @@ def _current_reba_mode() -> str:
     return st.session_state.get(_REBA_MODE_KEY, 'agent')
 
 
+@st.cache_data(show_spinner=False, ttl=3600)
+def _load_campaigns() -> dict:
+    """7/28 신규: 지그재그 캠페인 마스터 로드 (data/master/campaigns_zigzag.csv).
+    반환: {스타일: {ch_rank, carr, indep, orig, sale, disc_pct, live, mega, celeb}}"""
+    import os as _os, csv as _csv
+    _p = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                        'data', 'master', 'campaigns_zigzag.csv')
+    if not _os.path.exists(_p):
+        return {}
+    result = {}
+    try:
+        with open(_p, 'r', encoding='utf-8-sig') as _f:
+            for row in _csv.DictReader(_f):
+                sty = (row.get('스타일') or '').strip().upper()
+                if not sty: continue
+                def _i(v):
+                    try: return int(float(v)) if v else 0
+                    except: return 0
+                result[sty] = {
+                    'ch': row.get('채널', ''),
+                    'ch_rank': _i(row.get('순위')),
+                    'carr': (row.get('캐리오버등급', '') or '').strip().upper(),
+                    'indep': (row.get('단독상품', '') or '').strip(),
+                    'orig_price': _i(row.get('정상가')),
+                    'sale_price': _i(row.get('할인가')),
+                    'disc_pct': _i(row.get('할인율')),
+                    'live': (row.get('라이브', '') or '').strip().upper() == 'V',
+                    'mega': (row.get('메가위크', '') or '').strip().upper() == 'V',
+                    'celeb': (row.get('셀럽착장', '') or '').strip().upper() == 'V',
+                }
+    except Exception:
+        pass
+    return result
+
+
+def _campaign_badges(cinfo: dict) -> str:
+    """캠페인 정보 → 배지 문자열 (짧게)."""
+    if not cinfo: return ''
+    b = []
+    if cinfo.get('carr') in ('A', 'B', 'C'):
+        b.append(f"🅰️{cinfo['carr']}" if cinfo['carr'] == 'A' else f"🅱️{cinfo['carr']}" if cinfo['carr'] == 'B' else f"🅲️{cinfo['carr']}")
+    if cinfo.get('indep'): b.append('🔒단독')
+    if cinfo.get('live'): b.append('🎥LIVE')
+    if cinfo.get('mega'): b.append('🔥메가')
+    if cinfo.get('celeb'): b.append('👑셀럽')
+    return ' '.join(b)
+
+
+def _price_display(cinfo: dict, fallback_price: float) -> str:
+    """할인가·할인율 표시. 할인 없으면 정상가만."""
+    if cinfo and cinfo.get('sale_price') and cinfo.get('disc_pct'):
+        return f"{cinfo['orig_price']:,}원 → {cinfo['sale_price']:,}원 (-{cinfo['disc_pct']}%)"
+    if cinfo and cinfo.get('orig_price'):
+        return f"{cinfo['orig_price']:,}원"
+    return f"{int(fallback_price):,}원" if fallback_price else '-'
+
+
 def _resolve_test_csv_path() -> str:
     """TEST 탭 데이터 경로 결정 — ① data/test/*.csv[.gz] 최신 파일 → ② Snowflake 결과 → ③ Agent와 동일 fallback.
 
@@ -2936,6 +2993,9 @@ def render_channel_tab():
     is_ext = (not is_all) and channel_pick in EXT_WAREHOUSE
     wh_label = f'{EXT_WAREHOUSE[channel_pick][0]}({EXT_WAREHOUSE[channel_pick][1]})' if is_ext else None
 
+    # 7/28 신규: 캠페인 마스터 로드 (지그재그 · 나머지 채널은 향후 추가)
+    _CAMPAIGNS_MAP = _load_campaigns()
+
     preset = SCENARIOS['🛡️ 기본']
     params_key = (preset['shortage_th'], preset['target_woc'], preset['ship_th'],
                   preset['min_move'], preset.get('min_recv', 4), _ch_excl_key())
@@ -3175,11 +3235,22 @@ def render_channel_tab():
                 stat = '🟡 주의'
             else:
                 stat = '🟢 정상'
+            # 7/28 신규: 캠페인 마스터 조회 (지그재그 채널만) · 배지/순위/할인가
+            _cinfo = _CAMPAIGNS_MAP.get(r['code'][:10], {}) if channel_pick in ('지그재그', '전체') else {}
+            _badges = _campaign_badges(_cinfo)
+            _ch_rank = _cinfo.get('ch_rank') if _cinfo.get('ch_rank') else None
+            _price_str = _price_display(_cinfo, d.get('price', 0))
             row = {
                 '이미지': _spao_img_url(r['code'][:10]),
                 '상태': stat, '복종': _bok(r['code']),
+                # 7/28 신규: 채널 내 순위 (지그재그만) · TOP 3은 🥇🥈🥉
+                '채널순위': ('🥇' if _ch_rank == 1 else '🥈' if _ch_rank == 2 else '🥉' if _ch_rank == 3 else f'{_ch_rank}') if _ch_rank else '',
                 '상품코드': r['code'][:10], '단품코드(SKU)': r['code'],
                 '상품명': (d['name'][:22] + '…') if len(d['name']) > 22 else d['name'],
+                # 7/28 신규: 배지 (캐리오버/단독/LIVE/메가/셀럽)
+                '🏷️ 배지': _badges,
+                # 7/28 신규: 판매가 (할인가/할인율 반영)
+                '판매가': _price_str,
                 # 누판/주판 — 상품명 오른쪽 (사용자 6/25 요청, CSV 단품 단위 실수치)
                 '누판율(%)': round(d.get('cum_rate', 0) * 100, 1),
                 '주판율(%)': round(d.get('wk_rate', 0) * 100, 1),
